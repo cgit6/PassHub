@@ -1,9 +1,9 @@
 # PassHub v1 業務邊界規格
 
-- 文件狀態：業務與實作規劃已收斂；G02–G03c、窄 G04a、G04b 完整原子保存 adapter、G05a FIFO coordinator primitive 及 G05b budget ledger 已有各自限定工程證據，依25 STOP停止於G05b；完整v1工程驗證仍未完成
+- 文件狀態：業務與實作規劃已收斂；G02–G03c、窄 G04a、G04b 完整原子保存 adapter、G05a／G05b／G05c primitives 及 G06a human-auth primitive 已有各自限定工程證據，依25 STOP停止於G06a；完整v1工程驗證仍未完成
 - 更新日期：2026-09-20
 - 適用版本：PassHub v1
-- 文件目的：以 D01–D35 為業務底稿，同步至 D157 的有效修正；實作細節及逐關驗收集中在 implementation-plan.md，不把官方查證、歷史候選或待做測試當成工程成果
+- 文件目的：以 D01–D35 為業務底稿，同步至 D174 的有效修正；實作細節及逐關驗收集中在 implementation-plan.md，不把官方查證、歷史候選或待做測試當成工程成果
 
 原始依據見[討論紀錄](./discuss.md)，逐項實作及驗收對應見[要求追蹤矩陣](./requirements-traceability.md)。本文件的「已確認」是規格採用狀態，不代表程式／測試已完成。
 
@@ -244,7 +244,7 @@ PassHub 不在此流程中控制門鎖、呼叫 Webhook 或建立任何下游投
 - 身分／業務格式不合法不得進業務保存；同步暫占及登記不是可信受理或通行授權。既有事件回放不是新通行決策。
 - 未知結果不能因等待逾時就放開後項；故障確認、續辦及維護依第 7.4–7.6 節與第 9.2 節。
 
-G05a 已證內部同步登記／單調序號／單一FIFO權限、settlement與unknown fail-closed primitive；G05b 已證每原操作 15秒／3輪 execution、10秒／7格 confirmation、single-send cadence、native precommit兩送預扣及continuation admission ledger；G05c 已證 process-local registry／opaque artifact join／conflict、4096 retention、generation／late-callback與epoch／read-only claim primitive。框架 hook、完整同步準入、G05a／G05b／G05c composition、同鍵暫占與HTTP／use-case接線、driver wire與生命期合併仍須後續 G07a/G07b/G08/G10/G11 真驗，不能把本 primitive、時間戳、單實例或一般 mutex 當成完整FIFO／冪等／故障協議已通過驗收。
+G05a 已證內部同步登記／單調序號／單一FIFO權限、settlement與unknown fail-closed primitive；G05b 已證每原操作 15秒／3輪 execution、10秒／7格 confirmation、single-send cadence、native precommit兩送預扣及continuation admission ledger；G05c 已證 process-local registry／opaque artifact join／conflict、4096 retention、generation／late-callback與epoch／read-only claim primitive；G06a 已證人員認證 primitive（strict HS256 JWT、async scrypt、目前 enabled／role reread、opaque human principal 及 read-only primary／majority Mongo reader）。框架 hook、完整同步準入、G05a／G05b／G05c composition、同鍵暫占與HTTP／use-case接線、Source auth、driver wire與生命期合併仍須後續 G06b/G07a/G07b/G08/G10/G11 真驗，不能把這些 primitives 當成完整FIFO／冪等／故障協議或 HTTP／部署已通過驗收。
 
 ## 6. Presence 與通行決策
 
@@ -749,10 +749,10 @@ Qualification 時間錯誤、Face重複、越權與公開限制均拒絕，使�
 
 P01–P15採用決策與逐關驗收見[實作方案](implementation-plan.md)及追蹤矩陣。剩餘不是讓實作者自由選架構：Face唯一索引替換微型真測、固定工具相容性及fault映像digest是明確前置gate；未過便停止回討論，不靜默換策。外部主機／domain／TLS需環境提供。D161已取代舊碼私密備份要求，不再建立legacy備份。
 
-目前矩陣為 A01 與 G04b 直接證據涵蓋的 A11–A16、B13、B41、B42 共 10 項 V（G04b 新增 9 項；G05a／G05b／G05c不新增完整requirement V），其餘126項仍U；這不代表完整 v1、HTTP、FIFO、registry 或 fault protocol 完成。G04b 證據只涵蓋六 collection schema／guards、共同保存、freshness、QR／Face解析、comparison artifact、Event/source idempotency unique、canonical snapshot 與 error classification。G05a另證內部FIFO primitive；G05b另證純execution／confirmation budget ledger、七格、native group與continuation admission；G05c另證process-local registry／opaque artifact comparer、4096 bounded retention、join／conflict、canonical／safe technical terminal、generation／late-callback fence、epoch／read-only claim primitive。G05c仍未接上G05a／G05b／G05c composition、Mongo writeRunClaim state machine、完整 capacity／HTTP／use-case／driver／G10／G11；完整 ingress、use-case接線、budget wire及後續gate仍未驗。B33–B36、L05–L13、L20–L21、L28–L36逐項仍U，不能因 primitive 測試升級完整要求。不同 externalEventId 的並行 ENTRY 不在 adapter 內自動新 scope 重判；同 ID 並行首次請求只保證最多一筆 committed，未知競爭與後續 confirmation／retry 由後續 gate 處理。下一合法 gate 為 G06a。
+目前矩陣為 A01 與 G04b 直接證據涵蓋的 A11–A16、B13、B41、B42 共 10 項 V（G04b 新增 9 項；G05a／G05b／G05c／G06a不新增完整requirement V），其餘126項仍U；這不代表完整 v1、HTTP、FIFO、registry、Auth route 或 fault protocol 完成。G04b 證據只涵蓋六 collection schema／guards、共同保存、freshness、QR／Face解析、comparison artifact、Event/source idempotency unique、canonical snapshot 與 error classification。G05a另證內部FIFO primitive；G05b另證純execution／confirmation budget ledger、七格、native group與continuation admission；G05c另證process-local registry／opaque artifact comparer、4096 bounded retention、join／conflict、canonical／safe technical terminal、generation／late-callback fence、epoch／read-only claim primitive；G06a另證人員登入／JWT／scrypt／current enabled-role／opaque principal與唯讀 primary／majority reader。G06a仍未接上Source auth、HTTP／route role enforcement、rate／capacity、use-case、deployment或timing-side-channel guarantee；G05c仍未接上G05a／G05b／G05c composition、Mongo writeRunClaim state machine、完整 capacity／HTTP／use-case／driver／G10／G11；完整 ingress、use-case接線、budget wire及後續gate仍未驗。B22–B28、A06–A07、M03、E06及其餘要求逐項仍U，不能因 primitive 測試升級完整要求。不同 externalEventId 的並行 ENTRY 不在 adapter 內自動新 scope 重判；同 ID 並行首次請求只保證最多一筆 committed，未知競爭與後續 confirmation／retry 由後續 gate 處理。下一合法 gate 為 G06b。
 
 ## 決策來源
 
-本文件以[討論紀錄](./discuss.md) D01–D35為業務底稿，同步至D157；D114明確授權持續逐題討論、預設接受及必要文件同步，非逐題個別回答。D69依D72、D17依D76修正；D89安全續辦保留，D130永久終局候選未採；D117取代binaryv1、D131七格取代三次、D129原生兩送局部例外、D149同epoch普通重啟寫入關閉皆有效。其餘歷史候選及背景不新增產品要求。
+本文件以[討論紀錄](./discuss.md) D01–D35為業務底稿，同步至D174；D114明確授權持續逐題討論、預設接受及必要文件同步，非逐題個別回答。D69依D72、D17依D76修正；D89安全續辦保留，D130永久終局候選未採；D117取代binaryv1、D131七格取代三次、D129原生兩送局部例外、D149同epoch普通重啟寫入關閉、D174 G06a human-auth primitive限定證據皆有效。其餘歷史候選及背景不新增產品要求。
 
 本次同步不是新業務決策，也不改寫原始討論。未來若變更已確認結論，須先新增討論決策 block，再同步本文件、驗收及追蹤矩陣。實作／測試／公開證據未完成前，不把文件採用視為履歷成果。

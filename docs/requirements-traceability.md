@@ -1,6 +1,6 @@
 # PassHub 有效要求與實作追蹤矩陣
 
-規劃狀態：**D160封口；D161完成舊碼清除；D166改定正式Jest runner；G02–G03c、窄 G04a、G04b、G05a、G05b 及 G05c 已發行限定 evidence，目前停止於G05c**。工程狀態：**A01、A11–A16、B13、B41、B42 共10條為V（G04b新增9條；G05a／G05b／G05c不新增完整requirement V），其餘126條仍U**。整理日期：2026-09-20。
+規劃狀態：**D160封口；D161完成舊碼清除；D166改定正式Jest runner；G02–G03c、窄 G04a、G04b、G05a、G05b、G05c 及 G06a 已發行限定 evidence，目前停止於G06a**。工程狀態：**A01、A11–A16、B13、B41、B42 共10條為V（G04b新增9條；G05a／G05b／G05c／G06a不新增完整requirement V），其餘126條仍U**。整理日期：2026-09-20。
 
 這份文件回答：「討論過的要求，實作時如何避免漏掉？」它不是已完成成果，也不授權開始重寫程式。
 
@@ -8,7 +8,7 @@
 
 ## 1. 來源、用法與完成定義
 
-- 來源：[業務範圍](business-scope.md)、[討論紀錄](discuss.md) D01–D157 及實作方案。衝突依明確採用的新版；D114預設接受是本輪授權，不捏造逐題答覆。候選／背景不當採用，官方來源不當工程證據。
+- 來源：[業務範圍](business-scope.md)、[討論紀錄](discuss.md) D01–D174 及實作方案。衝突依明確採用的新版；D114預設接受是本輪授權，不捏造逐題答覆。候選／背景不當採用，官方來源不當工程證據。
 - 本稿整理前的來源 SHA-256：`discuss.md = 96a222bde5938d5aa9a5d250ea61b79a7916fd4b494d3f63f4ec49e833d87da7`；`business-scope.md = 4c8969d698c1e5f315d6ada2a7312482b5b6b01e6098f38004314874a280ca09`。後續更新須記錄基線變動，不以舊摘要覆蓋新決策。
 - 以下「責任」是行為邊界，實際接線／目錄規劃見D140–D141；G02–G03c只具限定程式／測試符號與局部 evidence，其餘不能由規劃欄推定已建立。
 - 每列的 `T-要求ID` 是**預定驗收情境編號**，不是已存在的測試。欄內分號分開的情境都要覆蓋；必要時拆成多個實際測試。
@@ -299,7 +299,7 @@
 | P14 | D154–D155單API/單成員replset/NGINX；systemd03臺北Persistent=false、host lock/marker、API與Mongo確停及恢復、六collection精確清理／runTicket分bootstrap-ready／failclosed。 | A18、M01、M05–M10；G11 |
 | P15 | D156未被D166取代的命令／期限／clean sourceCommit規則；D166正式Jest runner與其證據失效／重驗範圍；D157固定25STOP及maintenance600/1800。文件封口G00，完整release136證據G12；本輪只討論。 | E01–E09；G00/G01a–G12 |
 
-實作方案記錄25個STOP、命令dictionary與證據位置。G01a/G01b已依D161完成，G02/G03a/G03b/G03c、窄 G04a、G04b、G05a、G05b 及 G05c 已依D166及本輪證據完成限定驗收並停止於G05c；後續完整 G05a／G05b／G05c composition、FIFO ingress、use-case wiring、HTTP、capacity、Mongo writeRunClaim、driver wire、transport-loss、confirmation、maintenance、deployment 與完整 v1 仍未驗證。
+實作方案記錄25個STOP、命令dictionary與證據位置。G01a/G01b已依D161完成，G02/G03a/G03b/G03c、窄 G04a、G04b、G05a、G05b、G05c 及 G06a 已依D166及本輪證據完成限定驗收並停止於G06a；後續完整 G05a／G05b／G05c composition、FIFO ingress、use-case wiring、Source auth、HTTP、capacity、Mongo writeRunClaim、driver wire、transport-loss、confirmation、maintenance、deployment 與完整 v1 仍未驗證。
 
 ## 7. 實作時的證據帳本與反向覆核
 
@@ -317,7 +317,7 @@
 4. 獨立覆核者直接讀原始 D 段與測試，反查矩陣是否漏要求或誤採舊提案；不只閱讀實作者摘要。
 5. 交付差異與證據後停止。未達條件不進下一關，不因時間壓力靜默縮減要求；必要變更先與使用者確認。
 
-**當前停止點：G05c registry／epoch／晚callback fence primitive evidence 已通過；exact Node image 中 G05c 51、unit 189、G05a 21、G05b 80，boundary selected=25／edges=59／forbidden=0／directRawComparison=0，negative compile、build、coverage及 host diff check通過。G05c只證 opaque registry capability、join／conflict、4096 retention、canonical／safe technical terminal、generation／late callback、epoch／read-only claim primitive；實際 G05a／G05b／G05c composition、Mongo writeRunClaim state machine、FIFO ingress／use-case wiring、capacity／HTTP、driver wire／真transport-loss／safe terminal／confirmation protocol／maintenance／完整v1仍未驗。依25 STOP停止於G05c。A01、A11–A16、B13、B41、B42共10項為V（G04b新增9項；G05a／G05b／G05c不新增完整requirement V），其餘126項仍U，履歷未解鎖。B33–B36、L05–L13、L20–L21、L28–L36逐項維持U。**
+**當前停止點：G06a human-auth primitive evidence 已通過；exact Node image 中 G06a 88、true Mongo 5、full unit 277、G04a 9、G04b 57，G03c boundary selected=25／edges=59／forbidden=0／directRawComparison=0，G06a boundary files=12／edges=21／forbidden=0，兩 negative compile、build、coverage、secret scan 及 host diff check 通過。G06a只證 strict HS256 JWT、async scrypt、目前 enabled／role reread、opaque human principal 及 read-only primary／majority Mongo reader；Source auth、HTTP／route權限／rate／capacity、use-case、deployment、timing-side-channel、完整 G05 composition、Mongo writeRunClaim state machine、FIFO ingress／driver wire／真transport-loss／confirmation protocol／maintenance／完整v1仍未驗。依25 STOP停止於G06a。A01、A11–A16、B13、B41、B42共10項為V（G04b新增9項；G05a／G05b／G05c／G06a不新增完整requirement V），其餘126項仍U，履歷未解鎖。B22–B28、A06–A07、M03、E06及其餘要求逐項維持U。**
 
 ## 8. 追蹤矩陣建立時的文件覆核紀錄（歷史）
 
@@ -507,6 +507,6 @@
 
 ### 10.2 本輪必要同步驗證紀錄
 
-- 僅Markdown：business-scope有效差異分段同步，矩陣改最新規劃／P採用與子情境／gate；D01–D157討論歷史保留，舊SHA及第8/9節是歷史基線。
+- 僅Markdown：business-scope有效差異分段同步，矩陣改最新規劃／P採用與子情境／gate；D01–D174討論歷史保留，舊SHA及第8/9節是歷史基線。
 - D161後readonly結構檢查：136 unique要求ID；A01為V、其餘135項U；P01–P15及25STOP保留。僅舊碼清除／保留項驗證完成，沒有新code、package、安裝、DB或部署驗證。
 - D159後三名原覆核者直接重讀補正，確認當時指定問題均已回應。D161另由使用者明確改變舊碼處理策略；只A01更新為V，其餘U保留。
