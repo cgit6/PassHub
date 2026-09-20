@@ -1,6 +1,6 @@
 # PassHub 有效要求與實作追蹤矩陣
 
-規劃狀態：**D160封口；D161完成舊碼清除；D166改定正式Jest runner；G02–G03c、窄 G04a、G04b 及 G05a 已發行限定 evidence，目前停止於G05a**。工程狀態：**A01、A11–A16、B13、B41、B42 共10條為V（G04b新增9條；G05a不新增完整requirement V），其餘126條仍U**。整理日期：2026-09-20。
+規劃狀態：**D160封口；D161完成舊碼清除；D166改定正式Jest runner；G02–G03c、窄 G04a、G04b、G05a、G05b 及 G05c 已發行限定 evidence，目前停止於G05c**。工程狀態：**A01、A11–A16、B13、B41、B42 共10條為V（G04b新增9條；G05a／G05b／G05c不新增完整requirement V），其餘126條仍U**。整理日期：2026-09-20。
 
 這份文件回答：「討論過的要求，實作時如何避免漏掉？」它不是已完成成果，也不授權開始重寫程式。
 
@@ -299,7 +299,7 @@
 | P14 | D154–D155單API/單成員replset/NGINX；systemd03臺北Persistent=false、host lock/marker、API與Mongo確停及恢復、六collection精確清理／runTicket分bootstrap-ready／failclosed。 | A18、M01、M05–M10；G11 |
 | P15 | D156未被D166取代的命令／期限／clean sourceCommit規則；D166正式Jest runner與其證據失效／重驗範圍；D157固定25STOP及maintenance600/1800。文件封口G00，完整release136證據G12；本輪只討論。 | E01–E09；G00/G01a–G12 |
 
-實作方案記錄25個STOP、命令dictionary與證據位置。G01a/G01b已依D161完成，G02/G03a/G03b/G03c、窄 G04a、G04b 及 G05a 已依D166及本輪證據完成限定驗收並停止於G05a；後續完整 FIFO ingress、use-case wiring、HTTP、capacity、transport-loss、confirmation、maintenance、deployment 與完整 v1 仍未驗證。
+實作方案記錄25個STOP、命令dictionary與證據位置。G01a/G01b已依D161完成，G02/G03a/G03b/G03c、窄 G04a、G04b、G05a、G05b 及 G05c 已依D166及本輪證據完成限定驗收並停止於G05c；後續完整 G05a／G05b／G05c composition、FIFO ingress、use-case wiring、HTTP、capacity、Mongo writeRunClaim、driver wire、transport-loss、confirmation、maintenance、deployment 與完整 v1 仍未驗證。
 
 ## 7. 實作時的證據帳本與反向覆核
 
@@ -317,7 +317,7 @@
 4. 獨立覆核者直接讀原始 D 段與測試，反查矩陣是否漏要求或誤採舊提案；不只閱讀實作者摘要。
 5. 交付差異與證據後停止。未達條件不進下一關，不因時間壓力靜默縮減要求；必要變更先與使用者確認。
 
-**當前停止點：G05a FIFO operation coordinator primitive evidence 已通過；exact Node image 中 G05a 21、unit 58，boundary selected=23／edges=57／forbidden=0／directRawComparison=0，negative compile、build及diff check通過。仍未驗完整FIFO ingress／use-case wiring、registry／capacity／HTTP／真transport-loss／confirmation／maintenance／完整v1。依25 STOP停止於G05a。A01、A11–A16、B13、B41、B42共10項為V（G04b新增9項；G05a不新增完整requirement V），其餘126項仍U，履歷未解鎖。**
+**當前停止點：G05c registry／epoch／晚callback fence primitive evidence 已通過；exact Node image 中 G05c 51、unit 189、G05a 21、G05b 80，boundary selected=25／edges=59／forbidden=0／directRawComparison=0，negative compile、build、coverage及 host diff check通過。G05c只證 opaque registry capability、join／conflict、4096 retention、canonical／safe technical terminal、generation／late callback、epoch／read-only claim primitive；實際 G05a／G05b／G05c composition、Mongo writeRunClaim state machine、FIFO ingress／use-case wiring、capacity／HTTP、driver wire／真transport-loss／safe terminal／confirmation protocol／maintenance／完整v1仍未驗。依25 STOP停止於G05c。A01、A11–A16、B13、B41、B42共10項為V（G04b新增9項；G05a／G05b／G05c不新增完整requirement V），其餘126項仍U，履歷未解鎖。B33–B36、L05–L13、L20–L21、L28–L36逐項維持U。**
 
 ## 8. 追蹤矩陣建立時的文件覆核紀錄（歷史）
 

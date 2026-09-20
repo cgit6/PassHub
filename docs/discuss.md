@@ -31,18 +31,18 @@ updated: "2026-09-20"
 ## 快速檢索卡
 
 - 核心問題：在小型訪客資格／模擬辨識決策業務上，形成合理、模組化、可驗證的Node.js/TypeScript架構與逐關方案；不以兩天時限取代品質論證。
-- 當前結論：D160完成規劃封口；D161完成舊碼清除；D163–D167完成G02–G03b限定證據；D168完成G03c窄scope／opaque handle／composition限定證據；D169完成G04a Face reverse-unique 真Mongo限定gate；D170完成G04b完整原子保存 adapter 限定gate（57 tests）；D171完成G05a FIFO coordinator primitive 限定gate（21 tests）並停止於G05a。A01、A11–A16、B13、B41、B42共10項為V（G04b新增9項；G05a不新增完整requirement V）、其餘126項仍U，完整v1未完成。
+- 當前結論：D160完成規劃封口；D161完成舊碼清除；D163–D167完成G02–G03b限定證據；D168完成G03c窄scope／opaque handle／composition限定證據；D169完成G04a Face reverse-unique 真Mongo限定gate；D170完成G04b完整原子保存 adapter 限定gate（57 tests）；D171完成G05a FIFO coordinator primitive 限定gate（21 tests）；D172完成G05b execution／confirmation budget ledger 限定gate（80 tests）；D173完成G05c registry／epoch／晚callback fence primitive 限定gate（51 tests）並停止於G05c。A01、A11–A16、B13、B41、B42共10項為V（G04b新增9項；G05a／G05b／G05c不新增完整requirement V）、其餘126項仍U，完整v1未完成。
 - 關鍵爭點：D129原生中止兩送有界組預扣不退、跨窗口局部例外；D130較早確認起點／D131七格；D143 Face反向unique同txn替換必须G04a先真測。D149同epoch普通restart關寫是明示可用性代價，不能依memory空接管。
 - 適用於：D01–D165有效採用／修正、獨立角色公開論點、官方查證及剩餘gate風險。採Nest預設Express/strictTS/官方driver/單API/單Mongo member replica set，非無框架或HA；25STOP見D157及實作方案。
 - 不適用於：把歷史候選／官方語法／manifest／獨立唯讀實驗當PassHub已完成成果。D117 JSON v2已取代binary v1，D130永久終局候選未採，D89安全條件續辦仍有效；D161只有A01為V。
-- 待驗證：G05a之後所有gate；G04b已證六 collection schema／integrity、共同保存、freshness、QR／Face解析、comparison artifact、Event/source unique、canonical snapshot及typed error分類；G05a另證內部FIFO primitive、trusted sequence、owner與unknown fail-closed，但不含bounded HTTP ingress/use-case wiring、registry、native清理／真回程loss、perf/logs/hold、Docker/CI/03維護/TLS及完整release。G04a仍只證Face reverse-unique微型阻塞；G02–G03c保留各自限定證據。
+- 待驗證：G05b之後所有gate；G04b已證六 collection schema／integrity、共同保存、freshness、QR／Face解析、comparison artifact、Event/source unique、canonical snapshot及typed error分類；G05a另證內部FIFO primitive；G05b另證純execution／confirmation budget ledger、七格、native precommit兩送及continuation admission，但不含bounded HTTP ingress/use-case wiring、registry、driver wire、native清理／真回程loss、perf/logs/hold、Docker/CI/03維護/TLS及完整release。G04a仍只證Face reverse-unique微型阻塞；G02–G03c保留各自限定證據。
 - 實作者入口：[實作方案](implementation-plan.md)，再讀[136要求矩陣](requirements-traceability.md)及[業務規格](business-scope.md)，並回查對應D原文。未來每子關報實際證據後STOP，D114不授權未來不停實作。
 
 ## 閱讀狀態與階段界線
 
-- 最新狀態：D171記錄G05a FIFO coordinator primitive限定gate已通過並停止；仍沒有完整HTTP／Nest controller／use-case FIFO wiring、registry、真transport-loss／confirmation、完整v1接線或部署。A01、A11–A16、B13、B41、B42共10項為V（G04b新增9項；G05a不新增完整requirement V），其餘126項仍U。
+- 最新狀態：D173記錄G05c registry／epoch／晚callback fence primitive限定gate已通過並停止；仍沒有G05a／G05b／G05c composition、完整HTTP／Nest controller／use-case FIFO wiring、Mongo writeRunClaim、capacity、driver wire／真transport-loss／safe terminal／confirmation、完整v1接線或部署。A01、A11–A16、B13、B41、B42共10項為V（G04b新增9項；G05a／G05b／G05c不新增完整requirement V），其餘126項仍U。
 - D01–D35 及所有較早摘要／交接保留歷史；其中「K1尚未同步」「尚未開始第二階段」「API/schema未定」不代表當前狀態。最新有效版本由D117/119/122/125/129–139/140–157及後續明確覆核修正判定，歷史block不回寫。下方回溯狀態描述只對當時有效，不能用來覆蓋新版。
-- 文件整體settled代表有效規劃已採用；D161留下舊碼處理證據，D163–D167留下G02–G03b證據，D168留下G03c限定架構證據，D169留下G04a限定真Mongo證據，D170留下G04b限定真Mongo證據，D171留下G05a primitive證據。partially-sourced仍含專案取捨、官方查證與未實測組合；G04b／G05a不代表完整API、FIFO ingress、registry、真transport-loss或其餘126要求通過。
+- 文件整體settled代表有效規劃已採用；D161留下舊碼處理證據，D163–D167留下G02–G03b證據，D168留下G03c限定架構證據，D169留下G04a限定真Mongo證據，D170留下G04b限定真Mongo證據，D171留下G05a primitive證據，D172留下G05b budget ledger證據，D173留下G05c registry primitive證據。partially-sourced仍含專案取捨、官方查證與未實測組合；G04b／G05a／G05b／G05c不代表完整API、FIFO ingress、composition、HTTP、driver wire、真transport-loss或其餘126要求通過。
 - 「使用者已接受」與「辯論暫定」逐 block 區分。授權保存辯論不等於確認候選架構，也不等於授權重寫程式。
 - D36–D41 為 2026-09-16 回溯追加；統一使用建檔時間，不捏造各輪原始時間。
 - D42–D46 為 2026-09-17 回溯追加；統一記錄保存時間，不捏造各輪原始時間。公開程式查核另保留查詢日期及固定 commit。
@@ -3060,8 +3060,8 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 | G04a | Face反向unique替換微型阻塞 | 真Mongo8.0.32 integration face-index／同txn release-reuse、空槽、失敗回滾 |
 | G04b | 完整原子保存adapter | 真Mongo integration atomic／共同snapshot、成功與拒絕新鮮度 |
 | G05a | FIFO操作權協調器 | PASS：exact Node image、unit 21／慢前項不超車、settlement／owner／fail-closed boundary |
-| G05b | 執行／確認共同預算 | unit budget／較早起點、七格、原生兩送、最後輪 |
-| G05c | registry／epoch／晚callback fence | unit registry-owner／滿格、join、技術終局、staleowner |
+| G05b | 執行／確認共同預算 | PASS：exact Node image、unit 80／15秒3輪、10秒7格、native兩送、continuation、capability fail-closed |
+| G05c | registry／epoch／晚callback fence primitive | PASS：exact Node image、unit 51；artifact join／conflict、4096 retention、canonical／safe terminal、generation／late callback、epoch／read-only claim |
 | G06a | 人員認證能力 | integration human-auth／JWT、scrypt、目前角色enabled |
 | G06b | Source認證／安全facts | integration source-auth／alias不可信及窄接線 |
 | G07a | bounded raw／JSON前置入口 | 真HTTP e2e ingress／嚴格UTF8、BOM、深度／重複鍵與headers |
@@ -3235,3 +3235,24 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - 交付契約：`src/access/application/internal/write-operation-coordinator.ts` 僅提供 management create/update/revoke及recognition四個channel；同步trusted clock／UUID operationId／單調bigint sequence登記，四channel共用FIFO，microtask才執行。context／owner frozen且可判斷stale；settlement僅 `PRESTART_REJECTED`、`BUSINESS_RESULT_PERSISTED`、`KNOWN_NO_EFFECT`、`UNKNOWN_EFFECT`。未知效果、executor throw/reject、無／重複／非法settlement均fail-closed並永久阻擋後項；已知無效果可前進。測試含同毫秒順序、慢前項、獨立bundle、clock failure、owner／context不可變、construction capture及窄boundary；沒有timeout／retry／resume／cancel／Promise.all。
 - 來源與責任：D72–D78、D141、D146–D149只要求此種內部同步登記／FIFO權限／未知停止 primitive；G05a不接 use-case／Nest HTTP／Auth／Mongo，不實作 raw admission、同鍵registry／join、budget／七格／confirmation、epoch/capacity、或完整結果保存。production usecase目前仍直接管理scope；因此 L01–L04、A18、B15–B21、B37–B43及E06保持U，primitive只能作局部實作輸入，不能宣稱完整requirement V。
 - 限制與交接：G05a不提供未知後續resume；上層後續 gate須維持未知停止，另證安全續辦／confirmation／registry。仍不宣稱G05b budget／七格／confirmation、G05c registry／epoch／capacity／join、G07 HTTP／Auth／e2e、G08 management／recognition／capacity，或G10真transport-loss／confirmation／abort protocol。下一合法 gate為G05b；本 evidence見 `docs/evidence/g05a/report.md`。
+
+
+### D172｜G05b execution／confirmation budget ledger限定gate通過並停止
+
+- 日期：2026-09-20；狀態：架構 review PASS、independent tester formal 80/80 PASS；PM先核對 pure ledger／production surface，再於指定 exact Node image 獨立重跑，G05b primitive限定 gate PASS，依25 STOP停止於G05b。G05a／G05b不新增完整requirement V；A01、A11–A16、B13、B41、B42共10項為V（G04b新增9項），其餘126項維持U；L14–L23仍U，完整v1未完成。
+- 精確環境與命令：使用 `node:24.21.0-bookworm-slim@sha256:2fe369e969550cde8e867afc3fe370b260140cab4a23d467074295b42163d553` 執行 `npm ci --ignore-scripts`、`npm run test:g05b`、`npm run test:unit`、`npm run test:g05a`、`npm run test:boundary`、`npm run test:negative-compile`、`npm run build`；結果分別為 npm 423 packages／0 vulnerabilities、G05b 1 suite／80 tests、unit 8 suites／138 tests、G05a 1 suite／21 tests、boundary `selected=24 edges=58 forbidden=0 directRawComparison=0`、negative compile exit 0、build exit 0。另執行 `npm run test:coverage`：8 suites／138 tests，aggregate 48.98% statements／52.56% branches／45.69% functions／51.52% lines，G05b ledger 92.82%／91.02%／100%／98.58%。slim image無git，故image內diff check不可用；host唯讀 `git diff --check` PASS。
+- 純 ledger契約：每原操作首次完整owner起算 execution 15秒／最多3輪，排隊不計，已准入最後輪可完成；confirmation由首次unknown或首次precommit cleanup較早者起算10秒／7 shared slots，single send每次扣一格、不退款、串行；cadence為立即original commit、1秒canonical、2秒original、其後每2秒交替。首次commit使用execution剩餘整數毫秒，canonical及確認commit遵守剩餘整毫秒／固定2000ms規則，禁止0ms。native precommit group只在window內且至少2格准入，預扣2格、不退款、獨占、最多兩送、共用2000ms，第二送可越確認window且無組內間隔。continuation僅接受synchronous opaque no-effect evidence，保留全部既有budget，不刷新。
+- 安全與測試：trusted clock rollback／failure／overflow、owner failure、foreign／forged／double-used permit、reentry、construction mutation、重用evidence均永久freeze；ledger只輸出typed admission／denial／permit，不執行I/O。80 cases涵蓋四輪review與tester defect：construction capture、round/deadline、confirmation origin/cadence/slots、native two-send group、continuation、capability provenance及static forbidden boundary。
+- 責任界線：G05b不做 Mongo driver send、commit／abort、canonical observer、transport-loss、no-late／safe-terminal判定；不做G05c registry／epoch／capacity／join／late callback，不做G07 HTTP/raw/admission，不做G08 Auth/use-case/Event/Presence wiring。L14–L23因此仍U；pure ledger只作局部證據，不升完整requirement V。G04a/G04b仍引用既有同working-tree host真Mongo evidence，未因本關重標。
+- 限制與交接：native group的真 driver wire、unknown commit、abort結果、確認與安全放權須由G10b/G10c實測；G05c為下一合法 gate。不得宣稱G05b已完成driver send、transport fault、safe terminal、HTTP、use-case或完整confirmation protocol；本 evidence見 `docs/evidence/g05b/report.md`。
+
+
+### D173｜G05c registry／epoch／晚callback fence primitive限定gate通過並停止
+
+- 日期：2026-09-20；狀態：架構 review PASS、independent tester formal 51/51 PASS；PM先獨立核對D78–D91、D95–D99、D146–D149、business／plan／trace與production surface，再以 exact Node image 重跑 G05c 51、全 unit 189、G05a 21、G05b 80、build、boundary、negative compile、coverage及host diff check，均通過；依25 STOP停止於G05c，下一合法 gate 為G06a。
+- 精確環境與指紋：`node:24.21.0-bookworm-slim@sha256:2fe369e969550cde8e867afc3fe370b260140cab4a23d467074295b42163d553`；repo以read-only bind加container writable temporary workspace執行，未清除／chown host `dist`、`coverage`或`node_modules`。`npm ci --ignore-scripts`為423 packages／0 vulnerabilities；boundary `selected=25 edges=59 forbidden=0 directRawComparison=0`；negative public-surface compile exit0；coverage 9 suites／189 tests，aggregate 54.45% statements／56.55% branches／51.71% functions／57.04% lines，operation-registry為95.08%／91.97%／100%／96.50%；host `git diff --check` exit0。source／test SHA及完整命令見`docs/evidence/g05c/report.md`。
+- 交付契約：G05c是process-local、internal-only registry primitive；opaque issuer發出frozen branded key／artifact／result／claim／lease／permit，WeakMap保存provenance。key為Source＋externalEventId；same trusted artifact join／canonical replay，different artifact typed `IDEMPOTENCY_CONFLICT`；`IN_FLIGHT`／`UNKNOWN`／`CANONICAL`／`SAFE_TECHNICAL_TERMINAL`保留原entry；初值4096，無TTL／日間eviction，滿格停止新原項但仍可join／回放。
+- 晚callback與epoch：lease／permit封存datasetEpoch、processRunId、ownerId、generation；UNKNOWN只可由同步opaque evidence一次mint continuation permit，resume後升generation，foreign／forged／stale／double-used callback不能改狀態。canonical／safe terminal只回放opaque result reference，不重跑。artifact comparer、owner fence、continuation verifier只接受同步精確結果；throw、非boolean、thenable、re-entry或provenance損壞永久fail-closed。
+- writeRunClaim界線：只接受issuer已發出的opaque `WRITABLE`／`READ_ONLY`／`STALE` claim；READ_ONLY／STALE禁止新寫入且lookup為`NOT_PROVEN`。不模擬Mongo metadata atomic claim、process takeover、full reset、新epoch或ordinary restart state machine；這些由G11／composition另證。
+- 需求裁定：G05c不新增完整requirement V。A01、A11–A16、B13、B41、B42共10項V（G04b新增9項），其餘126項U；B33–B36、L05–L13、L20–L21、L28–L36逐項維持U。primitive不等於G05a／G05b／G05c composition、FIFO ingress、Mongo writeRunClaim、HTTP／capacity／use-case、G10 driver／transport-loss／confirmation或G11 maintenance/reset完成。
+- 限制與交接：G05c不做G06 Auth、G07 HTTP/raw/admission/capacity、G08 use-case／Event／Presence wiring、G10真driver／unknown commit／abort／safe-terminal protocol或G11 reset；不宣稱HTTP／v1。正式 evidence見`docs/evidence/g05c/report.md`，下一合法 gate為G06a。
