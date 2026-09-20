@@ -1,6 +1,6 @@
 # PassHub v1 業務邊界規格
 
-- 文件狀態：業務與實作規劃已收斂；G02–G03c、窄 G04a 及 G04b 完整原子保存 adapter 已有各自限定工程證據，依25 STOP停止於G04b；完整v1工程驗證仍未完成
+- 文件狀態：業務與實作規劃已收斂；G02–G03c、窄 G04a、G04b 完整原子保存 adapter 及 G05a FIFO coordinator primitive 已有各自限定工程證據，依25 STOP停止於G05a；完整v1工程驗證仍未完成
 - 更新日期：2026-09-20
 - 適用版本：PassHub v1
 - 文件目的：以 D01–D35 為業務底稿，同步至 D157 的有效修正；實作細節及逐關驗收集中在 implementation-plan.md，不把官方查證、歷史候選或待做測試當成工程成果
@@ -244,7 +244,7 @@ PassHub 不在此流程中控制門鎖、呼叫 Webhook 或建立任何下游投
 - 身分／業務格式不合法不得進業務保存；同步暫占及登記不是可信受理或通行授權。既有事件回放不是新通行決策。
 - 未知結果不能因等待逾時就放開後項；故障確認、續辦及維護依第 7.4–7.6 節與第 9.2 節。
 
-框架 hook、同步準入與同鍵暫占合併已依 D146–D149 規劃接線，仍須 G05a/G05c/G07a/G07b 真驗；不能把時間戳、單實例或一般 mutex 當成已通過驗收。
+G05a 已證內部同步登記／單調序號／單一FIFO權限、settlement與unknown fail-closed primitive；框架 hook、完整同步準入、同鍵暫占、use-case接線及生命期合併仍須 G05c/G07a/G07b 真驗，不能把本 primitive、時間戳、單實例或一般 mutex 當成完整FIFO已通過驗收。
 
 ## 6. Presence 與通行決策
 
@@ -749,7 +749,7 @@ Qualification 時間錯誤、Face重複、越權與公開限制均拒絕，使�
 
 P01–P15採用決策與逐關驗收見[實作方案](implementation-plan.md)及追蹤矩陣。剩餘不是讓實作者自由選架構：Face唯一索引替換微型真測、固定工具相容性及fault映像digest是明確前置gate；未過便停止回討論，不靜默換策。外部主機／domain／TLS需環境提供。D161已取代舊碼私密備份要求，不再建立legacy備份。
 
-目前矩陣為 A01 與 G04b 直接證據涵蓋的 A11–A16、B13、B41、B42 共 10 項 V（G04b 新增 9 項），其餘126項仍U；這不代表完整 v1、HTTP、FIFO、registry 或 fault protocol 完成。G04b 證據只涵蓋六 collection schema／guards、共同保存、freshness、QR／Face解析、comparison artifact、Event/source idempotency unique、canonical snapshot 與 error classification。不同 externalEventId 的並行 ENTRY 不在 adapter 內自動新 scope 重判；同 ID 並行首次請求只保證最多一筆 committed，未知競爭與後續 confirmation／retry 由後續 gate 處理。下一合法 gate 為 G05a。
+目前矩陣為 A01 與 G04b 直接證據涵蓋的 A11–A16、B13、B41、B42 共 10 項 V（G04b 新增 9 項；G05a不新增完整requirement V），其餘126項仍U；這不代表完整 v1、HTTP、FIFO、registry 或 fault protocol 完成。G04b 證據只涵蓋六 collection schema／guards、共同保存、freshness、QR／Face解析、comparison artifact、Event/source idempotency unique、canonical snapshot 與 error classification。G05a另證內部FIFO primitive、trusted sequence、owner及unknown fail-closed；完整 ingress、use-case接線、budget／registry及後續gate仍未驗。不同 externalEventId 的並行 ENTRY 不在 adapter 內自動新 scope 重判；同 ID 並行首次請求只保證最多一筆 committed，未知競爭與後續 confirmation／retry 由後續 gate 處理。下一合法 gate 為 G05b。
 
 ## 決策來源
 

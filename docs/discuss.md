@@ -31,18 +31,18 @@ updated: "2026-09-20"
 ## 快速檢索卡
 
 - 核心問題：在小型訪客資格／模擬辨識決策業務上，形成合理、模組化、可驗證的Node.js/TypeScript架構與逐關方案；不以兩天時限取代品質論證。
-- 當前結論：D160完成規劃封口；D161完成舊碼清除；D163–D167完成G02–G03b限定證據；D168完成G03c窄scope／opaque handle／composition限定證據；D169完成G04a Face reverse-unique 真Mongo限定gate；D170完成G04b完整原子保存 adapter 限定gate（57 tests）並停止於G04b。A01、A11–A16、B13、B41、B42共10項為V（G04b新增9項）、其餘126項仍U，完整v1未完成。
+- 當前結論：D160完成規劃封口；D161完成舊碼清除；D163–D167完成G02–G03b限定證據；D168完成G03c窄scope／opaque handle／composition限定證據；D169完成G04a Face reverse-unique 真Mongo限定gate；D170完成G04b完整原子保存 adapter 限定gate（57 tests）；D171完成G05a FIFO coordinator primitive 限定gate（21 tests）並停止於G05a。A01、A11–A16、B13、B41、B42共10項為V（G04b新增9項；G05a不新增完整requirement V）、其餘126項仍U，完整v1未完成。
 - 關鍵爭點：D129原生中止兩送有界組預扣不退、跨窗口局部例外；D130較早確認起點／D131七格；D143 Face反向unique同txn替換必须G04a先真測。D149同epoch普通restart關寫是明示可用性代價，不能依memory空接管。
 - 適用於：D01–D165有效採用／修正、獨立角色公開論點、官方查證及剩餘gate風險。採Nest預設Express/strictTS/官方driver/單API/單Mongo member replica set，非無框架或HA；25STOP見D157及實作方案。
 - 不適用於：把歷史候選／官方語法／manifest／獨立唯讀實驗當PassHub已完成成果。D117 JSON v2已取代binary v1，D130永久終局候選未採，D89安全條件續辦仍有效；D161只有A01為V。
-- 待驗證：G04b之後所有gate；G04b已證六 collection schema／integrity、共同保存、freshness、QR／Face解析、comparison artifact、Event/source unique、canonical snapshot及typed error分類，但不含bounded ingress/FIFO/registry、native清理／真回程loss、perf/logs/hold、Docker/CI/03維護/TLS及完整release。G04a仍只證Face reverse-unique微型阻塞；G02–G03c保留各自限定證據。
+- 待驗證：G05a之後所有gate；G04b已證六 collection schema／integrity、共同保存、freshness、QR／Face解析、comparison artifact、Event/source unique、canonical snapshot及typed error分類；G05a另證內部FIFO primitive、trusted sequence、owner與unknown fail-closed，但不含bounded HTTP ingress/use-case wiring、registry、native清理／真回程loss、perf/logs/hold、Docker/CI/03維護/TLS及完整release。G04a仍只證Face reverse-unique微型阻塞；G02–G03c保留各自限定證據。
 - 實作者入口：[實作方案](implementation-plan.md)，再讀[136要求矩陣](requirements-traceability.md)及[業務規格](business-scope.md)，並回查對應D原文。未來每子關報實際證據後STOP，D114不授權未來不停實作。
 
 ## 閱讀狀態與階段界線
 
-- 最新狀態：D170記錄G04b完整原子保存 adapter 真Mongo8.0.32限定gate已通過並停止；仍沒有完整HTTP／Nest controller、FIFO／registry、真transport-loss／confirmation、完整v1接線或部署。A01、A11–A16、B13、B41、B42共10項為V（G04b新增9項），其餘126項仍U。
+- 最新狀態：D171記錄G05a FIFO coordinator primitive限定gate已通過並停止；仍沒有完整HTTP／Nest controller／use-case FIFO wiring、registry、真transport-loss／confirmation、完整v1接線或部署。A01、A11–A16、B13、B41、B42共10項為V（G04b新增9項；G05a不新增完整requirement V），其餘126項仍U。
 - D01–D35 及所有較早摘要／交接保留歷史；其中「K1尚未同步」「尚未開始第二階段」「API/schema未定」不代表當前狀態。最新有效版本由D117/119/122/125/129–139/140–157及後續明確覆核修正判定，歷史block不回寫。下方回溯狀態描述只對當時有效，不能用來覆蓋新版。
-- 文件整體settled代表有效規劃已採用；D161留下舊碼處理證據，D163–D167留下G02–G03b證據，D168留下G03c限定架構證據，D169留下G04a限定真Mongo證據，D170留下G04b限定真Mongo證據。partially-sourced仍含專案取捨、官方查證與未實測組合；G04b不代表完整API、FIFO、真transport-loss或其餘126要求通過。
+- 文件整體settled代表有效規劃已採用；D161留下舊碼處理證據，D163–D167留下G02–G03b證據，D168留下G03c限定架構證據，D169留下G04a限定真Mongo證據，D170留下G04b限定真Mongo證據，D171留下G05a primitive證據。partially-sourced仍含專案取捨、官方查證與未實測組合；G04b／G05a不代表完整API、FIFO ingress、registry、真transport-loss或其餘126要求通過。
 - 「使用者已接受」與「辯論暫定」逐 block 區分。授權保存辯論不等於確認候選架構，也不等於授權重寫程式。
 - D36–D41 為 2026-09-16 回溯追加；統一使用建檔時間，不捏造各輪原始時間。
 - D42–D46 為 2026-09-17 回溯追加；統一記錄保存時間，不捏造各輪原始時間。公開程式查核另保留查詢日期及固定 commit。
@@ -3059,7 +3059,7 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 | G03c | 窄scope／handle／composition | check:boundary、unit scope；負compile／runtime wiring |
 | G04a | Face反向unique替換微型阻塞 | 真Mongo8.0.32 integration face-index／同txn release-reuse、空槽、失敗回滾 |
 | G04b | 完整原子保存adapter | 真Mongo integration atomic／共同snapshot、成功與拒絕新鮮度 |
-| G05a | FIFO操作權協調器 | unit fifo／慢前項不超車及owner |
+| G05a | FIFO操作權協調器 | PASS：exact Node image、unit 21／慢前項不超車、settlement／owner／fail-closed boundary |
 | G05b | 執行／確認共同預算 | unit budget／較早起點、七格、原生兩送、最後輪 |
 | G05c | registry／epoch／晚callback fence | unit registry-owner／滿格、join、技術終局、staleowner |
 | G06a | 人員認證能力 | integration human-auth／JWT、scrypt、目前角色enabled |
@@ -3226,3 +3226,12 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - 修正歷程：canonical replay改為先查既有Event再檢查目前source freshness，故current source／mapping／qualification變動不會重判已保存結果；補強UUID validators；startup補既有integrity scan且不修復；新增13 formal regressions；G04a fixture改合法UUID。
 - 同ID精確裁定：同一`source + externalEventId + comparison artifact`首次真正並行請求，G04b僅保證最多一筆`COMMITTED`；另一筆可因112／未知提交結果回typed `WRITE_CONFLICT`、`UNKNOWN_COMMIT_RESULT`或`UNKNOWN/UNCONFIRMED`。winner尚未可見時，一次canonical lookup為null是合法未知，不要求兩Promise立即resolve或立即收斂；winner commit可見後再次同ID／同artifact必須`REPLAYED`。retry loop、budget、immediate convergence、跨scope重判屬G05/G08b/G10。不同externalEventId並行ENTRY也不由G04b自動新scope重判／產生`ALREADY_INSIDE`，由後續G05 coordination／完整用例處理。
 - 限制與交接：不宣稱G05 FIFO／registry／budget／immediate convergence；G08 HTTP／Nest／auth／e2e／capacity；G10真transport-loss／confirmation／abort protocol；亦不宣稱clean source commit或v1 release。下一合法 gate為G05a FIFO operation coordinator。
+
+
+### D171｜G05a FIFO operation coordinator primitive gate通過並停止
+
+- 日期：2026-09-20；狀態：架構 review PASS、independent tester formal 21/21 PASS；PM先核對契約／production coordinator，再在 exact Node image 獨立重跑，G05a primitive限定 gate PASS，依25 STOP停止於G05a。G05a不新增完整requirement V；A01、A11–A16、B13、B41、B42共10項為V（G04b新增9項），其餘126項維持U；完整v1未完成。
+- 精確環境與命令：主機 Node v24.12.0／npm 11.6.2低於D125 pins，故使用 `node:24.21.0-bookworm-slim@sha256:2fe369e969550cde8e867afc3fe370b260140cab4a23d467074295b42163d553`；`npm ci --ignore-scripts && npm run test:g05a && npm run test:unit && npm run test:boundary && npm run test:negative-compile` exit 0。結果為 G05a 1 suite／21 tests、unit 7 suites／58 tests、boundary `selected=23 edges=57 forbidden=0 directRawComparison=0`、negative compile exit 0，build隨各 script exit 0，`git diff --check` exit 0；423 packages、0 vulnerabilities。
+- 交付契約：`src/access/application/internal/write-operation-coordinator.ts` 僅提供 management create/update/revoke及recognition四個channel；同步trusted clock／UUID operationId／單調bigint sequence登記，四channel共用FIFO，microtask才執行。context／owner frozen且可判斷stale；settlement僅 `PRESTART_REJECTED`、`BUSINESS_RESULT_PERSISTED`、`KNOWN_NO_EFFECT`、`UNKNOWN_EFFECT`。未知效果、executor throw/reject、無／重複／非法settlement均fail-closed並永久阻擋後項；已知無效果可前進。測試含同毫秒順序、慢前項、獨立bundle、clock failure、owner／context不可變、construction capture及窄boundary；沒有timeout／retry／resume／cancel／Promise.all。
+- 來源與責任：D72–D78、D141、D146–D149只要求此種內部同步登記／FIFO權限／未知停止 primitive；G05a不接 use-case／Nest HTTP／Auth／Mongo，不實作 raw admission、同鍵registry／join、budget／七格／confirmation、epoch/capacity、或完整結果保存。production usecase目前仍直接管理scope；因此 L01–L04、A18、B15–B21、B37–B43及E06保持U，primitive只能作局部實作輸入，不能宣稱完整requirement V。
+- 限制與交接：G05a不提供未知後續resume；上層後續 gate須維持未知停止，另證安全續辦／confirmation／registry。仍不宣稱G05b budget／七格／confirmation、G05c registry／epoch／capacity／join、G07 HTTP／Auth／e2e、G08 management／recognition／capacity，或G10真transport-loss／confirmation／abort protocol。下一合法 gate為G05b；本 evidence見 `docs/evidence/g05a/report.md`。
