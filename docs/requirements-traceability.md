@@ -1,6 +1,6 @@
 # PassHub 有效要求與實作追蹤矩陣
 
-規劃狀態：**D160封口；D161完成舊碼清除；D166改定正式Jest runner；G02–G03c及窄 G04a 已發行限定局部 evidence，目前停止於G04a**。工程狀態：**A01為V，其餘135條仍U**。整理日期：2026-09-20。
+規劃狀態：**D160封口；D161完成舊碼清除；D166改定正式Jest runner；G02–G03c、窄 G04a 及 G04b 已發行限定 evidence，目前停止於G04b**。工程狀態：**A01、A11–A16、B13、B41、B42 共10條為V（G04b新增9條），其餘126條仍U**。整理日期：2026-09-20。
 
 這份文件回答：「討論過的要求，實作時如何避免漏掉？」它不是已完成成果，也不授權開始重寫程式。
 
@@ -36,7 +36,7 @@
 | B10 | 同 Face 鍵只對應一張未終結資格，建立及修改都檢查唯一性。 | D07、D15、D67 | 映射管理／保存 | T-B10：建立重複、修改重複、並行初次綁定均最多一個成功。 | U |
 | B11 | 移除／替換 Face 時釋放舊鍵，更新資格與新舊映射一致。 | D15、D67 | 修改資格 | T-B11：移除、替換、新鍵衝突與保存失敗；不留下半更新。 | U |
 | B12 | 撤銷、未入場逾期終結、EXIT 後釋放 Face；INSIDE 逾期保留至 EXIT。 | D07、D16、D20、D69、D72、D76 | 映射終結／協調 | T-B12：各釋放時點及在場不釋放；後到整理不破壞較早準時 ENTRY。 | U |
-| B13 | UNKNOWN 只產生 `FACE_UNKNOWN` 拒絕事件；MATCHED 無映射是 `FACE_SUBJECT_NOT_MAPPED`。 | D09、D32 | 決策 | T-B13：兩者理由不同；不建立陌生人資料、不事後認領。 | U |
+| B13 | UNKNOWN 只產生 `FACE_UNKNOWN` 拒絕事件；MATCHED 無映射是 `FACE_SUBJECT_NOT_MAPPED`。 | D09、D32 | 決策 | T-B13：兩者理由不同；不建立陌生人資料、不事後認領。 | V：G04b 57-case 真Mongo integration驗證兩種 rejection shape、共同 Event 保存及不配置陌生 slot；完整 HTTP／auth 仍待 G08。 |
 | B14 | 新 ID 的延遲 Face 事件不查歷史映射；按相關操作有效順序使用目前映射。 | D31、D76 | 映射讀取／文件 | T-B14：釋放重綁後的新 ID 使用新映射；原 ID 回放舊結果；明示限制。 | U |
 | B15 | 建立／修改須 `validUntil > validFrom` 且結束晚於該請求首次接收時間。 | D13、D15、D164、業務 §4.1 | 時間規則 | T-B15：相等、反向、結束已到期拒絕；不因後續處理延誤刷新接收時間。 | U：G03a純時間規則已驗；入口首次時間接線未驗。 |
 | B16 | 開始可在過去／現在／未來；允許跨日，不設同日或十二小時上限。 | D13、D164 | 時間規則 | T-B16：三種開始時間、跨日、超過十二小時皆依其他條件正常處理。 | U：G03a案例已驗；HTTP日期解析未驗。 |
@@ -74,8 +74,8 @@
 | B38 | 同一資格的不同事件並行 EXIT 最多一個成功；Face 釋放影響後續 Face 的拒絕原因。 | D20、D32、D76 | 完整 EXIT | T-B38：QR 輸家 ALREADY_EXITED；無介入重綁時 Face 輸家為未映射；不同資格各可成功。 | U |
 | B39 | 新合法可信辨識的允許／拒絕都保存 Event，不強制有 qualification ID。 | D21、D97–D99 | Event 保存 | T-B39：無效 QR、UNKNOWN、未映射、停用 Source 等保存；未準入不建 Event。 | U |
 | B40 | 認證、格式、冪等衝突、限流／容量錯誤只寫適當去敏技術／安全紀錄。 | D21、D27、D97 | 錯誤分流 | T-B40：各錯誤沒有 Access Event、沒有假的通行 REJECTED。 | U |
-| B41 | 必要 Presence、映射變更與 Event 共同原子保存後才回成功。 | D22、D44、D46、D65 | 用例／保存 | T-B41：逐項故障注入全成或全不成；無 Event 不得回 ENTRY_GRANTED。 | U |
-| B42 | 拒絕 Event 保存失敗是系統錯誤，不能聲稱拒絕已完整稽核。 | D22、D46 | 保存失敗回覆 | T-B42：拒絕寫入失敗；不回已保存業務結果。 | U |
+| B41 | 必要 Presence、映射變更與 Event 共同原子保存後才回成功。 | D22、D44、D46、D65 | 用例／保存 | T-B41：逐項故障注入全成或全不成；無 Event 不得回 ENTRY_GRANTED。 | V：G04b 57-case 真Mongo integration覆蓋 accepted／rejected transaction、rollback、Presence／mapping／Event共同保存與 commit 後才回結果；G10 transport-loss仍U。 |
+| B42 | 拒絕 Event 保存失敗是系統錯誤，不能聲稱拒絕已完整稽核。 | D22、D46 | 保存失敗回覆 | T-B42：拒絕寫入失敗；不回已保存業務結果。 | V：G04b 57-case fault／write-failure分類驗證拒絕 Event 保存失敗回 typed technical error，不回 audited business rejection；G10確認協議仍U。 |
 | B43 | 時間為首次完整接收的伺服器時間，不接受 client 時間作決策、無離線補傳。 | D13、D31、D76 | 時間信任邊界 | T-B43：client 時間不能回溯；慢 body／慢認證／重送不混淆時間。 | U |
 
 ### 2.4 去敏查詢與展示
@@ -106,12 +106,12 @@
 | A08 | HTTP 轉交用例，領域純判斷；領域不依賴 Nest、Express、DB 或 session；Access 核心不直接依 Auth、HTTP 或具體 Mongo，infra 實作 ports 由組合入口接線。 | D41、D57、D62–D63 | 依賴方向 | T-A08：領域獨立測試；核心 imports 與實際 wiring 覆核，不用具體 infrastructure 繞過 port。 | G03c局部：boundary selected=18、edges=40、forbidden=0，production無raw comparison barrel import；HTTP／Nest／Mongo實際接線未驗 | U |
 | A09 | 用例協調完整讀取、判斷、保存；管理與辨識共用唯一純資格政策，基礎設施不另創通行規則。 | D56–D59、D62–D63 | 用例／保存分工 | T-A09：跨用例不複製資格政策；repository 不藏另一套 reason 優先序。 | G03c局部：management／recognition均由domain decision及internal branded plan provenance產生，caller不能偽造；完整repository共同保存未驗 | U |
 | A10 | 資料能力限當次完整操作；衝突重跑須新 scope、重新讀取及判斷。 | D56、D62–D65 | 操作上下文 | T-A10：結束後舊能力不可繼續用；衝突不能直接保存舊決策。 | G03c局部：每operation獨立owner／generation／epoch，closed或stale handle fail-closed並重核qualification／mapping freshness；真衝突重跑未驗 | U |
-| A11 | MongoDB 官方 driver，多文件 transaction 作共同保存基礎，環境須真支援交易；參與同一交易的操作共用 client／session，交易內不以 Promise.all 並行操作。 | D64–D65 | MongoDB 保存 | T-A11：真 Mongo 整合測試、session 傳遞及操作順序核對；不支援交易時不能假裝一致性已驗證。 | U |
-| A12 | 成功及依賴可變資料的拒絕都保護決策依據的新鮮度。 | D64–D65 | 並行保護 | T-A12：Source／映射／資格在判斷間變動；只有 snapshot／no-op 不算證明。 | U |
-| A13 | DB 唯一約束保護 Source＋external event ID。 | D65 | 事件索引 | T-A13：真實並行同鍵只一個 canonical Event，且正確分流重送／衝突。 | U |
-| A14 | 目前 Face Mapping 為獨立單一權威，不在多處保存可衝突的有效綁定。 | D66–D67 | 映射模型 | T-A14：所有有效映射走同一來源；資格摘要不能形成第二套真實綁定。 | U |
-| A15 | 同 Face 鍵的綁定／釋放／辨識須有真實共用寫入競爭；釋放清綁定引用但保留空協調位，首次缺鍵的綁定與未映射決策也受保護。 | D66–D67 | 空鍵競爭 | T-A15：首次綁定與 MATCHED 但未映射的辨識競爭；僅負查／no-op 不算保護；釋放後協調位仍可用。 | U |
-| A16 | 區分各種 duplicate key／已中止交易；不能全部當可重跑或吞錯續用。 | D66–D67 | 保存錯誤分類 | T-A16：映射、事件、其他唯一鍵衝突；只有確認可安全重跑才重跑。 | U |
+| A11 | MongoDB 官方 driver，多文件 transaction 作共同保存基礎，環境須真支援交易；參與同一交易的操作共用 client／session，交易內不以 Promise.all 並行操作。 | D64–D65 | MongoDB 保存 | T-A11：真 Mongo 整合測試、session 傳遞及操作順序核對；不支援交易時不能假裝一致性已驗證。 | V：G04b 57-case 真Mongo／rs0、手動 session、snapshot／primary／majority+j=true、順序 await、無 Promise.all／withTransaction；完整 production deployment仍U。 |
+| A12 | 成功及依賴可變資料的拒絕都保護決策依據的新鮮度。 | D64–D65 | 並行保護 | T-A12：Source／映射／資格在判斷間變動；只有 snapshot／no-op 不算證明。 | V：G04b 57-case 驗 source version／direction／active、qualification／mapping／QR／Face guards 及 accepted／rejected freshness；上層 FIFO仍U。 |
+| A13 | DB 唯一約束保護 Source＋external event ID。 | D65 | 事件索引 | T-A13：真實並行同鍵只一個 canonical Event，且正確分流重送／衝突。 | V：G04b 57-case 真Mongo unique index、同鍵並行 race、same-artifact replay、different-artifact conflict；loser immediate convergence不屬本 gate。 |
+| A14 | 目前 Face Mapping 為獨立單一權威，不在多處保存可衝突的有效綁定。 | D66–D67 | 映射模型 | T-A14：所有有效映射走同一來源；資格摘要不能形成第二套真實綁定。 | V：G04b schema／adapter及G04a9驗 faceSlots sole mapping authority、reverse reference／incarnation、orphan／slotCount startup integrity；完整管理HTTP仍U。 |
+| A15 | 同 Face 鍵的綁定／釋放／辨識須有真實共用寫入競爭；釋放清綁定引用但保留空協調位，首次缺鍵的綁定與未映射決策也受保護。 | D66–D67 | 空鍵競爭 | T-A15：首次綁定與 MATCHED 但未映射的辨識競爭；僅負查／no-op 不算保護；釋放後協調位仍可用。 | V：G04b 57-case 真Mongo驗首次 bind／unmapped recognition race、release保留空slot、mapping／qualification共同保存與分類；G05協調仍U。 |
+| A16 | 區分各種 duplicate key／已中止交易；不能全部當可重跑或吞錯續用。 | D66–D67 | 保存錯誤分類 | T-A16：映射、事件、其他唯一鍵衝突；只有確認可安全重跑才重跑。 | V：G04b 57-case 分辨 duplicate、112 write conflict、251 abort、schema validation、unknown commit；不以 retry loop 偽造確定性。 |
 | A17 | 逾期映射採相關操作惰性整理；唯讀不整理，無 TTL／背景終結業務。 | D68–D69、D72、D76、D164 | 映射整理 | T-A17：有效 faceBound、過期釋放、在場保留、準時排隊保護分開測。 | U：G03a生命週期effect已驗；相關操作、FIFO及DB整理未驗。 |
 | A18 | v1 只一個 API 實例；相關完整業務寫入單執行，登入／唯讀不全排入 FIFO。 | D73–D74、D76 | 執行協調 | T-A18：部署及程式無第二 writer；不以唯讀可用宣稱故障下必定可查。 | U |
 
@@ -299,7 +299,7 @@
 | P14 | D154–D155單API/單成員replset/NGINX；systemd03臺北Persistent=false、host lock/marker、API與Mongo確停及恢復、六collection精確清理／runTicket分bootstrap-ready／failclosed。 | A18、M01、M05–M10；G11 |
 | P15 | D156未被D166取代的命令／期限／clean sourceCommit規則；D166正式Jest runner與其證據失效／重驗範圍；D157固定25STOP及maintenance600/1800。文件封口G00，完整release136證據G12；本輪只討論。 | E01–E09；G00/G01a–G12 |
 
-實作方案記錄25個STOP、命令dictionary與證據位置。G01a/G01b已依D161完成，G02/G03a/G03b/G03c及窄 G04a 已依D166及本輪證據完成限定局部驗收並停止於G04a；後續完整 adapter 與環境前提仍未驗證。
+實作方案記錄25個STOP、命令dictionary與證據位置。G01a/G01b已依D161完成，G02/G03a/G03b/G03c、窄 G04a 及 G04b 已依D166及本輪證據完成限定驗收並停止於G04b；後續 FIFO、HTTP、capacity、transport-loss、confirmation、maintenance、deployment 與完整 v1 仍未驗證。
 
 ## 7. 實作時的證據帳本與反向覆核
 
@@ -317,7 +317,7 @@
 4. 獨立覆核者直接讀原始 D 段與測試，反查矩陣是否漏要求或誤採舊提案；不只閱讀實作者摘要。
 5. 交付差異與證據後停止。未達條件不進下一關，不因時間壓力靜默縮減要求；必要變更先與使用者確認。
 
-**當前停止點：窄 G04a face-index 真 Mongo evidence 已通過；Jest unit 37 tests、integration 9 tests、boundary selected=18／edges=40／forbidden=0及negative compile已記錄，仍未驗HTTP／完整v1。依25 STOP停止於G04a。A01為V、其餘135項仍U，履歷未解鎖。**
+**當前停止點：G04b 完整原子保存 adapter 真 Mongo evidence 已通過；G04b 57、G04a 9、unit 37，合計8 suites／103；boundary selected=21／edges=55／forbidden=0／directRawComparison=0，negative compile、build及diff check通過。仍未驗HTTP／FIFO／registry／capacity／真transport-loss／confirmation／maintenance／完整v1。依25 STOP停止於G04b。A01、A11–A16、B13、B41、B42共10項為V（G04b新增9項），其餘126項仍U，履歷未解鎖。**
 
 ## 8. 追蹤矩陣建立時的文件覆核紀錄（歷史）
 

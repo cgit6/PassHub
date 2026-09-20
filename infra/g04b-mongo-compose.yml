@@ -1,0 +1,25 @@
+services:
+  mongo-g04b:
+    image: mongo:8.0.32-noble@sha256:01354084d2ae665d2e79b79b0cdc50c2c0c98873618912d9a2c8c9cb5c3d24e6
+    command:
+      - mongod
+      - --port
+      - '27029'
+      - --replSet
+      - rs0
+      - --bind_ip_all
+      - --setParameter
+      - enableTestCommands=1
+    ports:
+      - 127.0.0.1:27029:27029
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'mongosh --quiet --port 27029 --eval "db.adminCommand({ ping: 1 }).ok === 1"'
+      interval: 2s
+      timeout: 3s
+      retries: 30

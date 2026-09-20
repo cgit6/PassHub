@@ -16,8 +16,14 @@ export {
 export { computeQrLookupDigest, issueQrToken } from './digests.js';
 export {
   ComparisonCompatibilityError,
+  isComparisonArtifact,
   verifyStartupVectorsAndCreateComparisonCapability,
   type ComparisonArtifact,
   type ComparisonCapability,
   type StartupComparisonVector,
 } from './comparison-capability.js';
+export {
+  createVerifiedComparisonPort,
+  type ComparisonPort,
+  type QrCredentialPort,
+} from './comparison-port.js';

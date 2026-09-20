@@ -22,6 +22,7 @@ import type {
   RecognitionDataPort,
   SourceFactsPort,
 } from '../access/ports/index.js';
+import type { ComparisonPort } from '../access/application/comparison/comparison-port.js';
 
 export interface AccessCompositionDependencies {
   readonly management: ManagementDataPort;
@@ -30,6 +31,8 @@ export interface AccessCompositionDependencies {
   readonly query: AccessQueryPort;
   readonly epoch: string;
   readonly sourceId: string;
+  /** Required for the production composition; the legacy overload exists only for old fakes. */
+  readonly comparison: ComparisonPort;
 }
 
 export interface AccessComposition {
@@ -88,6 +91,12 @@ function assertDependencies(
   if (typeof dependencies.sourceId !== 'string' || dependencies.sourceId.length === 0) {
     throw new TypeError('composition sourceId is required');
   }
+  if (typeof dependencies.comparison !== 'object' || dependencies.comparison === null ||
+      typeof dependencies.comparison.validate !== 'function' ||
+      typeof dependencies.comparison.qrCredential?.lookupDigest !== 'function' ||
+      typeof dependencies.comparison.artifact?.create !== 'function') {
+    throw new TypeError('verified comparison port is required');
+  }
 }
 
 export function createAccessComposition(
@@ -113,6 +122,7 @@ export function createAccessComposition(
   const recognizeAttempt = new RecognizeAttemptImplementation(
     () => openRecognitionScope(),
     dependencies.sourceId,
+    dependencies.comparison,
   );
 
   return Object.freeze({

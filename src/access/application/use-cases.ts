@@ -1,7 +1,6 @@
-import {
-  defaultComparisonPort,
-  type ComparisonPort,
-  type RecognitionComparisonInput,
+import type {
+  ComparisonPort,
+  RecognitionComparisonInput,
 } from './comparison/comparison-port.js';
 import {
   type ManagementScope,
@@ -11,6 +10,7 @@ import {
   createManagementChangePlan,
   createRecognitionResultPlan,
 } from './internal-plans.js';
+import { assertExternalEventId, assertExternalSubjectId, assertProvider } from '../ports/recognition-validation.js';
 import {
   decideAccess,
   decideQualificationRevocation,
@@ -22,7 +22,10 @@ import {
 import type {
   RedactedAccessEventProjection,
   RedactedQualificationProjection,
+  ManagementChangeResult,
 } from '../ports/index.js';
+
+const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
 export interface ReadAccessData {
   qualifications(
@@ -50,6 +53,7 @@ export interface CreateQualificationCommand {
     | Readonly<{ provider: string; externalSubjectId: string }>
     | null;
   readonly receivedAtMs: number;
+  readonly actorId: string;
 }
 
 export interface UpdateQualificationCommand {
@@ -62,25 +66,40 @@ export interface UpdateQualificationCommand {
     | null
     | undefined;
   readonly receivedAtMs: number;
+  readonly actorId: string;
 }
 
 export interface RevokeQualificationCommand {
   readonly qualificationId: string;
   readonly reason: string;
   readonly receivedAtMs: number;
+  readonly actorId: string;
 }
 
 export interface ManageQualifications {
-  create(input: CreateQualificationCommand): Promise<void>;
-  update(input: UpdateQualificationCommand): Promise<void>;
-  revoke(input: RevokeQualificationCommand): Promise<void>;
+  create(input: CreateQualificationCommand): Promise<ManagementChangeResult>;
+  update(input: UpdateQualificationCommand): Promise<ManagementChangeResult>;
+  revoke(input: RevokeQualificationCommand): Promise<ManagementChangeResult>;
 }
 
 /** Management has no transition setter; every write is a complete plan. */
 export class ManageQualificationsImplementation implements ManageQualifications {
   public constructor(private readonly openScope: () => ManagementScope) {}
 
-  public async create(input: CreateQualificationCommand): Promise<void> {
+  private assertActorId(actorId: unknown): asserts actorId is string {
+    if (typeof actorId !== 'string' || !UUID_V4_PATTERN.test(actorId)) {
+      throw new TypeError('actorId must be a canonical UUID v4');
+    }
+  }
+
+  private assertFaceMapping(input: Readonly<{ provider: string; externalSubjectId: string }> | null | undefined): void {
+    if (input === null || input === undefined) return;
+    assertProvider(input.provider);
+    assertExternalSubjectId(input.externalSubjectId);
+  }
+
+  public async create(input: CreateQualificationCommand): Promise<ManagementChangeResult> {
+    this.assertActorId(input.actorId);
     const window = decideQualificationWindow({
       validFromMs: input.validFromMs,
       validUntilMs: input.validUntilMs,
@@ -89,9 +108,10 @@ export class ManageQualificationsImplementation implements ManageQualifications 
     if (!window.allowed) {
       throw new Error(window.reason);
     }
+    this.assertFaceMapping(input.faceMapping);
     const scope = this.openScope();
     try {
-      await scope.stageManagementChange(
+      return (await scope.stageManagementChange(
         createManagementChangePlan({
           operation: 'CREATE',
           qualificationId: null,
@@ -100,14 +120,18 @@ export class ManageQualificationsImplementation implements ManageQualifications 
           validUntilMs: input.validUntilMs,
           faceMapping: input.faceMapping,
           revocationReason: null,
+          receivedAtMs: input.receivedAtMs,
+          actorId: input.actorId,
         }),
-      );
+      ));
     } finally {
-      scope.close();
+      await scope.closeAsync();
     }
   }
 
-  public async update(input: UpdateQualificationCommand): Promise<void> {
+  public async update(input: UpdateQualificationCommand): Promise<ManagementChangeResult> {
+    this.assertActorId(input.actorId);
+    this.assertFaceMapping(input.faceMapping);
     const scope = this.openScope();
     try {
       const current = await scope.readQualification(input.qualificationId);
@@ -123,7 +147,7 @@ export class ManageQualificationsImplementation implements ManageQualifications 
       if (!decision.allowed) {
         throw new Error(decision.reason);
       }
-      await scope.stageManagementChange(
+      return (await scope.stageManagementChange(
         createManagementChangePlan({
           operation: 'UPDATE',
           qualificationId: input.qualificationId,
@@ -132,14 +156,17 @@ export class ManageQualificationsImplementation implements ManageQualifications 
           validUntilMs: input.validUntilMs,
           faceMapping: input.faceMapping,
           revocationReason: null,
+          receivedAtMs: input.receivedAtMs,
+          actorId: input.actorId,
         }),
-      );
+      ));
     } finally {
-      scope.close();
+      await scope.closeAsync();
     }
   }
 
-  public async revoke(input: RevokeQualificationCommand): Promise<void> {
+  public async revoke(input: RevokeQualificationCommand): Promise<ManagementChangeResult> {
+    this.assertActorId(input.actorId);
     const scope = this.openScope();
     try {
       const current = await scope.readQualification(input.qualificationId);
@@ -154,7 +181,7 @@ export class ManageQualificationsImplementation implements ManageQualifications 
       if (!decision.allowed) {
         throw new Error(decision.reason);
       }
-      await scope.stageManagementChange(
+      return (await scope.stageManagementChange(
         createManagementChangePlan({
           operation: 'REVOKE',
           qualificationId: input.qualificationId,
@@ -163,10 +190,12 @@ export class ManageQualificationsImplementation implements ManageQualifications 
           validUntilMs: null,
           faceMapping: null,
           revocationReason: input.reason,
+          receivedAtMs: input.receivedAtMs,
+          actorId: input.actorId,
         }),
-      );
+      ));
     } finally {
-      scope.close();
+      await scope.closeAsync();
     }
   }
 }
@@ -174,6 +203,7 @@ export class ManageQualificationsImplementation implements ManageQualifications 
 export interface RecognitionAttemptCommand {
   readonly input: RecognitionComparisonInput;
   readonly receivedAtMs: number;
+  readonly externalEventId: string;
 }
 
 /**
@@ -188,10 +218,11 @@ export class RecognizeAttemptImplementation implements RecognizeAttempt {
   public constructor(
     private readonly openScope: (sourceId: string) => RecognitionScope,
     private readonly sourceId: string,
-    private readonly comparison: ComparisonPort = defaultComparisonPort,
+    private readonly comparison: ComparisonPort,
   ) {}
 
   public async execute(input: RecognitionAttemptCommand): Promise<AccessDecision> {
+    assertExternalEventId(input.externalEventId);
     this.comparison.validate(input.input);
     if (!Number.isSafeInteger(input.receivedAtMs)) {
       throw new TypeError('receivedAtMs must be a safe integer instant');
@@ -212,13 +243,20 @@ export class RecognizeAttemptImplementation implements RecognizeAttempt {
         resolution,
         receivedAtMs: input.receivedAtMs,
       });
-      await scope.stageRecognitionResult(
+      const comparisonArtifact = this.comparison.artifact.create(input.input);
+      const persisted = await scope.stageRecognitionResult(
         handle,
-        createRecognitionResultPlan(handle, decision),
+        createRecognitionResultPlan(handle, decision, {
+          externalEventId: input.externalEventId,
+          receivedAtMs: input.receivedAtMs,
+          sourceId: sourceFacts.sourceId,
+          direction: sourceFacts.direction,
+          comparisonArtifact,
+        }),
       );
-      return decision;
+      return persisted.decision;
     } finally {
-      scope.close();
+      await scope.closeAsync();
     }
   }
 

@@ -4,15 +4,17 @@ import type {
   AccessScopeContext,
   FaceMappingSnapshot,
   ManagementChangePlan,
+  ManagementChangeResult,
   QualificationSnapshot,
   RecognitionResultPlan,
+  RecognitionPersistenceResult,
   ResolvedIdentitySnapshot,
   SourceFacts,
   SourceFactsPort,
   ManagementDataPort,
   RecognitionDataPort,
 } from '../ports/index.js';
-import { createAccessScopeContext } from '../../shared/access-scope-context.js';
+import { createAccessScopeContext, retireAccessScopeContext } from '../../shared/access-scope-context.js';
 import { AccessScopeError } from './scope-errors.js';
 import {
   assertManagementChangePlan,
@@ -32,8 +34,8 @@ export { AccessScopeError } from './scope-errors.js';
 export interface ManagementScope {
   readQualification(qualificationId: string): Promise<QualificationSnapshot | null>;
   readMapping(qualificationId: string): Promise<FaceMappingSnapshot | null>;
-  stageManagementChange(plan: ManagementChangePlan): Promise<void>;
-  close(): void;
+  stageManagementChange(plan: ManagementChangePlan): Promise<ManagementChangeResult>;
+  closeAsync(): Promise<void>;
 }
 
 export interface RecognitionScope {
@@ -48,8 +50,8 @@ export interface RecognitionScope {
   stageRecognitionResult(
     handle: ResolutionHandle,
     plan: RecognitionResultPlan,
-  ): Promise<void>;
-  close(): void;
+  ): Promise<RecognitionPersistenceResult>;
+  closeAsync(): Promise<void>;
 }
 
 export interface ScopeOptions {
@@ -63,9 +65,13 @@ function assertNonEmpty(value: string, field: string): void {
   }
 }
 
-function makeContext(options: ScopeOptions): AccessScopeContext {
+function makeContext(
+  options: ScopeOptions,
+  owner: string,
+  generation: string,
+): AccessScopeContext {
   assertNonEmpty(options.epoch, 'epoch');
-  return createAccessScopeContext();
+  return createAccessScopeContext({ epoch: options.epoch, owner, generation });
 }
 
 abstract class ScopeBase {
@@ -82,7 +88,7 @@ abstract class ScopeBase {
     this.owner = randomUUID();
     this.generation = randomUUID();
     this.epoch = options.epoch;
-    this.context = makeContext(options);
+    this.context = makeContext(options, this.owner, this.generation);
   }
 
   protected assertOpen(): void {
@@ -94,8 +100,14 @@ abstract class ScopeBase {
     }
   }
 
-  public close(): void {
+  protected async discardPersistence(): Promise<void> {
+    return;
+  }
+
+  public async closeAsync(): Promise<void> {
     this.#closed = true;
+    retireAccessScopeContext(this.context);
+    await this.discardPersistence();
   }
 }
 
@@ -136,11 +148,16 @@ export class ManagementAccessScope
     return result;
   }
 
-  public async stageManagementChange(plan: ManagementChangePlan): Promise<void> {
+  public async stageManagementChange(plan: ManagementChangePlan): Promise<ManagementChangeResult> {
     this.assertOpen();
     assertManagementChangePlan(plan);
-    await this.persistence.stageManagementChange(this.context, plan);
+    const result = await this.persistence.stageManagementChange(this.context, plan);
     this.assertOpen();
+    return result;
+  }
+
+  protected override async discardPersistence(): Promise<void> {
+    await this.persistence.discard?.(this.context);
   }
 }
 
@@ -242,7 +259,7 @@ export class RecognitionAccessScope
   public async stageRecognitionResult(
     handle: ResolutionHandle,
     plan: RecognitionResultPlan,
-  ): Promise<void> {
+  ): Promise<RecognitionPersistenceResult> {
     const claims = this.assertHandle(handle);
     assertRecognitionResultPlan(plan);
     if (plan.media !== claims.media || plan.resolution !== claims.resolution) {
@@ -276,8 +293,13 @@ export class RecognitionAccessScope
       }
     }
     await this.assertResolutionFreshness(claims);
-    await this.persistence.stageRecognitionResult(this.context, plan);
+    const result = await this.persistence.stageRecognitionResult(this.context, plan);
     this.assertOpen();
+    return result;
+  }
+
+  protected override async discardPersistence(): Promise<void> {
+    await this.persistence.discard?.(this.context);
   }
 
   private makeHandle(

@@ -9,18 +9,37 @@ import {
   createRecognitionResultPlan,
 } from '../../src/access/application/internal-plans.js';
 import { decideAccess, type AccessDecision } from '../../src/access/domain/index.js';
+import {
+  createVerifiedComparisonPort,
+  verifyStartupVectorsAndCreateComparisonCapability,
+} from '../../src/access/application/comparison/index.js';
+import {
+  FIXED_COMPARISON_REFERENCE_ID,
+  FIXED_STARTUP_VECTORS,
+  FIXED_TEST_HMAC_KEY,
+} from '../fixtures/comparison-vectors.js';
 import { createAccessComposition } from '../../src/composition/access-composition.js';
 import type {
   AccessQueryPort,
   FaceMappingSnapshot,
+  ManagementChangeResult,
   ManagementDataPort,
   QualificationSnapshot,
   RecognitionDataPort,
+  RecognitionPersistenceResult,
   SourceFacts,
   SourceFactsPort,
   ResolvedIdentitySnapshot,
 } from '../../src/access/ports/index.js';
 import type { ResolutionHandle } from '../../src/access/application/resolution-handle.js';
+
+const TEST_COMPARISON = createVerifiedComparisonPort(
+  verifyStartupVectorsAndCreateComparisonCapability({
+    hmacKey: FIXED_TEST_HMAC_KEY,
+    comparisonReferenceId: FIXED_COMPARISON_REFERENCE_ID,
+    vectors: FIXED_STARTUP_VECTORS,
+  }),
+);
 
 const QUALIFICATION: QualificationSnapshot = {
   qualificationId: 'q-1',
@@ -80,9 +99,23 @@ class FakeManagementPort implements ManagementDataPort {
   public async stageManagementChange(
     _context: Parameters<ManagementDataPort['stageManagementChange']>[0],
     plan: Parameters<ManagementDataPort['stageManagementChange']>[1],
-  ): Promise<void> {
+  ): Promise<ManagementChangeResult> {
     this.calls.push('stageManagementChange');
     this.staged.push(plan);
+    return {
+      operation: plan.operation,
+      qualificationId: plan.qualificationId ?? 'q-fake',
+      incarnation: 'inc-fake',
+      version: 0,
+      summary: {
+        qualificationId: plan.qualificationId ?? 'q-fake',
+        displayName: plan.displayName ?? 'fake',
+        validFromMs: plan.validFromMs ?? 0,
+        validUntilMs: plan.validUntilMs ?? 0,
+        presence: 'NOT_ENTERED',
+      },
+      qrToken: plan.operation === 'CREATE' ? 'fake-token' : null,
+    };
   }
 }
 
@@ -145,10 +178,21 @@ class FakeRecognitionPort implements RecognitionDataPort {
   public async stageRecognitionResult(
     context: Parameters<RecognitionDataPort['stageRecognitionResult']>[0],
     plan: Parameters<RecognitionDataPort['stageRecognitionResult']>[1],
-  ): Promise<void> {
+  ): Promise<RecognitionPersistenceResult> {
     this.calls.push('stageRecognitionResult');
     this.contexts.push(context);
     this.staged.push(plan as unknown as Record<string, unknown>);
+    return {
+      status: 'COMMITTED',
+      eventId: 'event-fake',
+      decision: {
+        outcome: plan.outcome,
+        reasonCode: plan.reasonCode,
+        presenceTransition: plan.presenceTransition,
+        qualificationEffect: plan.qualificationEffect,
+        faceMappingEffect: plan.faceMappingEffect,
+      },
+    };
   }
 }
 
@@ -210,6 +254,7 @@ test('composition exposes three distinct wrappers and keeps write capabilities s
     query,
     epoch: 'epoch-1',
     sourceId: 'source-1',
+    comparison: TEST_COMPARISON,
   });
 
   expect(Object.keys(composition).sort()).toEqual([
@@ -221,9 +266,11 @@ test('composition exposes three distinct wrappers and keeps write capabilities s
   await composition.manageQualifications.create({
     displayName: 'Demo', validFromMs: 1_000, validUntilMs: 2_000,
     faceMapping: null, receivedAtMs: 1_000,
+    actorId: '22222222-2222-4222-8222-222222222222',
   });
   await composition.recognizeAttempt.execute({
     input: { kind: 'FACE_UNKNOWN' }, receivedAtMs: 1_000,
+    externalEventId: 'unit-composition-face-unknown',
   });
   await composition.readAccessData.qualifications({ limit: 10 });
 
@@ -240,7 +287,7 @@ test('opaque handles reject fakes, cross-scope owners/contexts, and closed scope
   const handle = await resolvedQr(scopeA);
   await expect(scopeA.readQualification({} as ResolutionHandle)).rejects.toMatchObject({ code: 'INVALID_HANDLE' });
   await expect(scopeB.readQualification(handle)).rejects.toMatchObject({ code: 'HANDLE_SCOPE_MISMATCH' });
-  scopeA.close();
+  await scopeA.closeAsync();
   await expect(scopeA.readSourceFacts()).rejects.toMatchObject({ code: 'SCOPE_CLOSED' });
 });
 
@@ -354,6 +401,7 @@ test('redacted query wrapper exposes no token, subject, HMAC, or comparison refe
   const composition = createAccessComposition({
     management: new FakeManagementPort(), recognition: new FakeRecognitionPort(),
     sourceFacts: new FakeSourceFactsPort(), query, epoch: 'epoch-1', sourceId: 'source-1',
+    comparison: TEST_COMPARISON,
   });
   const result = await composition.readAccessData.qualifications({ limit: 10, cursor: 'cursor-1' });
   const serialized = JSON.stringify(result);
@@ -408,7 +456,7 @@ test('management wrapper only stages trusted complete plans and closes its scope
     revocationReason: 'cancelled',
   }));
   expect(port.staged[0]).toMatchObject({ operation: 'REVOKE', revocationReason: 'cancelled' });
-  scope.close();
+  await scope.closeAsync();
   await expect(scope.stageManagementChange(createManagementChangePlan({
     operation: 'CREATE', qualificationId: null, displayName: 'Demo',
     validFromMs: 1_000, validUntilMs: 2_000, faceMapping: null, revocationReason: null,

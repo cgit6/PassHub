@@ -2,6 +2,7 @@ import type {
   Direction,
   QualificationState,
   ReasonCode,
+  AccessDecision,
 } from '../domain/index.js';
 import type { AccessScopeContext } from '../../shared/access-scope-context.js';
 export type { AccessScopeContext } from '../../shared/access-scope-context.js';
@@ -60,6 +61,21 @@ export interface ManagementChangePlan {
   readonly revocationReason: string | null;
 }
 
+export interface ManagementChangeResult {
+  readonly operation: 'CREATE' | 'UPDATE' | 'REVOKE';
+  readonly qualificationId: string;
+  readonly incarnation: string;
+  readonly version: number;
+  readonly summary: Readonly<{
+    readonly qualificationId: string;
+    readonly displayName: string;
+    readonly validFromMs: number;
+    readonly validUntilMs: number;
+    readonly presence: 'NOT_ENTERED' | 'INSIDE' | 'EXITED';
+  }>;
+  readonly qrToken: string | null;
+}
+
 export interface RecognitionResultPlan {
   readonly [recognitionPlanBrand]: true;
   readonly media: 'QR' | 'FACE_MATCHED' | 'FACE_UNKNOWN';
@@ -84,6 +100,12 @@ export interface RecognitionResultPlan {
   readonly faceMappingEffect: 'KEEP' | 'RELEASE';
 }
 
+export interface RecognitionPersistenceResult {
+  readonly status: 'COMMITTED' | 'REPLAYED';
+  readonly eventId: string;
+  readonly decision: AccessDecision;
+}
+
 export interface ManagementDataPort {
   readQualification(
     context: AccessScopeContext,
@@ -96,7 +118,8 @@ export interface ManagementDataPort {
   stageManagementChange(
     context: AccessScopeContext,
     plan: ManagementChangePlan,
-  ): Promise<void>;
+  ): Promise<ManagementChangeResult>;
+  discard?(context: AccessScopeContext): Promise<void>;
 }
 
 export interface RecognitionDataPort {
@@ -120,7 +143,8 @@ export interface RecognitionDataPort {
   stageRecognitionResult(
     context: AccessScopeContext,
     plan: RecognitionResultPlan,
-  ): Promise<void>;
+  ): Promise<RecognitionPersistenceResult>;
+  discard?(context: AccessScopeContext): Promise<void>;
 }
 
 export interface RedactedQualificationProjection {

@@ -31,18 +31,18 @@ updated: "2026-09-20"
 ## 快速檢索卡
 
 - 核心問題：在小型訪客資格／模擬辨識決策業務上，形成合理、模組化、可驗證的Node.js/TypeScript架構與逐關方案；不以兩天時限取代品質論證。
-- 當前結論：D160完成規劃封口；D161完成舊碼清除；D163–D167完成G02–G03b限定證據；D168完成G03c窄scope／opaque handle／composition限定證據；D169完成G04a Face reverse-unique 真Mongo限定gate（unit37／integration9）並停止於G04a，G04b尚未開始。A01為V、其餘135要求仍U，完整v1未完成。
+- 當前結論：D160完成規劃封口；D161完成舊碼清除；D163–D167完成G02–G03b限定證據；D168完成G03c窄scope／opaque handle／composition限定證據；D169完成G04a Face reverse-unique 真Mongo限定gate；D170完成G04b完整原子保存 adapter 限定gate（57 tests）並停止於G04b。A01、A11–A16、B13、B41、B42共10項為V（G04b新增9項）、其餘126項仍U，完整v1未完成。
 - 關鍵爭點：D129原生中止兩送有界組預扣不退、跨窗口局部例外；D130較早確認起點／D131七格；D143 Face反向unique同txn替換必须G04a先真測。D149同epoch普通restart關寫是明示可用性代價，不能依memory空接管。
 - 適用於：D01–D165有效採用／修正、獨立角色公開論點、官方查證及剩餘gate風險。採Nest預設Express/strictTS/官方driver/單API/單Mongo member replica set，非無框架或HA；25STOP見D157及實作方案。
 - 不適用於：把歷史候選／官方語法／manifest／獨立唯讀實驗當PassHub已完成成果。D117 JSON v2已取代binary v1，D130永久終局候選未採，D89安全條件續辦仍有效；D161只有A01為V。
-- 待驗證：G04b完整原子保存adapter及其後所有gate；窄ports/provider/handle以外的完整接線、bounded ingress/FIFO/registry、native清理／真回程loss、perf/logs/hold、Docker/CI/03維護/TLS及完整release。G04a僅證Face reverse-unique微型阻塞：index／shape配對、release-first visibility、reverse bind-first E11000、rollback、parallel 112（TransientTransactionError）與251／abort分類；不代表完整adapter或v1。G02–G03c保留各自限定證據。
+- 待驗證：G04b之後所有gate；G04b已證六 collection schema／integrity、共同保存、freshness、QR／Face解析、comparison artifact、Event/source unique、canonical snapshot及typed error分類，但不含bounded ingress/FIFO/registry、native清理／真回程loss、perf/logs/hold、Docker/CI/03維護/TLS及完整release。G04a仍只證Face reverse-unique微型阻塞；G02–G03c保留各自限定證據。
 - 實作者入口：[實作方案](implementation-plan.md)，再讀[136要求矩陣](requirements-traceability.md)及[業務規格](business-scope.md)，並回查對應D原文。未來每子關報實際證據後STOP，D114不授權未來不停實作。
 
 ## 閱讀狀態與階段界線
 
-- 最新狀態：D169記錄G04a Face reverse-unique 真Mongo8.0.32限定gate已通過並停止；仍沒有完整Mongo adapter、HTTP／Nest controller、資料集掃描、完整DB接線或部署。A01為V、其餘135項仍U；G04b尚未開始。
+- 最新狀態：D170記錄G04b完整原子保存 adapter 真Mongo8.0.32限定gate已通過並停止；仍沒有完整HTTP／Nest controller、FIFO／registry、真transport-loss／confirmation、完整v1接線或部署。A01、A11–A16、B13、B41、B42共10項為V（G04b新增9項），其餘126項仍U。
 - D01–D35 及所有較早摘要／交接保留歷史；其中「K1尚未同步」「尚未開始第二階段」「API/schema未定」不代表當前狀態。最新有效版本由D117/119/122/125/129–139/140–157及後續明確覆核修正判定，歷史block不回寫。下方回溯狀態描述只對當時有效，不能用來覆蓋新版。
-- 文件整體settled代表有效規劃已採用；D161留下舊碼處理證據，D163–D167留下G02–G03b證據，D168留下G03c限定架構證據，D169留下G04a限定真Mongo證據。partially-sourced仍含專案取捨、官方查證與未實測組合；G04a不代表完整adapter、API、Mongo保存鏈或其餘135要求通過。
+- 文件整體settled代表有效規劃已採用；D161留下舊碼處理證據，D163–D167留下G02–G03b證據，D168留下G03c限定架構證據，D169留下G04a限定真Mongo證據，D170留下G04b限定真Mongo證據。partially-sourced仍含專案取捨、官方查證與未實測組合；G04b不代表完整API、FIFO、真transport-loss或其餘126要求通過。
 - 「使用者已接受」與「辯論暫定」逐 block 區分。授權保存辯論不等於確認候選架構，也不等於授權重寫程式。
 - D36–D41 為 2026-09-16 回溯追加；統一使用建檔時間，不捏造各輪原始時間。
 - D42–D46 為 2026-09-17 回溯追加；統一記錄保存時間，不捏造各輪原始時間。公開程式查核另保留查詢日期及固定 commit。
@@ -3216,3 +3216,13 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - 並行／錯誤分類：兩 session 先過 barrier 再競爭同 subject，成功者一個，另一項依真 server 結果分類為 `code=112 + TransientTransactionError`；`code=251`／abort 與 `UnknownTransactionCommitResult` 保留不同分類及 stage，不把 112／251 當 duplicate，也不把 unknown commit 當 rollback。所有 writer operation 同 session 且順序 `await`，observer API 明確 majority read concern。
 - 證據限制：只驗 faceSlots index／shape／release-reuse visibility／duplicate／rollback／parallel transaction error classification；不驗 G04b 完整 atomic adapter、qualifications／events／users／sources／metadata 接線、完整冪等／新鮮度、HTTP／Nest、FIFO、fault、maintenance、deployment 或 public sandbox。G04a 不解鎖任何完整 v1 claim。
 - 停止與交接：G04a report 保存窄命令、unit37／integration9、Mongo version／readiness、shape code121、visibility、E11000、rollback、parallel112／251 classification 與清理限制；架構／tester 後續若開始 G04b，須另開 gate、另建 evidence。不得因本關通過而撤索引、換 guard 或跨入完整保存實作。
+
+
+### D170｜G04b 完整原子保存 adapter 真Mongo限定gate通過並停止
+
+- 日期：2026-09-20；狀態：架構 review PASS、independent tester formal 57/57 PASS；PM獨立重跑並核對 code／tests／docs 後，G04b限定 gate PASS，依25 STOP停止於G04b。A01、A11–A16、B13、B41、B42共10項為V（G04b直接新增9項），其餘126項維持U；完整v1未完成。
+- 證據：`npm run test:g04b` 真MongoDB `8.0.32` `rs0`為1 suite／57 tests；`npm run test:g04a`為1 suite／9 tests；`npm run test:unit`為6 suites／37 tests；合計8 suites／103。`npm run test:boundary`為`selected=21 edges=55 forbidden=0 directRawComparison=0`；negative compile、build、`git diff --check`均exit0。G04a fixtures已改合法UUID。Mongo exact image為`mongo:8.0.32-noble@sha256:01354084d2ae665d2e79b79b0cdc50c2c0c98873618912d9a2c8c9cb5c3d24e6`，compose測後teardown。
+- 交付契約：六 collection schema／validator／unique index／bootstrap與既有資料fail-closed integrity（legacy Event、face-slot orphan／incarnation、slotCount、Event source-direction）；accepted及rejected共用session／transaction保存Presence、mapping、Event；source／qualification／mapping／QR／Face freshness guard；QR／Face精確解析與D117 comparison artifact；`FACE_UNKNOWN`與`FACE_SUBJECT_NOT_MAPPED`分流；source+externalEventId unique、same-artifact replay、different-artifact conflict；一次canonical snapshot redacted projection；duplicate／112／251／schema validation／unknown commit typed分類。
+- 修正歷程：canonical replay改為先查既有Event再檢查目前source freshness，故current source／mapping／qualification變動不會重判已保存結果；補強UUID validators；startup補既有integrity scan且不修復；新增13 formal regressions；G04a fixture改合法UUID。
+- 同ID精確裁定：同一`source + externalEventId + comparison artifact`首次真正並行請求，G04b僅保證最多一筆`COMMITTED`；另一筆可因112／未知提交結果回typed `WRITE_CONFLICT`、`UNKNOWN_COMMIT_RESULT`或`UNKNOWN/UNCONFIRMED`。winner尚未可見時，一次canonical lookup為null是合法未知，不要求兩Promise立即resolve或立即收斂；winner commit可見後再次同ID／同artifact必須`REPLAYED`。retry loop、budget、immediate convergence、跨scope重判屬G05/G08b/G10。不同externalEventId並行ENTRY也不由G04b自動新scope重判／產生`ALREADY_INSIDE`，由後續G05 coordination／完整用例處理。
+- 限制與交接：不宣稱G05 FIFO／registry／budget／immediate convergence；G08 HTTP／Nest／auth／e2e／capacity；G10真transport-loss／confirmation／abort protocol；亦不宣稱clean source commit或v1 release。下一合法 gate為G05a FIFO operation coordinator。

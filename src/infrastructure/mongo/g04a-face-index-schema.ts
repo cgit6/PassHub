@@ -4,6 +4,10 @@ export const G04A_FACE_SLOTS_COLLECTION = 'faceSlots';
 export const G04A_FACE_SUBJECT_INDEX = 'g04a_face_subject_unique_v1';
 export const G04A_FACE_QUALIFICATION_INDEX =
   'g04a_face_qualification_unique_v1';
+const UUID = {
+  bsonType: 'string',
+  pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+} as const;
 
 /**
  * The G04a experiment deliberately owns only the faceSlots collection. It
@@ -23,6 +27,7 @@ export interface G04aFaceSlotDocument {
 export const G04A_FACE_SLOTS_VALIDATOR = Object.freeze({
   $jsonSchema: {
     bsonType: 'object',
+    additionalProperties: false,
     oneOf: [
       {
         properties: {
@@ -47,12 +52,12 @@ export const G04A_FACE_SLOTS_VALIDATOR = Object.freeze({
       'version',
     ],
     properties: {
-      _id: { bsonType: 'string' },
+      _id: UUID,
       provider: { bsonType: 'string', minLength: 1 },
       subject: { bsonType: 'string', minLength: 1 },
-      qualificationId: { bsonType: ['null', 'string'] },
-      qualificationIncarnation: { bsonType: ['null', 'string'] },
-      slotIncarnation: { bsonType: 'string', minLength: 1 },
+      qualificationId: { bsonType: ['null', 'string'], oneOf: [{ bsonType: 'null' }, UUID] },
+      qualificationIncarnation: { bsonType: ['null', 'string'], oneOf: [{ bsonType: 'null' }, UUID] },
+      slotIncarnation: UUID,
       version: { bsonType: 'int', minimum: 0 },
     },
   },
@@ -77,6 +82,7 @@ export const G04A_FACE_SLOTS_INDEXES: readonly IndexDescription[] =
 
 export async function ensureG04aFaceSlotsCollection(
   database: Db,
+  installIndexes = true,
 ): Promise<Collection<G04aFaceSlotDocument>> {
   try {
     await database.createCollection<G04aFaceSlotDocument>(
@@ -96,7 +102,7 @@ export async function ensureG04aFaceSlotsCollection(
   const collection = database.collection<G04aFaceSlotDocument>(
     G04A_FACE_SLOTS_COLLECTION,
   );
-  await collection.createIndexes([...G04A_FACE_SLOTS_INDEXES]);
+  if (installIndexes) await collection.createIndexes([...G04A_FACE_SLOTS_INDEXES]);
   return collection;
 }
 

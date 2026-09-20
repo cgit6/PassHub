@@ -2,12 +2,18 @@ import type {
   ManagementChangePlan,
   RecognitionResultPlan,
 } from '../ports/index.js';
+import {
+  registerManagementPersistenceEnvelope,
+  registerRecognitionPersistenceEnvelope,
+} from '../ports/trusted-operation.js';
+import type { ComparisonArtifact } from '../ports/comparison-artifact.js';
 import type { AccessDecision } from '../domain/index.js';
 import {
   readResolutionHandleClaims,
   type ResolutionHandle,
 } from './resolution-handle.js';
 import { AccessScopeError } from './scope-errors.js';
+import { assertExternalSubjectId, assertProvider } from '../ports/recognition-validation.js';
 
 const managementPlans = new WeakSet<object>();
 const recognitionPlans = new WeakSet<object>();
@@ -23,6 +29,8 @@ export interface ManagementChangeInput {
     | null
     | undefined;
   readonly revocationReason: string | null;
+  readonly receivedAtMs?: number;
+  readonly actorId?: string;
 }
 
 export function createManagementChangePlan(
@@ -46,12 +54,25 @@ export function createManagementChangePlan(
     revocationReason: input.revocationReason,
   }) as unknown as ManagementChangePlan;
   managementPlans.add(plan);
+  if (input.receivedAtMs !== undefined && input.actorId !== undefined) {
+    registerManagementPersistenceEnvelope(plan, {
+      receivedAtMs: input.receivedAtMs,
+      actorId: input.actorId,
+    });
+  }
   return plan;
 }
 
 export function createRecognitionResultPlan(
   handle: ResolutionHandle,
   decision: AccessDecision,
+  metadata: Readonly<{
+    externalEventId?: string;
+    receivedAtMs?: number;
+    sourceId?: string;
+    direction?: import('../domain/index.js').Direction;
+    comparisonArtifact?: ComparisonArtifact;
+  }> = {},
 ): RecognitionResultPlan {
   const claims = readResolutionHandleClaims(handle);
   if (claims === null) {
@@ -82,6 +103,21 @@ export function createRecognitionResultPlan(
     faceMappingEffect: decision.faceMappingEffect,
   }) as unknown as RecognitionResultPlan;
   recognitionPlans.add(plan);
+  if (
+    metadata.externalEventId !== undefined &&
+    metadata.receivedAtMs !== undefined &&
+    metadata.sourceId !== undefined &&
+    metadata.direction !== undefined &&
+    metadata.comparisonArtifact !== undefined
+  ) {
+    registerRecognitionPersistenceEnvelope(plan, {
+      externalEventId: metadata.externalEventId,
+      receivedAtMs: metadata.receivedAtMs,
+      sourceId: metadata.sourceId,
+      direction: metadata.direction,
+      comparisonArtifact: metadata.comparisonArtifact,
+    });
+  }
   return plan;
 }
 
@@ -144,6 +180,10 @@ function assertManagementChangePlanShape(
       'INVALID_MANAGEMENT_PLAN',
       'only revoke may contain a reason',
     );
+  }
+  if (plan.faceMapping !== null && plan.faceMapping !== undefined) {
+    assertProvider(plan.faceMapping.provider);
+    assertExternalSubjectId(plan.faceMapping.externalSubjectId);
   }
 }
 

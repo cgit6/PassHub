@@ -1,6 +1,6 @@
 # PassHub v1 業務邊界規格
 
-- 文件狀態：業務與實作規劃已收斂；G02–G03c及窄 G04a 已有限定局部工程證據並已停止於G04a；完整v1工程驗證仍未完成
+- 文件狀態：業務與實作規劃已收斂；G02–G03c、窄 G04a 及 G04b 完整原子保存 adapter 已有各自限定工程證據，依25 STOP停止於G04b；完整v1工程驗證仍未完成
 - 更新日期：2026-09-20
 - 適用版本：PassHub v1
 - 文件目的：以 D01–D35 為業務底稿，同步至 D157 的有效修正；實作細節及逐關驗收集中在 implementation-plan.md，不把官方查證、歷史候選或待做測試當成工程成果
@@ -749,7 +749,7 @@ Qualification 時間錯誤、Face重複、越權與公開限制均拒絕，使�
 
 P01–P15採用決策與逐關驗收見[實作方案](implementation-plan.md)及追蹤矩陣。剩餘不是讓實作者自由選架構：Face唯一索引替換微型真測、固定工具相容性及fault映像digest是明確前置gate；未過便停止回討論，不靜默換策。外部主機／domain／TLS需環境提供。D161已取代舊碼私密備份要求，不再建立legacy備份。
 
-目前A01為V，其餘135項仍U；這只驗證舊碼移出及文件／Git保留，不代表任何新程式或測試完成。未來逐子關差異／命令／結果／指紋／覆核後停止，禁止跨關一口氣重寫。
+目前矩陣為 A01 與 G04b 直接證據涵蓋的 A11–A16、B13、B41、B42 共 10 項 V（G04b 新增 9 項），其餘126項仍U；這不代表完整 v1、HTTP、FIFO、registry 或 fault protocol 完成。G04b 證據只涵蓋六 collection schema／guards、共同保存、freshness、QR／Face解析、comparison artifact、Event/source idempotency unique、canonical snapshot 與 error classification。不同 externalEventId 的並行 ENTRY 不在 adapter 內自動新 scope 重判；同 ID 並行首次請求只保證最多一筆 committed，未知競爭與後續 confirmation／retry 由後續 gate 處理。下一合法 gate 為 G05a。
 
 ## 決策來源
 

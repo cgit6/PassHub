@@ -28,6 +28,7 @@
     "test:unit": "npm run build && NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs",
     "test:integration": "npm run build && NODE_OPTIONS=--experimental-vm-modules jest --config jest.integration.config.cjs",
     "test:g04a": "node scripts/test-g04a-integration.mjs",
+    "test:g04b": "node scripts/test-g04b-integration.mjs",
     "test:coverage": "npm run build && NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs --coverage",
     "test:boundary": "npm run build && node scripts/check-g03c-boundary.mjs",
     "test:negative-compile": "npm run build && node scripts/check-g03c-negative-compile.mjs"

@@ -241,8 +241,8 @@ test('two real sessions use a bounded barrier: at most one commit and one final 
   expect(first?._id).toBeDefined();
   expect(second?._id).toBeDefined();
   const parallelInputs = {
-    first: parallelInput(first?._id ?? '', 'parallel-q-1'),
-    second: parallelInput(second?._id ?? '', 'parallel-q-2'),
+    first: parallelInput(first?._id ?? ''),
+    second: parallelInput(second?._id ?? ''),
   };
   const outcomes = await withTimeout(
     writer.bindTwoSessionsWithBarrier(parallelInputs),
@@ -310,28 +310,28 @@ async function expectSeedUnchanged(): Promise<void> {
   );
 }
 
-function parallelInput(slotId: string, qualificationId: string): G04aFaceBindingInput {
+function parallelInput(slotId: string): G04aFaceBindingInput {
   return {
     slotId,
-    qualificationId,
-    qualificationIncarnation: `${qualificationId}-incarnation`,
+    qualificationId: randomUUID(),
+    qualificationIncarnation: randomUUID(),
     provider: 'parallel.provider',
     subject: 'parallel.subject',
   };
 }
 
 function emptySlot(
-  id: string,
+  _idLabel: string,
   provider: string,
   subject: string,
 ): G04aFaceSlotDocument {
   return {
-    _id: id,
+    _id: randomUUID(),
     provider,
     subject,
     qualificationId: null,
     qualificationIncarnation: null,
-    slotIncarnation: `slot-${id}`,
+    slotIncarnation: randomUUID(),
     version: 0,
   };
 }

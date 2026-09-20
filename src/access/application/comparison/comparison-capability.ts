@@ -1,12 +1,12 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
 import { encodeComparisonFrame } from './frame-codec.js';
-import type { RecognitionComparisonInput } from './recognition-input.js';
+import { assertRecognitionComparisonInput, type RecognitionComparisonInput } from './recognition-input.js';
+import { registerComparisonArtifact, type ComparisonArtifact } from '../../ports/comparison-artifact.js';
 
 const LOWER_HEX_32_BYTES = /^[0-9a-f]{64}$/u;
 const UUID_V4 =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
-const artifactBrand: unique symbol = Symbol('ComparisonArtifact');
 
 export interface StartupComparisonVector {
   readonly input: RecognitionComparisonInput;
@@ -14,11 +14,7 @@ export interface StartupComparisonVector {
   readonly expectedHmacHex: string;
 }
 
-export interface ComparisonArtifact {
-  readonly inputHmac: string;
-  readonly comparisonReferenceId: string;
-  readonly [artifactBrand]: true;
-}
+export type { ComparisonArtifact } from '../../ports/comparison-artifact.js';
 
 export class ComparisonCompatibilityError extends Error {
   public constructor(message: string) {
@@ -65,18 +61,15 @@ function makeArtifact(
   const artifact = {
     inputHmac,
     comparisonReferenceId,
-  } as ComparisonArtifact;
-  Object.defineProperty(artifact, artifactBrand, {
-    value: true,
-    enumerable: false,
-    writable: false,
-    configurable: false,
-  });
+  } as object;
+  registerComparisonArtifact(artifact);
   return Object.freeze(artifact);
 }
 
+export { isComparisonArtifact } from '../../ports/comparison-artifact.js';
+
 export interface ComparisonCapability {
-  create(input: RecognitionComparisonInput): ComparisonArtifact;
+  create(input: unknown): ComparisonArtifact;
   matches(
     input: RecognitionComparisonInput,
     stored: Readonly<{
@@ -99,8 +92,9 @@ class VerifiedComparisonCapability implements ComparisonCapability {
     Object.freeze(this);
   }
 
-  public create(input: RecognitionComparisonInput): ComparisonArtifact {
-    const digest = digestFrame(this.#key, encodeComparisonFrame(input));
+  public create(input: unknown): ComparisonArtifact {
+    assertRecognitionComparisonInput(input as RecognitionComparisonInput);
+    const digest = digestFrame(this.#key, encodeComparisonFrame(input as RecognitionComparisonInput));
     return makeArtifact(digest.toString('hex'), this.#comparisonReferenceId);
   }
 
