@@ -1,9 +1,9 @@
 # PassHub v1 業務邊界規格
 
-- 文件狀態：業務與實作規劃已收斂；G02–G03c、窄 G04a、G04b 完整原子保存 adapter、G05a／G05b／G05c primitives、G06a human-auth primitive、G06b Source-auth／安全 facts primitive及G07a bounded raw／JSON ingress已有各自限定工程證據，依25 STOP停止於G07a；完整v1工程驗證仍未完成
+- 文件狀態：業務與實作規劃已收斂；G02–G03c、窄 G04a、G04b 完整原子保存 adapter、G05a／G05b／G05c primitives、G06a human-auth primitive、G06b Source-auth／安全 facts primitive、G07a bounded raw／JSON ingress及G07b同步準入／HTTP等待生命期已有各自限定工程證據，依25 STOP停止於G07b；完整v1工程驗證仍未完成
 - 更新日期：2026-09-21
 - 適用版本：PassHub v1
-- 文件目的：以 D01–D35 為業務底稿，同步至 D176 的有效修正；實作細節及逐關驗收集中在 implementation-plan.md，不把官方查證、歷史候選或待做測試當成工程成果
+- 文件目的：以 D01–D35 為業務底稿，同步至 D177 的有效修正；實作細節及逐關驗收集中在 implementation-plan.md，不把官方查證、歷史候選或待做測試當成工程成果
 
 原始依據見[討論紀錄](./discuss.md)，逐項實作及驗收對應見[要求追蹤矩陣](./requirements-traceability.md)。本文件的「已確認」是規格採用狀態，不代表程式／測試已完成。
 
@@ -244,7 +244,7 @@ PassHub 不在此流程中控制門鎖、呼叫 Webhook 或建立任何下游投
 - 身分／業務格式不合法不得進業務保存；同步暫占及登記不是可信受理或通行授權。既有事件回放不是新通行決策。
 - 未知結果不能因等待逾時就放開後項；故障確認、續辦及維護依第 7.4–7.6 節與第 9.2 節。
 
-G05a 已證內部同步登記／單調序號／單一FIFO權限、settlement與unknown fail-closed primitive；G05b 已證每原操作 15秒／3輪 execution、10秒／7格 confirmation、single-send cadence、native precommit兩送預扣及continuation admission ledger；G05c 已證 process-local registry／opaque artifact join／conflict、4096 retention、generation／late-callback與epoch／read-only claim primitive；G06a 已證人員認證 primitive（strict HS256 JWT、async scrypt、目前 enabled／role reread、opaque human principal 及 read-only primary／majority Mongo reader）；G06b 已證機器憑證精確 grammar、raw-secret SHA-256、lower-hex digest 解為32-byte Buffer後 `timingSafeEqual`、generic credential failure、sourceId-only opaque principal、inactive仍認證成功、Auth／Sources／Access窄能力隔離與 read-only primary／majority Mongo reader；G07a 已證 Nest／Express 前方 bounded raw／JSON ingress、唯一受限 Node server、嚴格 UTF-8／JSON object、raw duplicate headers、16KiB body、16 readers、64 connections及5秒upload／header／keep-alive本地邊界。完整同步準入、G05a／G05b／G05c composition、同鍵暫占與HTTP等待／use-case接線、當輪 Access 重讀 active／direction後的業務次序、driver wire與生命期合併仍須後續 G07b/G08/G10/G11 真驗；G07a handoff不是G07b admission／FIFO登記，不能把這些局部證據當成完整FIFO／冪等／故障協議、API或部署已通過驗收。
+G05a 已證內部同步登記／單調序號／單一FIFO權限、settlement與unknown fail-closed primitive；G05b 已證每原操作 15秒／3輪 execution、10秒／7格 confirmation、single-send cadence、native precommit兩送預扣及continuation admission ledger；G05c 已證 process-local registry／opaque artifact join／conflict、4096 retention、generation／late-callback與epoch／read-only claim primitive；G06a 已證人員認證 primitive（strict HS256 JWT、async scrypt、目前 enabled／role reread、opaque human principal 及 read-only primary／majority Mongo reader）；G06b 已證機器憑證精確 grammar、raw-secret SHA-256、lower-hex digest 解為32-byte Buffer後 `timingSafeEqual`、generic credential failure、sourceId-only opaque principal、inactive仍認證成功、Auth／Sources／Access窄能力隔離與 read-only primary／majority Mongo reader；G07a 已證 Nest／Express 前方 bounded raw／JSON ingress、唯一受限 Node server、嚴格 UTF-8／JSON object、raw duplicate headers、16KiB body、16 readers、64 connections及5秒upload／header／keep-alive本地邊界；G07b 已證十路由技術分類、epoch／existing-only入口、同步分池與registry暫占、provisional FIFO、五秒一次回覆owner、fixed-minute rate、同鍵join／replay／conflict及unknown handoff的內部composition seam。G07b刻意使用注入的validator／work port，仍不是正式G06 Auth route、G08 Access用例／Event／Presence／Mongo接線，也未接G05b execution／confirmation ledger、G10 driver故障協議或G11維護部署；不能把限定證據描述成完整業務API或v1完成。
 
 ## 6. Presence 與通行決策
 
@@ -426,7 +426,7 @@ Source＋external event ID 使用資料庫唯一約束。相同內容採 D117 �
 - 不淘汰已登記準時項騰槽；HTTP 逾時、斷線、結果未知不釋放原項／仍在工作驗證。競爭下取得、轉交、歸還各只能按實際生命期正確執行。
 - 原項 32 不是並行寫入數，仍單 writer FIFO。其他資源初值依 D148–D149：connection 64、raw reader 16、body 16KiB／上傳絕對五秒、scrypt 1無queue、queryDB 1、canonical回放 2、原確認 1；所有工作真收束才返自己的額度。
 
-同步準入／同鍵合併／滿載重送的具體接線與資源驗證尚未完成；不得把政策已採用寫成容量實測成果。
+G07b已對內部技術composition驗證同步準入、同鍵join／replay／conflict、existing-only不升新、分池與部分滿載／釋放邊界；正式Auth、Access用例、Event／Presence、Mongo及G10/G11整合仍未完成，不得把此限定gate寫成完整業務容量、公開API或部署成果。
 
 ## 8. 最小營運查詢
 
@@ -749,7 +749,7 @@ Qualification 時間錯誤、Face重複、越權與公開限制均拒絕，使�
 
 P01–P15採用決策與逐關驗收見[實作方案](implementation-plan.md)及追蹤矩陣。剩餘不是讓實作者自由選架構：Face唯一索引替換微型真測、固定工具相容性及fault映像digest是明確前置gate；未過便停止回討論，不靜默換策。外部主機／domain／TLS需環境提供。D161已取代舊碼私密備份要求，不再建立legacy備份。
 
-目前矩陣為 A01 與 G04b 直接證據涵蓋的 A11–A16、B13、B41、B42 共 10 項 V（G04b 新增 9 項；G05a／G05b／G05c／G06a／G06b／G07a不新增完整requirement V），其餘126項仍U；這不代表完整 v1、API、FIFO、registry、Auth route 或 fault protocol 完成。G04b 證據只涵蓋六 collection schema／guards、共同保存、freshness、QR／Face解析、comparison artifact、Event/source idempotency unique、canonical snapshot 與 error classification。G05a另證內部FIFO primitive；G05b另證純execution／confirmation budget ledger、七格、native group與continuation admission；G05c另證process-local registry／opaque artifact comparer、4096 bounded retention、join／conflict、canonical／safe technical terminal、generation／late-callback fence、epoch／read-only claim primitive；G06a另證人員登入／JWT／scrypt／current enabled-role／opaque human principal與唯讀 primary／majority reader；G06b另證 Source credential verifier／Auth primitive、sourceId-only opaque principal、inactive仍認證成功、lower-hex digest 解為32-byte Buffer比對、唯讀 primary／majority reader及窄接線；G07a另證 bounded raw／JSON ingress、唯一server及本地body／reader／connection／timeout邊界。G07a仍未接上G07b同步準入／分池／existing-only／FIFO等待生命期、Auth route、rate、controller／use-case、Event／Presence或deployment；G05c仍未接上G05a／G05b／G05c composition、Mongo writeRunClaim state machine、完整 capacity／use-case／driver／G10／G11。B04、B50、B52、L01、L24–L35、M04、E01、E06、X01–X11及其餘要求逐項仍U，不能因局部測試升級完整要求。不同 externalEventId 的並行 ENTRY 不在 adapter 內自動新 scope 重判；同 ID 並行首次請求只保證最多一筆 committed，未知競爭與後續 confirmation／retry 由後續 gate 處理。依25 STOP停止於G07a；下一合法 gate 為 G07b，尚未開始。
+目前矩陣為 A01 與 G04b 直接證據涵蓋的 A11–A16、B13、B41、B42 共 10 項 V（G04b 新增 9 項；G05a／G05b／G05c／G06a／G06b／G07a／G07b不新增完整requirement V），其餘126項仍U；這不代表完整 v1、正式API、Auth route、Access/Event/Mongo或 fault protocol 完成。G04b 證據只涵蓋六 collection schema／guards、共同保存、freshness、QR／Face解析、comparison artifact、Event/source idempotency unique、canonical snapshot 與 error classification。G05a另證內部FIFO primitive；G05b另證純execution／confirmation budget ledger；G05c另證process-local registry；G06a／G06b另證人員／Source auth primitives；G07a另證 bounded raw／JSON ingress；G07b另證內部 admission composition、分池／rate、provisional FIFO、existing-only、registry reservation、一次回覆owner及unknown handoff。G07b未接正式G06 Auth、G08 Access用例／Event／Presence／Mongo、G05b ledger、G10 confirmation／driver或G11部署；L01–L06、L24–L36、M04、B22–B28、B37–B43、E01、E03、E06及其餘要求逐項仍U，不能因局部測試升級完整要求。依25 STOP停止於G07b；下一合法 gate 為 G08a，尚未開始。
 
 ## 決策來源
 

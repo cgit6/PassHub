@@ -1,4 +1,12 @@
 export {
+  BUSINESS_ROUTE_IDS,
+  classifyBusinessRoute,
+  type BusinessRouteClassification,
+  type BusinessRouteClassifierInput,
+  type BusinessRouteId,
+  type BusinessRouteRetryMode,
+} from './business-route-classifier.js';
+export {
   INGRESS_ERROR_CODES,
   INGRESS_LIMITS,
   createBoundedJsonIngress,

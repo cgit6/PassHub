@@ -24,6 +24,8 @@ export type OperationRegistryErrorCode =
   | 'REGISTRY_CAPACITY_EXHAUSTED'
   | 'IDEMPOTENCY_CONFLICT'
   | 'INVALID_CAPABILITY'
+  | 'INVALID_RESERVATION'
+  | 'RESERVATION_ALREADY_USED'
   | 'ENTRY_NOT_FOUND'
   | 'ENTRY_NOT_MUTABLE'
   | 'INVALID_LEASE'
@@ -56,9 +58,16 @@ declare const registryKeyBrand: unique symbol;
 declare const comparisonArtifactBrand: unique symbol;
 declare const resultReferenceBrand: unique symbol;
 declare const writeRunClaimBrand: unique symbol;
+declare const observationReferenceBrand: unique symbol;
+declare const registryReservationBrand: unique symbol;
 
 export interface OperationRegistryKey {
   readonly [registryKeyBrand]: never;
+}
+
+export interface OperationRegistryKeyFacts {
+  readonly sourceId: string;
+  readonly externalEventId: string;
 }
 
 export interface OperationComparisonArtifact {
@@ -71,6 +80,14 @@ export interface OperationResultReference {
 
 export interface OperationWriteRunClaim {
   readonly [writeRunClaimBrand]: never;
+}
+
+export interface OperationObservationReference {
+  readonly [observationReferenceBrand]: never;
+}
+
+export interface OperationRegistryReservation {
+  readonly [registryReservationBrand]: never;
 }
 
 export interface OperationRegistryCapabilityIssuerOptions {
@@ -88,8 +105,10 @@ export interface OperationRegistryCapabilityIssuerOptions {
 export interface OperationRegistryCapabilityIssuer {
   readonly [capabilityIssuerBrand]: never;
   issueKey(sourceId: string, externalEventId: string): OperationRegistryKey;
+  assertKey(key: OperationRegistryKey): OperationRegistryKeyFacts;
   issueComparisonArtifact(identity: object): OperationComparisonArtifact;
   issueResultReference(): OperationResultReference;
+  issueObservationReference(): OperationObservationReference;
   issueWriteRunClaim(disposition: WriteRunClaimDisposition): OperationWriteRunClaim;
 }
 
@@ -136,20 +155,24 @@ export type OperationRegistration =
       readonly kind: 'REGISTERED';
       readonly entry: OperationRegistryEntryView;
       readonly lease: OperationExecutionLease;
+      readonly observationReference: OperationObservationReference;
     }
   | {
       readonly kind: 'JOINED';
       readonly entry: OperationRegistryEntryView;
+      readonly observationReference: OperationObservationReference;
     }
   | {
       readonly kind: 'REPLAY_CANONICAL';
       readonly entry: OperationRegistryEntryView;
       readonly resultReference: OperationResultReference;
+      readonly observationReference: OperationObservationReference;
     }
   | {
       readonly kind: 'REPLAY_SAFE_TECHNICAL_TERMINAL';
       readonly entry: OperationRegistryEntryView;
       readonly resultReference: OperationResultReference;
+      readonly observationReference: OperationObservationReference;
     };
 
 export type ExistingOperationLookup =
@@ -170,11 +193,29 @@ export interface OperationRegistrySnapshot {
   readonly claimDisposition: WriteRunClaimDisposition;
   readonly capacity: number;
   readonly size: number;
+  readonly reserved: number;
   readonly frozen: boolean;
 }
 
+export interface OperationRegistryCompositionView {
+  readonly registryId: string;
+  readonly datasetEpoch: string;
+  readonly claimDisposition: WriteRunClaimDisposition;
+}
+
 export interface OperationRegistry {
+  assertComposition(
+    capabilities: OperationRegistryCapabilityIssuer,
+  ): OperationRegistryCompositionView;
   register(key: OperationRegistryKey, artifact: OperationComparisonArtifact): OperationRegistration;
+  reserveCandidate(): OperationRegistryReservation;
+  releaseReservation(reservation: OperationRegistryReservation): void;
+  registerReserved(
+    reservation: OperationRegistryReservation,
+    key: OperationRegistryKey,
+    artifact: OperationComparisonArtifact,
+    observationReference: OperationObservationReference,
+  ): OperationRegistration;
   lookupExisting(key: OperationRegistryKey, artifact: OperationComparisonArtifact): ExistingOperationLookup;
   markUnknown(lease: OperationExecutionLease): OperationConfirmationLease;
   completeCanonical(
@@ -202,6 +243,7 @@ interface Entry {
   readonly sourceId: string;
   readonly externalEventId: string;
   readonly artifact: OperationComparisonArtifact;
+  readonly observationReference: OperationObservationReference;
   state: OperationRegistryState;
   generation: number;
   resultReference: OperationResultReference | null;
@@ -258,11 +300,17 @@ interface WriteRunClaimState {
   readonly disposition: WriteRunClaimDisposition;
 }
 
+interface ReservationState {
+  readonly registry: object;
+  active: boolean;
+}
+
 const capabilityIssuers = new WeakMap<object, CapabilityIssuerState>();
 const registryKeys = new WeakMap<object, RegistryKeyState>();
 const comparisonArtifacts = new WeakMap<object, ComparisonArtifactState>();
 const resultReferences = new WeakMap<object, ResultReferenceState>();
 const writeRunClaims = new WeakMap<object, WriteRunClaimState>();
+const observationReferences = new WeakMap<object, ResultReferenceState>();
 
 export function createOperationRegistryCapabilityIssuer(
   options: OperationRegistryCapabilityIssuerOptions,
@@ -275,6 +323,18 @@ export function createOperationRegistryCapabilityIssuer(
       const token = Object.freeze({}) as OperationRegistryKey;
       registryKeys.set(token, { issuer: state, sourceId, externalEventId });
       return token;
+    },
+
+    assertKey(key: OperationRegistryKey): OperationRegistryKeyFacts {
+      if (!isObject(key)) throw new TypeError('operation registry key is invalid');
+      const keyState = registryKeys.get(key);
+      if (keyState === undefined || keyState.issuer !== state) {
+        throw new TypeError('operation registry key was not issued by this exact capability issuer');
+      }
+      return Object.freeze({
+        sourceId: keyState.sourceId,
+        externalEventId: keyState.externalEventId,
+      });
     },
 
     issueComparisonArtifact(identity: object): OperationComparisonArtifact {
@@ -290,6 +350,12 @@ export function createOperationRegistryCapabilityIssuer(
     issueResultReference(): OperationResultReference {
       const token = Object.freeze({}) as OperationResultReference;
       resultReferences.set(token, { issuer: state });
+      return token;
+    },
+
+    issueObservationReference(): OperationObservationReference {
+      const token = Object.freeze({}) as OperationObservationReference;
+      observationReferences.set(token, { issuer: state });
       return token;
     },
 
@@ -332,6 +398,9 @@ export function createOperationRegistry(options: OperationRegistryOptions): Oper
   const assertOwnerCurrent = options.assertOwnerCurrent;
   const sameArtifact = issuerState.sameArtifact;
   const assertContinuationEvidence = options.assertContinuationEvidence;
+  const issueObservationReference = options.capabilities.issueObservationReference.bind(
+    options.capabilities,
+  );
   const capacity = options.capacity ?? DEFAULT_CAPACITY;
   const identity = Object.freeze({});
 
@@ -340,8 +409,10 @@ export function createOperationRegistry(options: OperationRegistryOptions): Oper
   const confirmationLeases = new WeakMap<object, LeaseState>();
   const continuationPermits = new WeakMap<object, PermitState>();
   const consumedEvidence = new WeakSet<object>();
+  const reservations = new WeakMap<object, ReservationState>();
 
   let size = 0;
+  let reserved = 0;
   let transitioning = false;
   let frozen = false;
 
@@ -395,6 +466,11 @@ export function createOperationRegistry(options: OperationRegistryOptions): Oper
   };
 
   const claimDisposition = claimState.disposition;
+  const compositionView: OperationRegistryCompositionView = Object.freeze({
+    registryId,
+    datasetEpoch,
+    claimDisposition,
+  });
 
   const assertOwner = (): void => {
     const result = callTrusted('owner fence', assertOwnerCurrent);
@@ -449,6 +525,14 @@ export function createOperationRegistry(options: OperationRegistryOptions): Oper
     }
   };
 
+  const requireObservationReference = (reference: OperationObservationReference): void => {
+    if (!isObject(reference)) throw localError('INVALID_CAPABILITY', 'observation reference is invalid');
+    const state = observationReferences.get(reference);
+    if (state === undefined || state.issuer !== issuerState) {
+      throw localError('INVALID_CAPABILITY', 'observation reference has no provenance for this registry');
+    }
+  };
+
   const findEntry = (key: RegistryKeyState): Entry | undefined =>
     entriesBySource.get(key.sourceId)?.get(key.externalEventId);
 
@@ -491,6 +575,7 @@ export function createOperationRegistry(options: OperationRegistryOptions): Oper
         kind: 'REPLAY_CANONICAL',
         entry: view,
         resultReference,
+        observationReference: entry.observationReference,
       });
     }
     if (entry.state === 'SAFE_TECHNICAL_TERMINAL') {
@@ -502,9 +587,14 @@ export function createOperationRegistry(options: OperationRegistryOptions): Oper
         kind: 'REPLAY_SAFE_TECHNICAL_TERMINAL',
         entry: view,
         resultReference,
+        observationReference: entry.observationReference,
       });
     }
-    return Object.freeze({ kind: 'JOINED', entry: view });
+    return Object.freeze({
+      kind: 'JOINED',
+      entry: view,
+      observationReference: entry.observationReference,
+    });
   };
 
   const mintExecutionLease = (entry: Entry): OperationExecutionLease => {
@@ -595,18 +685,87 @@ export function createOperationRegistry(options: OperationRegistryOptions): Oper
   const localError = (code: OperationRegistryErrorCode, message: string): OperationRegistryError =>
     new OperationRegistryError(code, registryId, message);
 
-  const makeSnapshot = (): OperationRegistrySnapshot => Object.freeze({
-    registryId,
-    datasetEpoch,
-    processRunId,
-    ownerId,
-    claimDisposition,
-    capacity,
-    size,
-    frozen,
-  });
+  const makeSnapshot = (): OperationRegistrySnapshot => {
+    const snapshot = {
+      registryId,
+      datasetEpoch,
+      processRunId,
+      ownerId,
+      claimDisposition,
+      capacity,
+      size,
+      frozen,
+    } as OperationRegistrySnapshot;
+    // The new diagnostic remains available without changing the enumerable
+    // legacy snapshot surface consumed by the completed G05c gate.
+    Object.defineProperty(snapshot, 'reserved', {
+      value: reserved,
+      enumerable: false,
+      writable: false,
+      configurable: false,
+    });
+    return Object.freeze(snapshot);
+  };
+
+  const reservationState = (reservation: OperationRegistryReservation): ReservationState => {
+    if (!isObject(reservation)) throw localError('INVALID_RESERVATION', 'registry reservation is invalid');
+    const state = reservations.get(reservation);
+    if (state === undefined || state.registry !== identity) {
+      throw localError('INVALID_RESERVATION', 'registry reservation belongs to another registry');
+    }
+    if (!state.active) {
+      throw localError('RESERVATION_ALREADY_USED', 'registry reservation is no longer active');
+    }
+    return state;
+  };
+
+  const consumeReservation = (reservation: OperationRegistryReservation): void => {
+    const state = reservationState(reservation);
+    state.active = false;
+    reserved -= 1;
+  };
+
+  const addEntry = (
+    keyState: RegistryKeyState,
+    artifact: OperationComparisonArtifact,
+    observationReference: OperationObservationReference,
+  ): OperationRegistration => {
+    const entry: Entry = {
+      sourceId: keyState.sourceId,
+      externalEventId: keyState.externalEventId,
+      artifact,
+      observationReference,
+      state: 'IN_FLIGHT',
+      generation: 1,
+      resultReference: null,
+      continuationAuthorized: false,
+    };
+    let sourceEntries = entriesBySource.get(keyState.sourceId);
+    if (sourceEntries === undefined) {
+      sourceEntries = new Map<string, Entry>();
+      entriesBySource.set(keyState.sourceId, sourceEntries);
+    }
+    sourceEntries.set(keyState.externalEventId, entry);
+    size += 1;
+    const lease = mintExecutionLease(entry);
+    return Object.freeze({
+      kind: 'REGISTERED',
+      entry: entryView(entry),
+      lease,
+      observationReference,
+    });
+  };
 
   const registry: OperationRegistry = Object.freeze({
+    assertComposition(
+      capabilities: OperationRegistryCapabilityIssuer,
+    ): OperationRegistryCompositionView {
+      if (!isObject(capabilities) || capabilityIssuers.get(capabilities) !== issuerState) {
+        throw localError('INVALID_CAPABILITY', 'capability issuer does not belong to this registry');
+      }
+      return compositionView;
+    },
+
     register(
       key: OperationRegistryKey,
       artifact: OperationComparisonArtifact,
@@ -623,27 +782,71 @@ export function createOperationRegistry(options: OperationRegistryOptions): Oper
           throw localError('WRITE_NOT_ALLOWED', 'write-run claim does not allow new operations');
         }
         assertOwner();
-        if (size >= capacity) {
+        if (size + reserved >= capacity) {
           throw localError('REGISTRY_CAPACITY_EXHAUSTED', 'operation registry capacity is exhausted');
         }
-        const entry: Entry = {
-          sourceId: keyState.sourceId,
-          externalEventId: keyState.externalEventId,
-          artifact,
-          state: 'IN_FLIGHT',
-          generation: 1,
-          resultReference: null,
-          continuationAuthorized: false,
-        };
-        let sourceEntries = entriesBySource.get(keyState.sourceId);
-        if (sourceEntries === undefined) {
-          sourceEntries = new Map<string, Entry>();
-          entriesBySource.set(keyState.sourceId, sourceEntries);
+        const observationReference = issueObservationReference();
+        requireObservationReference(observationReference);
+        return addEntry(keyState, artifact, observationReference);
+      });
+    },
+
+    reserveCandidate(): OperationRegistryReservation {
+      return transition(() => {
+        if (claimDisposition !== 'WRITABLE') {
+          throw localError('WRITE_NOT_ALLOWED', 'write-run claim does not allow new reservations');
         }
-        sourceEntries.set(keyState.externalEventId, entry);
-        size += 1;
-        const lease = mintExecutionLease(entry);
-        return Object.freeze({ kind: 'REGISTERED', entry: entryView(entry), lease });
+        assertOwner();
+        if (size + reserved >= capacity) {
+          throw localError('REGISTRY_CAPACITY_EXHAUSTED', 'operation registry capacity is exhausted');
+        }
+        const reservation = Object.freeze({}) as OperationRegistryReservation;
+        reservations.set(reservation, { registry: identity, active: true });
+        reserved += 1;
+        return reservation;
+      });
+    },
+
+    releaseReservation(reservation: OperationRegistryReservation): void {
+      transition(() => consumeReservation(reservation));
+    },
+
+    registerReserved(
+      reservation: OperationRegistryReservation,
+      key: OperationRegistryKey,
+      artifact: OperationComparisonArtifact,
+      observationReference: OperationObservationReference,
+    ): OperationRegistration {
+      return transition(() => {
+        const reservationRecord = reservationState(reservation);
+        const keyState = requireKey(key);
+        requireArtifact(artifact);
+        requireObservationReference(observationReference);
+        const existing = findEntry(keyState);
+        if (existing !== undefined) {
+          try {
+            compareArtifact(existing, artifact);
+          } catch (error: unknown) {
+            if (error instanceof OperationRegistryError && error.code === 'IDEMPOTENCY_CONFLICT') {
+              reservationRecord.active = false;
+              reserved -= 1;
+            }
+            // Trusted dependency and reentrant failures freeze the registry
+            // and intentionally retain the reservation as an unknown hold.
+            throw error;
+          }
+          reservationRecord.active = false;
+          reserved -= 1;
+          return existingResult(existing);
+        }
+        if (claimDisposition !== 'WRITABLE') {
+          throw localError('WRITE_NOT_ALLOWED', 'write-run claim does not allow new operations');
+        }
+        // If the trusted fence fails, the reservation remains held and the
+        // registry freezes rather than silently reopening capacity.
+        assertOwner();
+        consumeReservation(reservation);
+        return addEntry(keyState, artifact, observationReference);
       });
     },
 
