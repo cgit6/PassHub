@@ -23,7 +23,7 @@ aliases:
   - "PassHub 求職作品範圍決策"
   - "PassHub 架構辯論"
 created: "2026-09-15"
-updated: "2026-09-20"
+updated: "2026-09-21"
 ---
 
 # PassHub v1 業務邊界與架構討論紀錄
@@ -31,18 +31,18 @@ updated: "2026-09-20"
 ## 快速檢索卡
 
 - 核心問題：在小型訪客資格／模擬辨識決策業務上，形成合理、模組化、可驗證的Node.js/TypeScript架構與逐關方案；不以兩天時限取代品質論證。
-- 當前結論：D160完成規劃封口；D161完成舊碼清除；D163–D167完成G02–G03b限定證據；D168完成G03c窄scope／opaque handle／composition限定證據；D169完成G04a Face reverse-unique 真Mongo限定gate；D170完成G04b完整原子保存 adapter 限定gate（57 tests）；D171完成G05a FIFO coordinator primitive 限定gate（21 tests）；D172完成G05b execution／confirmation budget ledger 限定gate（80 tests）；D173完成G05c registry／epoch／晚callback fence primitive 限定gate（51 tests）；D174完成G06a human-auth primitive 限定gate（unit 88、true Mongo 5）並停止於G06a。A01、A11–A16、B13、B41、B42共10項為V（G04b新增9項；G05a／G05b／G05c／G06a不新增完整requirement V）、其餘126項仍U，完整v1未完成。
+- 當前結論：D160完成規劃封口；D161完成舊碼清除；D163–D167完成G02–G03b限定證據；D168完成G03c窄scope／opaque handle／composition限定證據；D169完成G04a Face reverse-unique 真Mongo限定gate；D170完成G04b完整原子保存 adapter 限定gate（57 tests）；D171完成G05a FIFO coordinator primitive 限定gate（21 tests）；D172完成G05b execution／confirmation budget ledger 限定gate（80 tests）；D173完成G05c registry／epoch／晚callback fence primitive 限定gate（51 tests）；D174完成G06a human-auth primitive限定gate（unit 88、true Mongo 5）；D175完成G06b Source-auth／安全facts primitive限定gate（unit 78、true Mongo 4）；D176完成G07a bounded raw／JSON ingress限定gate（unit 32、true HTTP e2e 41）並停止於G07a。A01、A11–A16、B13、B41、B42共10項為V（G04b新增9項；G05a／G05b／G05c／G06a／G06b／G07a不新增完整requirement V）、其餘126項仍U，完整v1未完成。
 - 關鍵爭點：D129原生中止兩送有界組預扣不退、跨窗口局部例外；D130較早確認起點／D131七格；D143 Face反向unique同txn替換必须G04a先真測。D149同epoch普通restart關寫是明示可用性代價，不能依memory空接管。
 - 適用於：D01–D165有效採用／修正、獨立角色公開論點、官方查證及剩餘gate風險。採Nest預設Express/strictTS/官方driver/單API/單Mongo member replica set，非無框架或HA；25STOP見D157及實作方案。
 - 不適用於：把歷史候選／官方語法／manifest／獨立唯讀實驗當PassHub已完成成果。D117 JSON v2已取代binary v1，D130永久終局候選未採，D89安全條件續辦仍有效；D161只有A01為V。
-- 待驗證：G05b之後所有gate；G04b已證六 collection schema／integrity、共同保存、freshness、QR／Face解析、comparison artifact、Event/source unique、canonical snapshot及typed error分類；G05a另證內部FIFO primitive；G05b另證純execution／confirmation budget ledger、七格、native precommit兩送及continuation admission，但不含bounded HTTP ingress/use-case wiring、registry、driver wire、native清理／真回程loss、perf/logs/hold、Docker/CI/03維護/TLS及完整release。G04a仍只證Face reverse-unique微型阻塞；G02–G03c保留各自限定證據。
+- 待驗證：G07b及其後gate；G04b已證六 collection schema／integrity、共同保存、freshness、QR／Face解析、comparison artifact、Event/source unique、canonical snapshot及typed error分類；G05a／G05b／G05c另證各自FIFO、budget及registry primitives；G06a／G06b另證human／Source auth primitives；G07a另證bounded raw／JSON ingress、唯一受限server及本地body／reader／connection／timeout邊界。仍未驗G07b同步準入／分池／existing-only／FIFO等待與一次回覆owner、route role isolation／rate／use-case wiring、Access當輪active／direction業務次序、完整composition、driver wire、native清理／真回程loss、perf/logs/hold、部署及完整release。
 - 實作者入口：[實作方案](implementation-plan.md)，再讀[136要求矩陣](requirements-traceability.md)及[業務規格](business-scope.md)，並回查對應D原文。未來每子關報實際證據後STOP，D114不授權未來不停實作。
 
 ## 閱讀狀態與階段界線
 
-- 最新狀態：D174記錄G06a human-auth primitive限定gate已通過並停止；仍沒有Source auth、完整G05a／G05b／G05c composition、完整HTTP／Nest controller／route權限／use-case FIFO wiring、Mongo writeRunClaim、capacity、driver wire／真transport-loss／safe terminal／confirmation、timing-side-channel、完整v1接線或部署。A01、A11–A16、B13、B41、B42共10項為V（G04b新增9項；G05a／G05b／G05c／G06a不新增完整requirement V），其餘126項仍U。
+- 最新狀態：D176記錄G07a bounded raw／JSON ingress限定gate已通過並停止；仍沒有完整G05a／G05b／G05c composition、G07b admission／FIFO等待、Nest controller／route權限隔離／rate／use-case wiring、Access當輪active／direction業務次序、Mongo writeRunClaim、driver wire／真transport-loss／safe terminal／confirmation、完整v1接線或部署。A01、A11–A16、B13、B41、B42共10項為V（G04b新增9項；G05a／G05b／G05c／G06a／G06b／G07a不新增完整requirement V），其餘126項仍U。
 - D01–D35 及所有較早摘要／交接保留歷史；其中「K1尚未同步」「尚未開始第二階段」「API/schema未定」不代表當前狀態。最新有效版本由D117/119/122/125/129–139/140–157及後續明確覆核修正判定，歷史block不回寫。下方回溯狀態描述只對當時有效，不能用來覆蓋新版。
-- 文件整體settled代表有效規劃已採用；D161留下舊碼處理證據，D163–D167留下G02–G03b證據，D168留下G03c限定架構證據，D169留下G04a限定真Mongo證據，D170留下G04b限定真Mongo證據，D171留下G05a primitive證據，D172留下G05b budget ledger證據，D173留下G05c registry primitive證據，D174留下G06a human-auth primitive證據。partially-sourced仍含專案取捨、官方查證與未實測組合；G04b／G05a／G05b／G05c／G06a不代表完整API、FIFO ingress、composition、HTTP、Source auth、driver wire、真transport-loss或其餘126要求通過。
+- 文件整體settled代表有效規劃已採用；D161留下舊碼處理證據，D163–D167留下G02–G03b證據，D168留下G03c限定架構證據，D169留下G04a限定真Mongo證據，D170留下G04b限定真Mongo證據，D171留下G05a primitive證據，D172留下G05b budget ledger證據，D173留下G05c registry primitive證據，D174留下G06a human-auth primitive證據，D175留下G06b Source-auth／安全facts primitive證據，D176留下G07a bounded raw／JSON ingress證據。partially-sourced仍含專案取捨、官方查證與未實測組合；G04b／G05a／G05b／G05c／G06a／G06b／G07a不代表完整API、G07b admission／FIFO等待、composition、Access當輪active／direction業務次序、driver wire、真transport-loss或其餘126要求通過。
 - 「使用者已接受」與「辯論暫定」逐 block 區分。授權保存辯論不等於確認候選架構，也不等於授權重寫程式。
 - D36–D41 為 2026-09-16 回溯追加；統一使用建檔時間，不捏造各輪原始時間。
 - D42–D46 為 2026-09-17 回溯追加；統一記錄保存時間，不捏造各輪原始時間。公開程式查核另保留查詢日期及固定 commit。
@@ -3266,3 +3266,26 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - 安全與邊界：typed secret-free input／credentials／token／role／clock／configuration／dependency／reentrant／frozen errors；static boundary files=12／edges=21／forbidden=0，negative public-surface compile 消耗所有反例。JWT／scrypt／current role evidence 不等於 HTTP／route permission、Source auth、rate／capacity、deployment、timing-side-channel、use-case、Mongo write lifecycle 或完整 E06 test coverage。
 - 需求裁定：B22–B28、A06–A07、M03、E06及其餘要求仍U；本關不把人員 auth primitive 升為完整 requirement V，不宣稱 Source alias.secret／active／direction、Operator／Viewer HTTP route、G05 composition、G07 HTTP、G08 use-case、G10 transport／confirmation／abort 或 G11 maintenance／deployment完成。
 - 限制與交接：G06a不接 Source credential verification、Nest controller／Bearer route、raw/admission、FIFO／budget／registry composition、Access Event／Presence、rate／capacity、部署或公開 API。正式 evidence 見 `docs/evidence/g06a/report.md`；下一合法 gate 為 G06b Source authentication／security facts，本輪不開始 G06b。
+
+
+### D175｜G06b Source 認證／安全 facts primitive 限定 gate 通過並停止
+
+- 日期：2026-09-21；狀態：第二輪架構 review PASS、independent tester final gate PASS；PM依 D42／D61／D122／D145／D150、production、兩輪架構結果及tester evidence獨立核對，並在 exact Node／Mongo image 串行重跑全部指定驗證。G06b primitive gate PASS，依25 STOP停止於G06b；下一合法 gate為G07a，不開始HTTP、Access業務決策／Event、管理API、G08或部署。
+- 第一輪架構 finding 與修正：hostile Proxy dependency result可由 `ownKeys`／`get`／`isFrozen` 等 trap使 raw Error／secret越過去敏；`createHash`／`update`／`digest`／`timingSafeEqual` intrinsic throw後 verifier亦未永久freeze。修正為 `sanitizeVerification`／`sanitizeRecord` 完整捕捉並轉為不帶cause的typed dependency error，依policy不因dependency failure freeze；另以 `freezeCrypto()` 讓首次crypto fault回typed crypto error，後續固定為 `SOURCE_CREDENTIAL_FROZEN`。第二輪以 hostile Proxy及四種crypto fault重驗後PASS。
+- Tester finding 與修正：首次77-case suite發現 ordinary `{code:'SOURCE_CREDENTIAL_CRYPTO_FAILURE'}` 可偽裝 Auth crypto分類，gate BLOCKED（76 pass／1 fail）。修正為 `src/shared/internal/source-credential-verifier-error.ts` 唯一class identity nominal seam；Sources re-export同一constructor，Auth僅由shared/internal以 `instanceof` 加 exact code判斷，不import Sources。plain object及普通 Error偽造name／code均分類為dependency，只有真nominal instance分類crypto；architecture複核PASS，final unit 78/78。
+- 交付契約：credential只接受 exact `entry|exit`.`43-char base64url secret`，不trim／case-fold／decode-reencode；對raw secret作SHA-256。DB credential digest為64位小寫hex，讀取後解成32-byte Buffer再以 `timingSafeEqual` 比對；未知alias、wrong secret及malformed credential對外同為generic invalid credential，dummy path維持同類工作但不宣稱完整timing-side-channel保證。principal為同capability provenance發出的frozen opaque value，業務資料只有`sourceId`。
+- Source facts責任：inactive Source仍可認證成功；G06b不以active或direction拒絕認證，也不把兩者放進principal。後續Access須在當輪交易／可信讀取中重讀current active／direction，再依其業務順序決策及保存Event／Presence；G06b不提前決定該順序。
+- Mongo／邊界：reader只讀 Sources credential必要projection，固定primary read preference及majority read concern，沒有write／transaction／retry orchestration。Auth不import Sources concrete，Sources不import Auth，Access不取得credential／Auth能力；internal composition不公開。錯誤為typed、secret-free input／credentials／dependency／crypto／reentrant／frozen分類，不帶secret、digest或raw cause。
+- 精確驗證：Node image為 `node:24.21.0-bookworm-slim@sha256:2fe369e969550cde8e867afc3fe370b260140cab4a23d467074295b42163d553`；Mongo image為 `mongo:8.0.32-noble@sha256:01354084d2ae665d2e79b79b0cdc50c2c0c98873618912d9a2c8c9cb5c3d24e6`。隔離writable temporary workspace串行結果：G06b unit 1 suite／78、true Mongo 1 suite／4、full unit 11 suites／355、G06a unit 88／Mongo 5、G04a 9、G04b 57；G03c boundary `selected=25 edges=59 forbidden=0 directRawComparison=0`、G06a `files=16 edges=28 forbidden=0`、G06b `files=47 edges=97 forbidden=0`；三組negative compile、build、secret scan及diff check全PASS。coverage aggregate 58.72% statements／61.48% branches／55.57% functions／61.11% lines，SourceAuth 97.46%／95.83%／100%／98.50%，Source verifier 96.00%／93.87%／94.11%／97.05%；coverage只作觀察，不作requirement完成率。
+- 需求裁定：完整矩陣維持10V／126U；G06b不新增完整requirement V。B22–B28、A06–A07、M03、E06及其餘要求仍U，因HTTP／role isolation／current active-direction業務順序／部署及完整E06 coverage尚未完成；亦不宣稱完整G05 composition、rate／capacity、driver transport／confirmation、maintenance或完整v1。
+- 證據與停止：正式命令、兩輪architecture finding／fix、tester阻塞與nominal spoof修正、計數、coverage、限制及working-tree SHA見 `docs/evidence/g06b/report.md`。本關停止於G06b；下一合法gate只有G07a，須另行授權與驗證。
+
+
+### D176｜G07a bounded raw／JSON ingress 限定 gate 通過並停止
+
+- 日期：2026-09-21；狀態：第一輪architecture review提出三項CHANGES_REQUIRED，修正後第二輪PASS；independent tester final gate PASS。PM依D146–D151、production／tests、兩輪架構結果及tester evidence獨立核對，並在exact Node image隔離writable temporary workspace重跑。G07a限定gate PASS，依25 STOP停止於G07a；下一合法gate為G07b，尚未開始。
+- 第一輪三項finding與修正：原先Nest／Express先建內部server又另`createServer`，導致`getHttpServer()`、factory回傳、`listen`與`close`生命期分裂；改由`BoundedExpressAdapter.initHttpServer()`建立且`setHttpServer()`唯一受限server，identity／listen／close真測通過。新HTTP composition檔被舊G06b boundary遞迴誤納；改以`source-auth-composition.ts`及G06b實際範圍明確選檔，重驗仍`47／97／0`。原upload timer在header／query／media與reader acquisition後才開始；改為middleware首行固定`performance.now()` deadline，reader只排remaining，真HTTP約5,011ms回408且reader歸零。第二輪architecture PASS。
+- 交付契約：`createPassHubHttpApplication()`以`bodyParser:false`建立application，唯一Node server固定`headersTimeout=5000`、`keepAliveTimeout=5000`、`keepAliveTimeoutBuffer=0`、`maxConnections=64`；raw readers 16、body 16,384 bytes、application observation起5秒upload deadline。fatal UTF-8、leading BOM拒絕、root object／最多兩層／禁array，原生`JSON.parse`完整grammar後依scope掃cooked duplicate keys；五個owned headers以raw duplicates判斷，query嚴格decode後拒duplicate；`Content-Encoding` absent或exact `identity`接受，其他值拒絕。錯誤只回固定`{code}`與`no-store`，成功parse／handoff後client close不取消downstream。
+- 精確驗證：使用 `node:24.21.0-bookworm-slim@sha256:2fe369e969550cde8e867afc3fe370b260140cab4a23d467074295b42163d553`，Node `v24.21.0`／npm `11.19.0`；`npm ci --ignore-scripts`為423 packages／0 vulnerabilities。G07a unit 1 suite／32，true Node／Nest／Express e2e 1 suite／41，combined coverage 2 suites／73（88.50% statements／77.96% branches／87.75% functions／93.27% lines），full unit及full coverage均12 suites／387（aggregate 55.21%／58.16%／52.93%／57.69%）。G03c boundary `25／59／0／0`、G06a `16／28／0`、G06b `47／97／0`、G07a `files=4 edges=13 createServers=1 directListens=0 g07b=0 publicLeaks=0 forbidden=0`；四組negative compile、build、secret scan與最終diff check通過。tester一次非正式33／34 teardown socket競賽以test-only等待connection歸零修正，final 41／41，非production defect。
+- 需求裁定：完整矩陣維持10V／126U；G07a不新增完整requirement V。B04、B50、B52、L01、L24–L35、M04、E01、E06、X01–X11及其餘要求仍U；本關只有raw ingress／strict JSON／本地server limits切片，不證G07b admission pools／FIFO／existing-only／一次回覆owner、Auth route、rate、controller／use-case、Event／Presence、Mongo、部署或完整v1。
+- 證據與停止：正式命令、架構三項finding／fix、tester final evidence、計數、coverage、boundary、negative、build、scan、working-tree fingerprints與限制見 `docs/evidence/g07a/report.md`。本關停止於G07a；下一合法gate只有G07b，本輪未開始且未由PM修改production、tests或package。

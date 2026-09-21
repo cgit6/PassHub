@@ -19,7 +19,7 @@ aliases:
   - "PassHub 實作入口"
   - "PassHub 逐關驗收"
 created: "2026-09-19"
-updated: "2026-09-20"
+updated: "2026-09-21"
 ---
 
 # PassHub v1 實作契約與逐關驗收方案
@@ -27,7 +27,7 @@ updated: "2026-09-20"
 ## 快速檢索卡
 
 - 核心問題：把已採用的業務與架構討論交給實作者，避免自行補架構、丟要求或用測試數量取代證據。
-- 當前結論：P01–P15規劃已收斂；G02–G03c、窄 G04a、G04b、G05a FIFO primitive、G05b budget ledger、G05c registry primitive 及 G06a human-auth primitive 已有各自限定證據並通過 gate，依25 STOP停止於G06a。A01、A11–A16、B13、B41、B42 共10項為V（G04b新增9項；G05a／G05b／G05c／G06a不新增完整requirement V），其餘126要求仍U，完整v1仍未完成。
+- 當前結論：P01–P15規劃已收斂；G02–G03c、窄 G04a、G04b、G05a FIFO primitive、G05b budget ledger、G05c registry primitive、G06a human-auth primitive、G06b Source-auth／安全facts primitive及G07a bounded raw／JSON ingress已有各自限定證據並通過 gate，依25 STOP停止於G07a。A01、A11–A16、B13、B41、B42 共10項為V（G04b新增9項；G05a／G05b／G05c／G06a／G06b／G07a不新增完整requirement V），其餘126要求仍U，完整v1仍未完成。
 - 關鍵爭點：G04a 真 Mongo 8.0.32 已證明窄 face reverse-unique release/reuse 交易情境；G02只證工具鏈可用，不證API、模組接線或完整交易 adapter。
 - 適用於：單API／單logicalplace／單次Qualification／QR或模擬Face的公開共享sandbox；Nest預設Express、strictTS、官方Mongo driver。
 - 不適用於：真實人臉辨識／硬體門禁、多據點／多租戶、多API、跨崩潰／reset續辦、正式SLA或業務復原。
@@ -226,7 +226,7 @@ API/Mongo SIGTERM grace30s，API無自動restart；stoprequest/graceexpiry不是
 
 ### 9. 固定25個STOP點
 
-前關通過才進表後關，每子關交差異／要求D／command exit／指紋／真情境證據及覆核即停止。失敗、不相容、無效fault、缺證立即停；不auto還原使用者檔案或fallback。G04a／G04b敗必回設計討論。**G00、G01a/G01b、G02、G03a、G03b、G03c、窄 G04a、G04b、G05a、G05b、G05c 及 G06a 已有本輪限定局部通過證據；目前停止於G06a。**
+前關通過才進表後關，每子關交差異／要求D／command exit／指紋／真情境證據及覆核即停止。失敗、不相容、無效fault、缺證立即停；不auto還原使用者檔案或fallback。G04a／G04b敗必回設計討論。**G00、G01a/G01b、G02、G03a、G03b、G03c、窄 G04a、G04b、G05a、G05b、G05c、G06a、G06b及G07a已有本輪限定局部通過證據；目前停止於G07a。**
 
 | Gate | 單一交付責任 | 未來代表驗證／artifact |
 |---|---|---|
@@ -243,8 +243,8 @@ API/Mongo SIGTERM grace30s，API無自動restart；stoprequest/graceexpiry不是
 | G05b | 執行／確認共同預算 | PASS：exact Node image、unit 80／15秒3輪、10秒7格、native兩送、continuation、capability fail-closed |
 | G05c | registry／epoch／晚callback fence primitive | PASS：exact Node image、unit 51；opaque artifact join／conflict、4096 retention、canonical／safe technical terminal、generation／late callback、epoch／read-only claim、fail-closed trusted boundary |
 | G06a | 人員認證能力 | PASS：exact Node／Mongo、unit 88／Mongo integration 5；strict JWT／scrypt／目前角色enabled／opaque principal／primary-majority read-only reader |
-| G06b | Source認證／安全facts | integration source-auth／alias不可信及窄接線 |
-| G07a | bounded raw／JSON前置入口 | 真HTTP e2e ingress／嚴格UTF8、BOM、深度／重複鍵與headers |
+| G06b | Source認證／安全facts | PASS：exact Node／Mongo、unit 78／Mongo integration 4；嚴格 alias.secret、SHA-256／32-byte timing-safe compare、sourceId-only opaque principal、inactive auth success、窄接線及 primary-majority read-only reader |
+| G07a | bounded raw／JSON前置入口 | PASS：exact Node、unit 32／true Node-Nest-Express e2e 41／combined 73；嚴格UTF8、BOM、深度／重複鍵、raw headers、16KiB／16 readers／64 connections及5秒limits |
 | G07b | 同步準入與HTTP等待生命期 | e2e admission／分池／existing-only／順位／一次回覆 |
 | G08a | 管理用例及完整保存 | e2e management／建立修改撤銷、QR一次、Face容量 |
 | G08b | 完整辨識處理鏈 | e2e recognition／QR Face UNKNOWN、拒絕Event、回放／conflict／並行 |
@@ -340,8 +340,8 @@ Q1–Q13各實際細分見discuss原查證block（D105/111/116–125/127/133/135
 
 ## 交接資訊
 
-G05c evidence supplemental: exact Node image、G05c 51 tests、全 unit 189、G05a 21、G05b 80、boundary／negative compile／coverage及registry fail-closed boundary均已由 `docs/evidence/g05c/report.md` 保存；G06a evidence 另由 `docs/evidence/g06a/report.md` 保存，含 unit 88、true Mongo integration 5、full unit 277、G04a 9／G04b 57、boundary／negative compile／coverage與 secret scan；本段仍不把 primitives 當成 composition、HTTP、capacity、driver、G10 或 G11 完成。
+G05c evidence supplemental: exact Node image、G05c 51 tests、全 unit 189、G05a 21、G05b 80、boundary／negative compile／coverage及registry fail-closed boundary均已由 `docs/evidence/g05c/report.md` 保存；G06a evidence 另由 `docs/evidence/g06a/report.md` 保存，含 unit 88、true Mongo integration 5、full unit 277、G04a 9／G04b 57、boundary／negative compile／coverage與 secret scan；G06b evidence 由 `docs/evidence/g06b/report.md` 保存，含 unit 78、true Mongo integration 4、full unit 355、G06a 88／Mongo 5、G04a 9／G04b 57、三組boundary／negative compile、coverage與secret scan；G07a evidence由 `docs/evidence/g07a/report.md` 保存，含strict JSON unit 32、true HTTP e2e 41、combined 73、full unit 387、四組boundary／negative compile、coverage、build與secret scan。本段仍不把局部primitives或raw ingress當成G07b admission／FIFO等待、完整composition、API、driver、G10或G11完成。
 
-當前停止點為**G06a human-auth primitive 限定證據已通過；依25 STOP規則停止於G06a。G05a／G05b／G05c／G06a不新增完整requirement V；A01、A11–A16、B13、B41、B42共10項為V（G04b新增9項），其餘126要求仍U**。B22–B28、A06–A07、M03、E06及其餘要求逐項仍U；G05a／G05b／G05c composition、Mongo writeRunClaim state machine、Source auth、HTTP／route權限／capacity／use-case、driver／G10、timing-side-channel、maintenance／G11仍未解鎖。後續仍逐關回報證據並停止；下一合法 gate 為G06b。
+當前停止點為**G07a bounded raw／JSON ingress限定證據已通過；依25 STOP規則停止於G07a。G05a／G05b／G05c／G06a／G06b／G07a不新增完整requirement V；A01、A11–A16、B13、B41、B42共10項為V（G04b新增9項），其餘126要求仍U**。B04、B50、B52、L01、L24–L35、M04、E01、E06、X01–X11及其餘要求逐項仍U；G07a只證bounded raw ingress、strict JSON object、唯一受限server及本地body／reader／connection／timeout邊界。G05a／G05b／G05c composition、Mongo writeRunClaim state machine、G07b同步準入／分池／existing-only／FIFO等待生命期、route role isolation／rate／use-case、Access當輪active／direction業務次序、driver／G10、maintenance／G11仍未解鎖。後續仍逐關回報證據並停止；下一合法gate為G07b，尚未開始。
 
 安全採用P01–P15契約、25STOP與136矩陣，另受D166正式Jest runner決策約束。G02/G03a/G03b/G03c evidence 已記錄精確image、真實命令、37 tests、boundary／negative compile／public-surface與SHA；G04a/G04b另記錄真Mongo 8.0.32、9／57 integration、共同保存、freshness、schema/integrity、replay及typed error evidence。不得由此假設HTTP、FIFO、registry、capacity、真transport-loss、confirmation、maintenance、deployment或公開runtime成立。`ManageQualifications.create` 的 `Promise<void>` 是G08a前待收斂的輸出契約；G03c不猜QR DTO。D156 formal clean `sourceCommit` 屬G12 release規則，本關只記working-tree SHA，不冒稱clean commit。

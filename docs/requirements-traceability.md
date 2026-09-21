@@ -1,6 +1,6 @@
 # PassHub 有效要求與實作追蹤矩陣
 
-規劃狀態：**D160封口；D161完成舊碼清除；D166改定正式Jest runner；G02–G03c、窄 G04a、G04b、G05a、G05b、G05c 及 G06a 已發行限定 evidence，目前停止於G06a**。工程狀態：**A01、A11–A16、B13、B41、B42 共10條為V（G04b新增9條；G05a／G05b／G05c／G06a不新增完整requirement V），其餘126條仍U**。整理日期：2026-09-20。
+規劃狀態：**D160封口；D161完成舊碼清除；D166改定正式Jest runner；G02–G03c、窄 G04a、G04b、G05a、G05b、G05c、G06a、G06b及G07a已發行限定 evidence，目前停止於G07a**。工程狀態：**A01、A11–A16、B13、B41、B42 共10條為V（G04b新增9條；G05a／G05b／G05c／G06a／G06b／G07a不新增完整requirement V），其餘126條仍U**。整理日期：2026-09-21。
 
 這份文件回答：「討論過的要求，實作時如何避免漏掉？」它不是已完成成果，也不授權開始重寫程式。
 
@@ -8,9 +8,9 @@
 
 ## 1. 來源、用法與完成定義
 
-- 來源：[業務範圍](business-scope.md)、[討論紀錄](discuss.md) D01–D174 及實作方案。衝突依明確採用的新版；D114預設接受是本輪授權，不捏造逐題答覆。候選／背景不當採用，官方來源不當工程證據。
+- 來源：[業務範圍](business-scope.md)、[討論紀錄](discuss.md) D01–D176 及實作方案。衝突依明確採用的新版；D114預設接受是本輪授權，不捏造逐題答覆。候選／背景不當採用，官方來源不當工程證據。
 - 本稿整理前的來源 SHA-256：`discuss.md = 96a222bde5938d5aa9a5d250ea61b79a7916fd4b494d3f63f4ec49e833d87da7`；`business-scope.md = 4c8969d698c1e5f315d6ada2a7312482b5b6b01e6098f38004314874a280ca09`。後續更新須記錄基線變動，不以舊摘要覆蓋新決策。
-- 以下「責任」是行為邊界，實際接線／目錄規劃見D140–D141；G02–G03c只具限定程式／測試符號與局部 evidence，其餘不能由規劃欄推定已建立。
+- 以下「責任」是行為邊界，實際接線／目錄規劃見D140–D141；G02–G07a只具各gate限定程式／測試符號與局部 evidence，其餘不能由規劃欄推定已建立。
 - 每列的 `T-要求ID` 是**預定驗收情境編號**，不是已存在的測試。欄內分號分開的情境都要覆蓋；必要時拆成多個實際測試。
 - 每列 `U` 代表「尚未核對實作／測試／執行證據」。本輪只讀規格，不判定舊程式能否滿足要求；即使舊版已有相似功能，也不能直接標為完成。
 - 實作時逐列補上程式符號／路徑、真實測試名稱、重跑命令、結果與 commit。未決細節先討論，不由實作者暗自選定為既成事實。
@@ -299,11 +299,11 @@
 | P14 | D154–D155單API/單成員replset/NGINX；systemd03臺北Persistent=false、host lock/marker、API與Mongo確停及恢復、六collection精確清理／runTicket分bootstrap-ready／failclosed。 | A18、M01、M05–M10；G11 |
 | P15 | D156未被D166取代的命令／期限／clean sourceCommit規則；D166正式Jest runner與其證據失效／重驗範圍；D157固定25STOP及maintenance600/1800。文件封口G00，完整release136證據G12；本輪只討論。 | E01–E09；G00/G01a–G12 |
 
-實作方案記錄25個STOP、命令dictionary與證據位置。G01a/G01b已依D161完成，G02/G03a/G03b/G03c、窄 G04a、G04b、G05a、G05b、G05c 及 G06a 已依D166及本輪證據完成限定驗收並停止於G06a；後續完整 G05a／G05b／G05c composition、FIFO ingress、use-case wiring、Source auth、HTTP、capacity、Mongo writeRunClaim、driver wire、transport-loss、confirmation、maintenance、deployment 與完整 v1 仍未驗證。
+實作方案記錄25個STOP、命令dictionary與證據位置。G01a/G01b已依D161完成，G02/G03a/G03b/G03c、窄 G04a、G04b、G05a、G05b、G05c、G06a、G06b及G07a已依D166及各自證據完成限定驗收並停止於G07a；後續完整 G05a／G05b／G05c composition、G07b同步準入／分池／existing-only／FIFO等待生命期、route role isolation／rate／use-case wiring、Access當輪active／direction業務次序、Mongo writeRunClaim、driver wire、transport-loss、confirmation、maintenance、deployment 與完整 v1 仍未驗證。
 
 ## 7. 實作時的證據帳本與反向覆核
 
-每個要求以此模板留下可核對紀錄；目前局部證據記於各要求列及 `docs/evidence/g02`、`g03a`、`g03b`，完整逐列反向覆核仍待G12。
+每個要求以此模板留下可核對紀錄；目前局部證據記於各要求列及各已通過gate的 `docs/evidence/<gate>`，G07a報告為 `docs/evidence/g07a/report.md`；完整逐列反向覆核仍待G12。
 
 | 要求 ID | 採用來源版本 | 程式路徑／符號 | 實際測試及情境對應 | 重跑命令／環境 | 結果／commit／報告 | 覆核者與剩餘問題 |
 |---|---|---|---|---|---|---|
@@ -317,7 +317,7 @@
 4. 獨立覆核者直接讀原始 D 段與測試，反查矩陣是否漏要求或誤採舊提案；不只閱讀實作者摘要。
 5. 交付差異與證據後停止。未達條件不進下一關，不因時間壓力靜默縮減要求；必要變更先與使用者確認。
 
-**當前停止點：G06a human-auth primitive evidence 已通過；exact Node image 中 G06a 88、true Mongo 5、full unit 277、G04a 9、G04b 57，G03c boundary selected=25／edges=59／forbidden=0／directRawComparison=0，G06a boundary files=12／edges=21／forbidden=0，兩 negative compile、build、coverage、secret scan 及 host diff check 通過。G06a只證 strict HS256 JWT、async scrypt、目前 enabled／role reread、opaque human principal 及 read-only primary／majority Mongo reader；Source auth、HTTP／route權限／rate／capacity、use-case、deployment、timing-side-channel、完整 G05 composition、Mongo writeRunClaim state machine、FIFO ingress／driver wire／真transport-loss／confirmation protocol／maintenance／完整v1仍未驗。依25 STOP停止於G06a。A01、A11–A16、B13、B41、B42共10項為V（G04b新增9項；G05a／G05b／G05c／G06a不新增完整requirement V），其餘126項仍U，履歷未解鎖。B22–B28、A06–A07、M03、E06及其餘要求逐項維持U。**
+**當前停止點：G07a bounded raw／JSON ingress evidence 已通過；exact Node image中strict JSON unit 32、true Node／Nest／Express e2e 41、combined 73、full unit 387，G03c boundary selected=25／edges=59／forbidden=0／directRawComparison=0，G06a files=16／edges=28／forbidden=0，G06b files=47／edges=97／forbidden=0，G07a files=4／edges=13／createServers=1／directListens=0／g07b=0／publicLeaks=0／forbidden=0，四組negative compile、build、coverage與secret scan通過。G07a只證fatal UTF-8／BOM／bounded strict JSON object、raw duplicate headers／query、16KiB body、16 readers、64 connections、5秒upload／headers／keep-alive及唯一server生命期；不證G07b同步準入／分池／existing-only／FIFO等待與一次回覆owner，也不證Auth route、rate、controller／use-case、Event／Presence、Mongo、deployment、完整G05 composition、driver transport／confirmation、maintenance或完整v1。依25 STOP停止於G07a。A01、A11–A16、B13、B41、B42共10項為V（G04b新增9項；G05a／G05b／G05c／G06a／G06b／G07a不新增完整requirement V），其餘126項仍U，履歷未解鎖。B04、B50、B52、L01、L24–L35、M04、E01、E06、X01–X11及其餘要求逐項維持U。下一合法gate為G07b，尚未開始。**
 
 ## 8. 追蹤矩陣建立時的文件覆核紀錄（歷史）
 
@@ -507,6 +507,6 @@
 
 ### 10.2 本輪必要同步驗證紀錄
 
-- 僅Markdown：business-scope有效差異分段同步，矩陣改最新規劃／P採用與子情境／gate；D01–D174討論歷史保留，舊SHA及第8/9節是歷史基線。
+- 僅Markdown：business-scope有效差異分段同步，矩陣改最新規劃／P採用與子情境／gate；D01–D176討論歷史保留，舊SHA及第8/9節是歷史基線。
 - D161後readonly結構檢查：136 unique要求ID；A01為V、其餘135項U；P01–P15及25STOP保留。僅舊碼清除／保留項驗證完成，沒有新code、package、安裝、DB或部署驗證。
 - D159後三名原覆核者直接重讀補正，確認當時指定問題均已回應。D161另由使用者明確改變舊碼處理策略；只A01更新為V，其餘U保留。
