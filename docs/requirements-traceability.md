@@ -1,6 +1,6 @@
 # PassHub 有效要求與實作追蹤矩陣
 
-規劃狀態：**D160封口；D161完成舊碼清除；D166改定正式Jest runner；G02–G03c、窄 G04a、G04b、G05a、G05b、G05c、G06a、G06b、G07a及G07b已發行限定 evidence，目前停止於G07b**。工程狀態：**A01、A11–A16、B13、B41、B42 共10條為V（G04b新增9條；G05a／G05b／G05c／G06a／G06b／G07a／G07b不新增完整requirement V），其餘126條仍U**。整理日期：2026-09-21。
+規劃狀態：**D160封口；D161完成舊碼清除；D166改定正式Jest runner；G02–G08a已發行各自限定 evidence，目前停止於G08a**。工程狀態：**A01、A11–A16、B04、B09、B13、B19、B41、B42 共13條為V（G08a新增B04、B09、B19），其餘123條仍U**。整理日期：2026-09-26。
 
 這份文件回答：「討論過的要求，實作時如何避免漏掉？」它不是已完成成果，也不授權開始重寫程式。
 
@@ -8,11 +8,11 @@
 
 ## 1. 來源、用法與完成定義
 
-- 來源：[業務範圍](business-scope.md)、[討論紀錄](discuss.md) D01–D177 及實作方案。衝突依明確採用的新版；D114預設接受是本輪授權，不捏造逐題答覆。候選／背景不當採用，官方來源不當工程證據。
+- 來源：[業務範圍](business-scope.md)、[討論紀錄](discuss.md) D01–D178 及實作方案。衝突依明確採用的新版；D114預設接受是本輪授權，不捏造逐題答覆。候選／背景不當採用，官方來源不當工程證據。
 - 本稿整理前的來源 SHA-256：`discuss.md = 96a222bde5938d5aa9a5d250ea61b79a7916fd4b494d3f63f4ec49e833d87da7`；`business-scope.md = 4c8969d698c1e5f315d6ada2a7312482b5b6b01e6098f38004314874a280ca09`。後續更新須記錄基線變動，不以舊摘要覆蓋新決策。
-- 以下「責任」是行為邊界，實際接線／目錄規劃見D140–D141；G02–G07a只具各gate限定程式／測試符號與局部 evidence，其餘不能由規劃欄推定已建立。
+- 以下「責任」是行為邊界，實際接線／目錄規劃見D140–D141；G02–G08a只具各gate限定程式／測試符號與局部 evidence，其餘不能由規劃欄推定已建立。
 - 每列的 `T-要求ID` 是**預定驗收情境編號**，不是已存在的測試。欄內分號分開的情境都要覆蓋；必要時拆成多個實際測試。
-- 每列 `U` 代表「尚未核對實作／測試／執行證據」。本輪只讀規格，不判定舊程式能否滿足要求；即使舊版已有相似功能，也不能直接標為完成。
+- 每列 `U` 代表「尚未由完整直接證據閉合」；可記錄已驗的局部切片，但不能因相似功能、測試名稱或部分情境直接標為完成。
 - 實作時逐列補上程式符號／路徑、真實測試名稱、重跑命令、結果與 commit。未決細節先討論，不由實作者暗自選定為既成事實。
 - 未來依D157固定25個STOP點，完成一子關即交差異／命令／exit／指紋／證據後停止，不能跨關。D114只授權這輪持續討論，不授權不停實作。
 
@@ -27,32 +27,32 @@
 | B01 | 單一邏輯地點；一張資格代表一次來訪，不建立永久訪客主檔。 | D01–D02、D34–D35 | 業務模型 | T-B01：可建立獨立資格；無 Site、租戶或永久 Visitor 管理能力。 | U |
 | B02 | Presence 僅為資格使用狀態，不保證真人位置、身分或同一人跨媒介使用。 | D03–D04 | 業務語意／文件 | T-B02：文件明示限制；不宣稱考勤或真人身分驗證。 | U |
 | B03 | 資格只經歷 `NOT_ENTERED → INSIDE → EXITED`，不能再次入場。 | D03、D13–D14、D164 | 核心規則 | T-B03：正常轉移；未入場離場、重複方向、離場再入場均拒絕。 | U：G03a純規則與單測已驗；保存／HTTP未驗。 |
-| B04 | 只收顯示名稱、有效區間與可選 Face；QR由server產生；未知欄位直接拒絕。 | 業務 §4.1、D34、D104、D150–D151 | 輸入契約 | T-B04：不收Email、電話、公司、目的、受訪者、照片、證件、生物特徵或caller QR；根／巢狀額外與重複鍵拒絕。 | U |
-| B05 | QR 是不可猜測的不透明 bearer token 字串，建立成功只回傳完整 token 一次；不產生 QR 圖像。 | D04–D05、業務 §4.2 | 建立資格／秘密處理 | T-B05：建立取得字串；不處理 QR 圖像／相機畫面；查詢、修改、事件、錯誤及日誌不能取回。 | U |
-| B06 | 修改不更換或再顯示 QR；不找回、補發、救援或防轉交。 | D05、D15 | 資格管理 | T-B06：修改後原 QR 仍有效；不存在補發／查回功能。 | U |
+| B04 | 只收顯示名稱、有效區間與可選 Face；QR由server產生；未知欄位直接拒絕。 | 業務 §4.1、D34、D104、D150–D151 | 輸入契約 | T-B04：不收Email、電話、公司、目的、受訪者、照片、證件、生物特徵或caller QR；根／巢狀額外與重複鍵拒絕。 | V：G07a拒絕duplicate JSON，G08a unit／true HTTP／true Mongo直接驗證create exact根／巢狀DTO、canonical日期、可選Face及server生成QR；見 `docs/evidence/g08a/report.md`。 |
+| B05 | QR 是不可猜測的不透明 bearer token 字串，建立成功只回傳完整 token 一次；不產生 QR 圖像。 | D04–D05、業務 §4.2 | 建立資格／秘密處理 | T-B05：建立取得字串；不處理 QR 圖像／相機畫面；查詢、修改、事件、錯誤及日誌不能取回。 | U：G08a已驗create回43字元QR、update／revoke安全摘要不回QR；G09查詢、G10日誌及全部未來表面仍未驗。 |
+| B06 | 修改不更換或再顯示 QR；不找回、補發、救援或防轉交。 | D05、D15 | 資格管理 | T-B06：修改後原 QR 仍有效；不存在補發／查回功能。 | U：G08a已驗PATCH不回QR且保存更新不更換token digest；後續查詢／辨識及完整負面API表面仍未閉合。 |
 | B07 | 入場前遺失 QR 可撤銷再建；INSIDE 且無 Face 時不提供 EXIT 救援。 | D05、D14、D34 | 資格管理／文件 | T-B07：撤銷再建可展示；在場遺失情境明示只能重建 Demo。 | U |
 | B08 | Face 僅模擬外部辨識結果 `MATCHED`／`UNKNOWN`，不呼叫真實辨識 API。 | D06、D09、D34 | 辨識輸入 | T-B08：兩種結果均可提交；無圖片、confidence、活體或影像處理依賴。 | U |
-| B09 | Face鍵是provider＋externalSubjectId，依D119精確原值／位元組上限；只Operator合規預綁。 | D06–D07、D15、D119、D144、D165 | 映射管理 | T-B09：provider grammar／subject UTF8及控制碼、不trim／normalize；成對比對，不新增provider管理；辨識不建槽或綁定。 | U：G03b原值validator／codec已驗；Operator預綁、映射與DB未驗。 |
-| B10 | 同 Face 鍵只對應一張未終結資格，建立及修改都檢查唯一性。 | D07、D15、D67 | 映射管理／保存 | T-B10：建立重複、修改重複、並行初次綁定均最多一個成功。 | U |
-| B11 | 移除／替換 Face 時釋放舊鍵，更新資格與新舊映射一致。 | D15、D67 | 修改資格 | T-B11：移除、替換、新鍵衝突與保存失敗；不留下半更新。 | U |
+| B09 | Face鍵是provider＋externalSubjectId，依D119精確原值／位元組上限；只Operator合規預綁。 | D06–D07、D15、D119、D144、D165 | 映射管理 | T-B09：provider grammar／subject UTF8及控制碼、不trim／normalize；成對比對，不新增provider管理；辨識不建槽或綁定。 | V：G03b驗原值validator／codec；G08a再以Operator-only strict DTO及真Mongo預綁／映射驗證完整管理面，G04b已驗陌生辨識不建槽；見G08a報告。 |
+| B10 | 同 Face 鍵只對應一張未終結資格，建立及修改都檢查唯一性。 | D07、D15、D67 | 映射管理／保存 | T-B10：建立重複、修改重複、並行初次綁定均最多一個成功。 | U：G08a真Mongo已驗create重複回滾與並行create最多一個成功；PATCH重複／並行初次綁定全矩陣仍待補。 |
+| B11 | 移除／替換 Face 時釋放舊鍵，更新資格與新舊映射一致。 | D15、D67 | 修改資格 | T-B11：移除、替換、新鍵衝突與保存失敗；不留下半更新。 | U：G08a真Mongo已驗KEEP／remove／replace、釋放重用及stale fail-closed；替換新鍵衝突／保存失敗情境未完整直接覆蓋。 |
 | B12 | 撤銷、未入場逾期終結、EXIT 後釋放 Face；INSIDE 逾期保留至 EXIT。 | D07、D16、D20、D69、D72、D76 | 映射終結／協調 | T-B12：各釋放時點及在場不釋放；後到整理不破壞較早準時 ENTRY。 | U |
 | B13 | UNKNOWN 只產生 `FACE_UNKNOWN` 拒絕事件；MATCHED 無映射是 `FACE_SUBJECT_NOT_MAPPED`。 | D09、D32 | 決策 | T-B13：兩者理由不同；不建立陌生人資料、不事後認領。 | V：G04b 57-case 真Mongo integration驗證兩種 rejection shape、共同 Event 保存及不配置陌生 slot；完整 HTTP／auth 仍待 G08。 |
 | B14 | 新 ID 的延遲 Face 事件不查歷史映射；按相關操作有效順序使用目前映射。 | D31、D76 | 映射讀取／文件 | T-B14：釋放重綁後的新 ID 使用新映射；原 ID 回放舊結果；明示限制。 | U |
-| B15 | 建立／修改須 `validUntil > validFrom` 且結束晚於該請求首次接收時間。 | D13、D15、D164、業務 §4.1 | 時間規則 | T-B15：相等、反向、結束已到期拒絕；不因後續處理延誤刷新接收時間。 | U：G03a純時間規則已驗；入口首次時間接線未驗。 |
+| B15 | 建立／修改須 `validUntil > validFrom` 且結束晚於該請求首次接收時間。 | D13、D15、D164、業務 §4.1 | 時間規則 | T-B15：相等、反向、結束已到期拒絕；不因後續處理延誤刷新接收時間。 | U：G03a純規則及G08a管理入口receivedAt接線／真Mongo窗口驗證已驗；完整慢Auth／競爭時間矩陣未閉合。 |
 | B16 | 開始可在過去／現在／未來；允許跨日，不設同日或十二小時上限。 | D13、D164 | 時間規則 | T-B16：三種開始時間、跨日、超過十二小時皆依其他條件正常處理。 | U：G03a案例已驗；HTTP日期解析未驗。 |
 | B17 | ENTRY 有效區間是 `[validFrom, validUntil)`；INSIDE 的 EXIT 不受區間限制。 | D13、D32、D72、D164 | 決策時間 | T-B17：等於開始允許、等於結束拒絕；逾期在場 EXIT 成功。 | U：G03a邊界已驗；保存與事件未驗。 |
-| B18 | 未入場且未撤銷、未逾期才可修改；只改名稱、區間、Face。 | D15、D72、D76、D164 | 修改資格 | T-B18：允許欄位與禁止狀態；遵守較早已登記操作，QR 不變。 | U：G03a資格與QR保留effect已驗；DTO／FIFO／保存未驗。 |
-| B19 | 合規入場前可永久撤銷，理由必填，保存原因與時間，不硬刪除或重新啟用。 | D16、D76、D164 | 撤銷資格 | T-B19：缺理由拒絕；完整保存；撤銷後不能修改或恢復。 | U：G03a資格、理由與Face釋放effect已驗；保存未驗。 |
-| B20 | INSIDE／EXITED 完全凍結，不能修改或撤銷；未入場過期不可延長復活。 | D13–D16、D69、D72、D164 | 終態保護 | T-B20：各禁止情境；不得以整理先提交誤拒較早準時操作。 | U：G03a凍結規則已驗；FIFO／持久化保護未驗。 |
+| B18 | 未入場且未撤銷、未逾期才可修改；只改名稱、區間、Face。 | D15、D72、D76、D164 | 修改資格 | T-B18：允許欄位與禁止狀態；遵守較早已登記操作，QR 不變。 | U：G08a已驗PATCH sparse欄位、管理FIFO、狀態拒絕與真Mongo保存；與較早ENTRY的跨操作競爭留待G08b。 |
+| B19 | 合規入場前可永久撤銷，理由必填，保存原因與時間，不硬刪除或重新啟用。 | D16、D76、D164 | 撤銷資格 | T-B19：缺理由拒絕；完整保存；撤銷後不能修改或恢復。 | V：G03a純規則加G08a strict revoke DTO、true HTTP及真Mongo驗證理由／receivedAt撤銷時間、Face釋放、後續不可修改且無delete/reactivate表面；見G08a報告。 |
+| B20 | INSIDE／EXITED 完全凍結，不能修改或撤銷；未入場過期不可延長復活。 | D13–D16、D69、D72、D164 | 終態保護 | T-B20：各禁止情境；不得以整理先提交誤拒較早準時操作。 | U：G08a真Mongo已驗INSIDE／EXITED／撤銷不可變與惰性逾期共同保存；較早準時ENTRY競爭仍待G08b。 |
 | B21 | QR／Face 是獨立替代方式，不加雙重核對；可 QR ENTRY、Face EXIT 或反向。 | D03–D04、D30 | 通行流程 | T-B21：跨媒介兩個方向；同媒介亦正常；不要求兩種憑證同時提交。 | U |
 
 ### 2.2 身分、來源與決策契約
 
 | ID | 有效要求 | 來源 | 責任 | 預定驗收情境 | 證據 |
 |---|---|---|---|---|---|
-| B22 | 僅預置 Operator、Viewer 與 Recognition Source；人員帳號登入。 | D11 | 身分入口 | T-B22：預置登入可用；沒有公開帳號、角色或 Source 管理功能。 | U |
-| B23 | Operator 可管理資格及讀取去敏查詢，但不可提交辨識。 | D11、D23–D24 | 權限 | T-B23：建立／修改／撤銷與查詢允許；辨識入口拒絕。 | U |
-| B24 | Viewer 只讀同樣查詢，不可管理資格或提交辨識。 | D11、D24 | 權限 | T-B24：各寫入及辨識越權拒絕；查詢欄位與 Operator 相同。 | U |
+| B22 | 僅預置 Operator、Viewer 與 Recognition Source；人員帳號登入。 | D11 | 身分入口 | T-B22：預置登入可用；沒有公開帳號、角色或 Source 管理功能。 | U：G06a驗人員auth primitive；G08a以其正式能力驗管理JWT／目前角色，但login route與完整三角色入口仍未完成。 |
+| B23 | Operator 可管理資格及讀取去敏查詢，但不可提交辨識。 | D11、D23–D24 | 權限 | T-B23：建立／修改／撤銷與查詢允許；辨識入口拒絕。 | U：G08a已驗Operator可create／PATCH／revoke；G08b辨識拒絕與G09查詢未驗。 |
+| B24 | Viewer 只讀同樣查詢，不可管理資格或提交辨識。 | D11、D24 | 權限 | T-B24：各寫入及辨識越權拒絕；查詢欄位與 Operator 相同。 | U：G08a已驗Viewer管理寫入403；G08b辨識拒絕與G09同投影查詢未驗。 |
 | B25 | Source 只以個別機器憑證提交自身辨識，不做人員登入、管理或營運查詢。 | D11–D12 | 機器權限 | T-B25：逐個跨角色入口拒絕；錯誤憑證不洩漏業務進度。 | U |
 | B26 | ENTRY／EXIT 各一個預置 Source，皆支援 QR／Face，方向由伺服器固定。 | D12 | Source 事實 | T-B26：兩媒介四組方向；payload 不能覆寫 direction／Source 身分。 | U |
 | B27 | 已驗證但停用 Source 的新合法嘗試保存 `SOURCE_INACTIVE` 拒絕事件。 | D12、D21、D32 | Source 檢查 | T-B27：停用 fixture；與未通過 Source 認證的技術錯誤區分。 | U |
@@ -119,8 +119,8 @@
 
 | ID | 有效要求 | 來源 | 責任 | 預定驗收情境 | 證據 |
 |---|---|---|---|---|---|
-| L01 | body 完整抵達應用可觀察入口，同步大小／基本 JSON／準入檢查後，同步固定 receivedAt 及序號。 | D75–D76、D99 | 接收／準入 | T-L01：登記前不插 async Auth／DB；不是首 byte、按鈕、認證完成或 commit 時間。 | U：G07b已驗技術writer在async validator前同步資源準入、provisional receipt與序號；正式Auth／Access及業務DTO接線未驗。 |
-| L02 | 建立、修改、撤銷、QR／Face、相關整理／重綁依登記順序取得完整操作權。 | D76 | FIFO | T-L02：慢 Auth 不被後到撤銷超車；同毫秒序號；失敗入口安全收尾。 | U：G07b已驗注入validator較慢時writer provisional FIFO不超車；正式管理／辨識用例及DB競爭未驗。 |
+| L01 | body 完整抵達應用可觀察入口，同步大小／基本 JSON／準入檢查後，同步固定 receivedAt 及序號。 | D75–D76、D99 | 接收／準入 | T-L01：登記前不插 async Auth／DB；不是首 byte、按鈕、認證完成或 commit 時間。 | U：G07b驗同步準入；G08a再驗receivedAt／sequence傳入正式管理鏈；辨識與全路由整合仍未完成。 |
+| L02 | 建立、修改、撤銷、QR／Face、相關整理／重綁依登記順序取得完整操作權。 | D76 | FIFO | T-L02：慢 Auth 不被後到撤銷超車；同毫秒序號；失敗入口安全收尾。 | U：G08a true HTTP已驗慢管理Auth下create／revoke依FIFO順序；管理與辨識／整理／重綁跨操作競爭仍待G08b。 |
 | L03 | 較早 ENTRY 若成功，後到修改／撤銷失敗；較早 ENTRY 失敗不保證後者失敗。 | D17、D72、D76 | 管理與辨識競爭 | T-L03：ENTRY／修改／撤銷兩種先後逐一驗證，非以 DB 先提交者判定。 | U |
 | L04 | 正常運作下，合法準時完整接收 ENTRY 不因排隊或後到逾期整理而被誤判逾期。 | D71–D72、D76 | 準時保障 | T-L04：QR／Face 期限內收齊、期限後執行；其餘不合法條件仍可拒絕。 | U |
 | L05 | HTTP 逾時／斷線不取消仍存在的原操作，不刷新首次時間、FIFO 或預算。 | D77–D78、D95 | 請求與操作生命期 | T-L05：排隊及執行中斷線；原項仍受保護，不自動判 rollback。 | U：G07b真HTTP已驗handoff後斷線不取消技術工作；尚未接G05b執行預算、正式用例或Mongo。 |
@@ -299,11 +299,11 @@
 | P14 | D154–D155單API/單成員replset/NGINX；systemd03臺北Persistent=false、host lock/marker、API與Mongo確停及恢復、六collection精確清理／runTicket分bootstrap-ready／failclosed。 | A18、M01、M05–M10；G11 |
 | P15 | D156未被D166取代的命令／期限／clean sourceCommit規則；D166正式Jest runner與其證據失效／重驗範圍；D157固定25STOP及maintenance600/1800。文件封口G00，完整release136證據G12；本輪只討論。 | E01–E09；G00/G01a–G12 |
 
-實作方案記錄25個STOP、命令dictionary與證據位置。G01a/G01b已依D161完成，G02/G03a/G03b/G03c、窄 G04a、G04b、G05a、G05b、G05c、G06a、G06b、G07a及G07b已依D166及各自證據完成限定驗收並停止於G07b；後續正式G06 Auth route、G08 management／recognition用例、Access當輪active／direction業務次序、Event／Presence／Mongo接線、G05b execution／confirmation ledger整合、Mongo writeRunClaim state machine、driver wire、transport-loss、maintenance、deployment與完整v1仍未驗證。
+實作方案記錄25個STOP、命令dictionary與證據位置。G01a/G01b已依D161完成，G02/G03a/G03b/G03c、窄 G04a、G04b、G05a、G05b、G05c、G06a、G06b、G07a、G07b及G08a已依D166及各自證據完成限定驗收並停止於G08a；後續G08b recognition、G09 query、G10 fault／control、G11 deployment、完整G05b execution／confirmation ledger整合、Mongo writeRunClaim state machine、driver wire、transport-loss及完整v1仍未驗證。
 
 ## 7. 實作時的證據帳本與反向覆核
 
-每個要求以此模板留下可核對紀錄；目前局部證據記於各要求列及各已通過gate的 `docs/evidence/<gate>`，G07b報告為 `docs/evidence/g07b/report.md`；完整逐列反向覆核仍待G12。
+每個要求以此模板留下可核對紀錄；目前局部證據記於各要求列及各已通過gate的 `docs/evidence/<gate>`，G08a報告為 `docs/evidence/g08a/report.md`；完整逐列反向覆核仍待G12。
 
 | 要求 ID | 採用來源版本 | 程式路徑／符號 | 實際測試及情境對應 | 重跑命令／環境 | 結果／commit／報告 | 覆核者與剩餘問題 |
 |---|---|---|---|---|---|---|
@@ -317,7 +317,7 @@
 4. 獨立覆核者直接讀原始 D 段與測試，反查矩陣是否漏要求或誤採舊提案；不只閱讀實作者摘要。
 5. 交付差異與證據後停止。未達條件不進下一關，不因時間壓力靜默縮減要求；必要變更先與使用者確認。
 
-**當前停止點：G07b同步準入／HTTP等待生命期 evidence 已通過；exact Node image中G07b unit 40、true HTTP e2e 5、combined 45、full unit 427；G05a／G05b／G05c為21／80／51，G07a unit／e2e為32／41；G07b boundary `files=8 edges=17 servers=1 publicLeaks=0 forbidden=0`，negative compile、build及diff check通過。G07b coverage aggregate為71.34% statements／71.56% branches／86.70% functions／74.09% lines；handler為60.22%／60.77%／77.92%／62.52%，明確不是全面高覆蓋。G07b只證技術admission composition、分池／rate、provisional FIFO、registry reservation與existing-only、一次回覆owner及unknown handoff；不證正式G06 Auth、G08 Access／Event／Presence／Mongo、G05b ledger整合、G10 driver／confirmation、G11 deployment或完整v1。依25 STOP停止於G07b。A01、A11–A16、B13、B41、B42共10項為V（G04b新增9項；G05a／G05b／G05c／G06a／G06b／G07a／G07b不新增完整requirement V），其餘126項仍U，履歷未解鎖。下一合法gate為G08a，尚未開始。**
+**當前停止點：G08a管理用例及完整保存 evidence 已通過；G08a unit 52、true HTTP e2e 12、true Mongo 8.0.32 integration 10、coverage combined 74、full unit 479。boundary `files=5 edges=22 publicLeaks=0 forbidden=0`，negative compile、build及diff check通過。coverage aggregate為79.00% statements／73.91% branches／84.61% functions／82.28% lines，Access application為69.64%／65.75%／86.66%／71.02%，G08a composition為87.97%／79.72%／90.00%／94.77%；明確不是全面高覆蓋。矩陣為13V／123U；本關僅將具完整直接證據的B04、B09、B19升為V。G08b recognition、G09 query、G10 fault／control、G11 deployment及完整release未完成。依25 STOP停止於G08a；下一合法gate為G08b，尚未開始。**
 
 ## 8. 追蹤矩陣建立時的文件覆核紀錄（歷史）
 

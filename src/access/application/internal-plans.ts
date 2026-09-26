@@ -19,7 +19,7 @@ const managementPlans = new WeakSet<object>();
 const recognitionPlans = new WeakSet<object>();
 
 export interface ManagementChangeInput {
-  readonly operation: 'CREATE' | 'UPDATE' | 'REVOKE';
+  readonly operation: 'CREATE' | 'UPDATE' | 'REVOKE' | 'EXPIRE';
   readonly qualificationId: string | null;
   readonly displayName: string | null;
   readonly validFromMs: number | null;
@@ -28,9 +28,15 @@ export interface ManagementChangeInput {
     | Readonly<{ provider: string; externalSubjectId: string }>
     | null
     | undefined;
+  readonly faceMappingMode?: 'KEEP' | 'SET' | 'REMOVE';
   readonly revocationReason: string | null;
   readonly receivedAtMs?: number;
   readonly actorId?: string;
+  readonly expectedQualification?: Readonly<{
+    readonly qualificationId: string;
+    readonly incarnation: string;
+    readonly version: number;
+  }>;
 }
 
 export function createManagementChangePlan(
@@ -51,6 +57,7 @@ export function createManagementChangePlan(
     validFromMs: input.validFromMs,
     validUntilMs: input.validUntilMs,
     faceMapping,
+    ...(input.faceMappingMode === undefined ? {} : { faceMappingMode: input.faceMappingMode }),
     revocationReason: input.revocationReason,
   }) as unknown as ManagementChangePlan;
   managementPlans.add(plan);
@@ -58,6 +65,7 @@ export function createManagementChangePlan(
     registerManagementPersistenceEnvelope(plan, {
       receivedAtMs: input.receivedAtMs,
       actorId: input.actorId,
+      ...(input.expectedQualification === undefined ? {} : { expectedQualification: input.expectedQualification }),
     });
   }
   return plan;
@@ -160,19 +168,24 @@ function assertManagementChangePlanShape(
       'management plan must be an object',
     );
   }
-  if (!['CREATE', 'UPDATE', 'REVOKE'].includes(plan.operation)) {
+  if (!['CREATE', 'UPDATE', 'REVOKE', 'EXPIRE'].includes(plan.operation)) {
     throw new AccessScopeError(
       'INVALID_MANAGEMENT_PLAN',
       'unknown management operation',
     );
   }
-  if (
-    plan.operation === 'REVOKE' &&
-    (plan.qualificationId === null || plan.revocationReason === null)
-  ) {
+  if (plan.operation === 'REVOKE' &&
+    (plan.qualificationId === null || plan.revocationReason === null)) {
     throw new AccessScopeError(
       'INVALID_MANAGEMENT_PLAN',
       'revoke requires a qualification and reason',
+    );
+  }
+  if (plan.operation === 'EXPIRE' &&
+    (plan.qualificationId === null || plan.revocationReason !== null)) {
+    throw new AccessScopeError(
+      'INVALID_MANAGEMENT_PLAN',
+      'expire requires a qualification and no reason',
     );
   }
   if (plan.operation !== 'REVOKE' && plan.revocationReason !== null) {
@@ -184,6 +197,13 @@ function assertManagementChangePlanShape(
   if (plan.faceMapping !== null && plan.faceMapping !== undefined) {
     assertProvider(plan.faceMapping.provider);
     assertExternalSubjectId(plan.faceMapping.externalSubjectId);
+  }
+  if (plan.faceMappingMode !== undefined &&
+    !['KEEP', 'SET', 'REMOVE'].includes(plan.faceMappingMode)) {
+    throw new AccessScopeError(
+      'INVALID_MANAGEMENT_PLAN',
+      'management face mapping mode is invalid',
+    );
   }
 }
 

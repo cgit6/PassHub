@@ -1,9 +1,9 @@
 # PassHub v1 業務邊界規格
 
-- 文件狀態：業務與實作規劃已收斂；G02–G03c、窄 G04a、G04b 完整原子保存 adapter、G05a／G05b／G05c primitives、G06a human-auth primitive、G06b Source-auth／安全 facts primitive、G07a bounded raw／JSON ingress及G07b同步準入／HTTP等待生命期已有各自限定工程證據，依25 STOP停止於G07b；完整v1工程驗證仍未完成
-- 更新日期：2026-09-21
+- 文件狀態：業務與實作規劃已收斂；G02–G03c、窄 G04a、G04b、G05a–G05c、G06a–G06b、G07a–G07b及G08a管理用例／完整保存已有各自限定工程證據，依25 STOP停止於G08a；完整v1工程驗證仍未完成
+- 更新日期：2026-09-26
 - 適用版本：PassHub v1
-- 文件目的：以 D01–D35 為業務底稿，同步至 D177 的有效修正；實作細節及逐關驗收集中在 implementation-plan.md，不把官方查證、歷史候選或待做測試當成工程成果
+- 文件目的：以 D01–D35 為業務底稿，同步至 D178 的有效修正；實作細節及逐關驗收集中在 implementation-plan.md，不把官方查證、歷史候選或待做測試當成工程成果
 
 原始依據見[討論紀錄](./discuss.md)，逐項實作及驗收對應見[要求追蹤矩陣](./requirements-traceability.md)。本文件的「已確認」是規格採用狀態，不代表程式／測試已完成。
 
@@ -244,7 +244,7 @@ PassHub 不在此流程中控制門鎖、呼叫 Webhook 或建立任何下游投
 - 身分／業務格式不合法不得進業務保存；同步暫占及登記不是可信受理或通行授權。既有事件回放不是新通行決策。
 - 未知結果不能因等待逾時就放開後項；故障確認、續辦及維護依第 7.4–7.6 節與第 9.2 節。
 
-G05a 已證內部同步登記／單調序號／單一FIFO權限、settlement與unknown fail-closed primitive；G05b 已證每原操作 15秒／3輪 execution、10秒／7格 confirmation、single-send cadence、native precommit兩送預扣及continuation admission ledger；G05c 已證 process-local registry／opaque artifact join／conflict、4096 retention、generation／late-callback與epoch／read-only claim primitive；G06a 已證人員認證 primitive（strict HS256 JWT、async scrypt、目前 enabled／role reread、opaque human principal 及 read-only primary／majority Mongo reader）；G06b 已證機器憑證精確 grammar、raw-secret SHA-256、lower-hex digest 解為32-byte Buffer後 `timingSafeEqual`、generic credential failure、sourceId-only opaque principal、inactive仍認證成功、Auth／Sources／Access窄能力隔離與 read-only primary／majority Mongo reader；G07a 已證 Nest／Express 前方 bounded raw／JSON ingress、唯一受限 Node server、嚴格 UTF-8／JSON object、raw duplicate headers、16KiB body、16 readers、64 connections及5秒upload／header／keep-alive本地邊界；G07b 已證十路由技術分類、epoch／existing-only入口、同步分池與registry暫占、provisional FIFO、五秒一次回覆owner、fixed-minute rate、同鍵join／replay／conflict及unknown handoff的內部composition seam。G07b刻意使用注入的validator／work port，仍不是正式G06 Auth route、G08 Access用例／Event／Presence／Mongo接線，也未接G05b execution／confirmation ledger、G10 driver故障協議或G11維護部署；不能把限定證據描述成完整業務API或v1完成。
+G05a 已證內部同步登記／單調序號／單一FIFO權限、settlement與unknown fail-closed primitive；G05b 已證每原操作 15秒／3輪 execution、10秒／7格 confirmation、single-send cadence、native precommit兩送預扣及continuation admission ledger；G05c 已證 process-local registry／opaque artifact join／conflict、4096 retention、generation／late-callback與epoch／read-only claim primitive；G06a／G06b 已證人員與Source認證 primitives；G07a／G07b 已證bounded raw ingress、同步分池／registry暫占、provisional FIFO、一次回覆owner、rate、join／replay／conflict及unknown handoff。G08a再證Operator-only管理鏈、strict DTO、create／PATCH／revoke、QR一次、安全摘要、receivedAt／FIFO接線、惰性逾期及Face容量／重用／衝突的真Mongo交易保存。這些限定證據仍不包含G08b辨識、G09查詢、G10故障／控制、G11維護部署或完整v1。
 
 ## 6. Presence 與通行決策
 
@@ -426,7 +426,7 @@ Source＋external event ID 使用資料庫唯一約束。相同內容採 D117 �
 - 不淘汰已登記準時項騰槽；HTTP 逾時、斷線、結果未知不釋放原項／仍在工作驗證。競爭下取得、轉交、歸還各只能按實際生命期正確執行。
 - 原項 32 不是並行寫入數，仍單 writer FIFO。其他資源初值依 D148–D149：connection 64、raw reader 16、body 16KiB／上傳絕對五秒、scrypt 1無queue、queryDB 1、canonical回放 2、原確認 1；所有工作真收束才返自己的額度。
 
-G07b已對內部技術composition驗證同步準入、同鍵join／replay／conflict、existing-only不升新、分池與部分滿載／釋放邊界；正式Auth、Access用例、Event／Presence、Mongo及G10/G11整合仍未完成，不得把此限定gate寫成完整業務容量、公開API或部署成果。
+G07b已對內部技術composition驗證同步準入、同鍵join／replay／conflict、existing-only不升新、分池與部分滿載／釋放邊界；G08a另驗Operator-only管理入口、嚴格管理DTO、create／PATCH／revoke、QR只在建立回覆、Face綁定／釋放／容量與真Mongo原子保存，以及管理寫入沿用FIFO receivedAt。G08a沒有完成辨識鏈、查詢、真transport fault、維護或部署，不得把限定gate寫成完整業務API或v1成果。
 
 ## 8. 最小營運查詢
 
@@ -749,10 +749,10 @@ Qualification 時間錯誤、Face重複、越權與公開限制均拒絕，使�
 
 P01–P15採用決策與逐關驗收見[實作方案](implementation-plan.md)及追蹤矩陣。剩餘不是讓實作者自由選架構：Face唯一索引替換微型真測、固定工具相容性及fault映像digest是明確前置gate；未過便停止回討論，不靜默換策。外部主機／domain／TLS需環境提供。D161已取代舊碼私密備份要求，不再建立legacy備份。
 
-目前矩陣為 A01 與 G04b 直接證據涵蓋的 A11–A16、B13、B41、B42 共 10 項 V（G04b 新增 9 項；G05a／G05b／G05c／G06a／G06b／G07a／G07b不新增完整requirement V），其餘126項仍U；這不代表完整 v1、正式API、Auth route、Access/Event/Mongo或 fault protocol 完成。G04b 證據只涵蓋六 collection schema／guards、共同保存、freshness、QR／Face解析、comparison artifact、Event/source idempotency unique、canonical snapshot 與 error classification。G05a另證內部FIFO primitive；G05b另證純execution／confirmation budget ledger；G05c另證process-local registry；G06a／G06b另證人員／Source auth primitives；G07a另證 bounded raw／JSON ingress；G07b另證內部 admission composition、分池／rate、provisional FIFO、existing-only、registry reservation、一次回覆owner及unknown handoff。G07b未接正式G06 Auth、G08 Access用例／Event／Presence／Mongo、G05b ledger、G10 confirmation／driver或G11部署；L01–L06、L24–L36、M04、B22–B28、B37–B43、E01、E03、E06及其餘要求逐項仍U，不能因局部測試升級完整要求。依25 STOP停止於G07b；下一合法 gate 為 G08a，尚未開始。
+目前矩陣為 A01、A11–A16、B04、B09、B13、B19、B41、B42 共 13 項 V（G08a以完整直接證據新增B04、B09、B19），其餘123項仍U；這不代表完整 v1、辨識API、查詢、fault protocol或部署完成。G08a直接證明管理輸入契約、Operator合規Face預綁及撤銷完整保存；其餘管理相關要求只記局部證據：例如QR所有未來表面、Face替換失敗、管理與ENTRY競爭、跨媒介辨識、查詢及日誌仍需後續gate閉合。G08b recognition、G09 query、G10 fault／control與G11 deployment均未開始。依25 STOP停止於G08a；下一合法 gate 為 G08b，尚未開始。
 
 ## 決策來源
 
-本文件以[討論紀錄](./discuss.md) D01–D35為業務底稿，同步至D176；D114明確授權持續逐題討論、預設接受及必要文件同步，非逐題個別回答。D69依D72、D17依D76修正；D89安全續辦保留，D130永久終局候選未採；D117取代binaryv1、D131七格取代三次、D129原生兩送局部例外、D149同epoch普通重啟寫入關閉、D174 G06a human-auth、D175 G06b Source-auth／安全facts primitive及D176 G07a bounded raw／JSON ingress限定證據皆有效。其餘歷史候選及背景不新增產品要求。
+本文件以[討論紀錄](./discuss.md) D01–D35為業務底稿，同步至D178；D114明確授權持續逐題討論、預設接受及必要文件同步，非逐題個別回答。D69依D72、D17依D76修正；D89安全續辦保留，D130永久終局候選未採；D117取代binaryv1、D131七格取代三次、D129原生兩送局部例外、D149同epoch普通重啟寫入關閉，D174–D178的逐關限定證據皆有效。其餘歷史候選及背景不新增產品要求。
 
 本次同步不是新業務決策，也不改寫原始討論。未來若變更已確認結論，須先新增討論決策 block，再同步本文件、驗收及追蹤矩陣。實作／測試／公開證據未完成前，不把文件採用視為履歷成果。

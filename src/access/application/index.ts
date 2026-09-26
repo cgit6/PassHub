@@ -7,3 +7,4 @@ export type {
   RevokeQualificationCommand,
   UpdateQualificationCommand,
 } from './use-cases.js';
+export type { ManagementPublicChangeResult } from '../ports/index.js';

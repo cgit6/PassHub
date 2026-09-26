@@ -6,7 +6,10 @@ export const SAFE_HTTP_RESPONSE_CODES = Object.freeze([
   'DATASET_EPOCH_MISMATCH',
   'INVALID_REQUEST',
   'AUTHENTICATION_FAILED',
+  'AUTH_UNAVAILABLE',
   'FORBIDDEN',
+  'MANAGEMENT_CONFLICT',
+  'PERSISTENCE_UNAVAILABLE',
   'IDEMPOTENCY_CONFLICT',
   'RATE_LIMITED',
   'TECHNICAL_BUSY',
@@ -20,7 +23,7 @@ export const SAFE_HTTP_RESPONSE_CODES = Object.freeze([
 ] as const);
 
 export type SafeHttpResponseCode = (typeof SAFE_HTTP_RESPONSE_CODES)[number];
-export type BusinessHttpStatus = 200 | 201 | 202;
+export type BusinessHttpStatus = 200 | 201 | 202 | 409;
 
 const STATUS_BY_CODE: Readonly<Record<SafeHttpResponseCode, number>> = Object.freeze({
   INVALID_RETRY_MODE: 400,
@@ -28,7 +31,10 @@ const STATUS_BY_CODE: Readonly<Record<SafeHttpResponseCode, number>> = Object.fr
   DATASET_EPOCH_MISMATCH: 409,
   INVALID_REQUEST: 400,
   AUTHENTICATION_FAILED: 401,
+  AUTH_UNAVAILABLE: 503,
   FORBIDDEN: 403,
+  MANAGEMENT_CONFLICT: 409,
+  PERSISTENCE_UNAVAILABLE: 503,
   IDEMPOTENCY_CONFLICT: 409,
   RATE_LIMITED: 429,
   TECHNICAL_BUSY: 503,
@@ -158,7 +164,7 @@ export function createHttpResponsePlanBundle(
 
   const business: BusinessResponsePlanIssuer = Object.freeze({
     issue(status: BusinessHttpStatus, payload: Readonly<Record<string, unknown>>): HttpResponsePlan {
-      if (status !== 200 && status !== 201 && status !== 202) {
+      if (status !== 200 && status !== 201 && status !== 202 && status !== 409) {
         throw new TypeError('unsupported business response status');
       }
       const copied = copyJsonObject(payload, new Set<object>(), 0);

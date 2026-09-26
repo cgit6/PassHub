@@ -24,6 +24,7 @@ import type {
   FaceMappingSnapshot,
   ManagementChangeResult,
   ManagementDataPort,
+  ManagementQualificationSnapshot,
   QualificationSnapshot,
   RecognitionDataPort,
   RecognitionPersistenceResult,
@@ -57,6 +58,13 @@ const QUALIFICATION: QualificationSnapshot = {
   },
 };
 
+const MANAGEMENT_QUALIFICATION: ManagementQualificationSnapshot = {
+  ...QUALIFICATION,
+  displayName: 'Demo qualification',
+  createdAtMs: 900,
+  updatedAtMs: 950,
+};
+
 const MAPPING: FaceMappingSnapshot = {
   qualificationId: 'q-1',
   qualificationIncarnation: 'q-inc-1',
@@ -86,9 +94,9 @@ class FakeManagementPort implements ManagementDataPort {
   public readonly calls: string[] = [];
   public staged: unknown[] = [];
 
-  public async readQualification(): Promise<QualificationSnapshot | null> {
+  public async readQualification(): Promise<ManagementQualificationSnapshot | null> {
     this.calls.push('readQualification');
-    return QUALIFICATION;
+    return MANAGEMENT_QUALIFICATION;
   }
 
   public async readMapping(): Promise<FaceMappingSnapshot | null> {
@@ -113,6 +121,12 @@ class FakeManagementPort implements ManagementDataPort {
         validFromMs: plan.validFromMs ?? 0,
         validUntilMs: plan.validUntilMs ?? 0,
         presence: 'NOT_ENTERED',
+        revokedAtMs: plan.operation === 'REVOKE' ? 1_000 : null,
+        revocationReason: plan.revocationReason,
+        expiredTerminalAtMs: plan.operation === 'EXPIRE' ? 1_000 : null,
+        faceBound: plan.faceMapping !== null && plan.faceMapping !== undefined,
+        createdAtMs: 900,
+        updatedAtMs: 1_000,
       },
       qrToken: plan.operation === 'CREATE' ? 'fake-token' : null,
     };

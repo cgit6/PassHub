@@ -5,6 +5,7 @@ import type {
   FaceMappingSnapshot,
   ManagementChangePlan,
   ManagementChangeResult,
+  ManagementQualificationSnapshot,
   QualificationSnapshot,
   RecognitionResultPlan,
   RecognitionPersistenceResult,
@@ -32,8 +33,8 @@ import {
 export { AccessScopeError } from './scope-errors.js';
 
 export interface ManagementScope {
-  readQualification(qualificationId: string): Promise<QualificationSnapshot | null>;
-  readMapping(qualificationId: string): Promise<FaceMappingSnapshot | null>;
+  readQualification(qualificationId: string): Promise<ManagementQualificationSnapshot | null>;
+  readMapping(qualificationId: string, qualificationIncarnation: string): Promise<FaceMappingSnapshot | null>;
   stageManagementChange(plan: ManagementChangePlan): Promise<ManagementChangeResult>;
   closeAsync(): Promise<void>;
 }
@@ -124,7 +125,7 @@ export class ManagementAccessScope
 
   public async readQualification(
     qualificationId: string,
-  ): Promise<QualificationSnapshot | null> {
+  ): Promise<ManagementQualificationSnapshot | null> {
     this.assertOpen();
     assertNonEmpty(qualificationId, 'qualificationId');
     const result = await this.persistence.readQualification(
@@ -132,17 +133,28 @@ export class ManagementAccessScope
       qualificationId,
     );
     this.assertOpen();
+    if (result === null) return null;
+    if (!('displayName' in result) || typeof result.displayName !== 'string' ||
+      !Number.isSafeInteger(result.createdAtMs) ||
+      !Number.isSafeInteger(result.updatedAtMs)) {
+      throw new AccessScopeError(
+        'INVALID_MANAGEMENT_PLAN',
+        'management qualification snapshot is not enriched',
+      );
+    }
     return result;
   }
 
   public async readMapping(
     qualificationId: string,
+    qualificationIncarnation: string,
   ): Promise<FaceMappingSnapshot | null> {
     this.assertOpen();
     assertNonEmpty(qualificationId, 'qualificationId');
     const result = await this.persistence.readMapping(
       this.context,
       qualificationId,
+      qualificationIncarnation,
     );
     this.assertOpen();
     return result;

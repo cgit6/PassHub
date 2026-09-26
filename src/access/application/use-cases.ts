@@ -19,10 +19,12 @@ import {
   type AccessDecision,
   type IdentityResolution,
 } from '../domain/index.js';
+import { ManagementApplicationError } from './management-errors.js';
+import { toManagementPublicChangeResult } from './management-result-mapper.js';
 import type {
   RedactedAccessEventProjection,
   RedactedQualificationProjection,
-  ManagementChangeResult,
+  ManagementPublicChangeResult,
 } from '../ports/index.js';
 
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -58,13 +60,12 @@ export interface CreateQualificationCommand {
 
 export interface UpdateQualificationCommand {
   readonly qualificationId: string;
-  readonly displayName: string;
-  readonly validFromMs: number;
-  readonly validUntilMs: number;
-  readonly faceMapping:
+  readonly displayName?: string;
+  readonly validFromMs?: number;
+  readonly validUntilMs?: number;
+  readonly faceMapping?:
     | Readonly<{ provider: string; externalSubjectId: string }>
-    | null
-    | undefined;
+    | null;
   readonly receivedAtMs: number;
   readonly actorId: string;
 }
@@ -77,9 +78,9 @@ export interface RevokeQualificationCommand {
 }
 
 export interface ManageQualifications {
-  create(input: CreateQualificationCommand): Promise<ManagementChangeResult>;
-  update(input: UpdateQualificationCommand): Promise<ManagementChangeResult>;
-  revoke(input: RevokeQualificationCommand): Promise<ManagementChangeResult>;
+  create(input: CreateQualificationCommand): Promise<ManagementPublicChangeResult>;
+  update(input: UpdateQualificationCommand): Promise<ManagementPublicChangeResult>;
+  revoke(input: RevokeQualificationCommand): Promise<ManagementPublicChangeResult>;
 }
 
 /** Management has no transition setter; every write is a complete plan. */
@@ -98,7 +99,11 @@ export class ManageQualificationsImplementation implements ManageQualifications 
     assertExternalSubjectId(input.externalSubjectId);
   }
 
-  public async create(input: CreateQualificationCommand): Promise<ManagementChangeResult> {
+  private hasOwn(input: UpdateQualificationCommand, key: keyof UpdateQualificationCommand): boolean {
+    return Object.prototype.hasOwnProperty.call(input, key);
+  }
+
+  public async create(input: CreateQualificationCommand): Promise<ManagementPublicChangeResult> {
     this.assertActorId(input.actorId);
     const window = decideQualificationWindow({
       validFromMs: input.validFromMs,
@@ -106,12 +111,12 @@ export class ManageQualificationsImplementation implements ManageQualifications 
       receivedAtMs: input.receivedAtMs,
     });
     if (!window.allowed) {
-      throw new Error(window.reason);
+      throw new ManagementApplicationError(window.reason);
     }
     this.assertFaceMapping(input.faceMapping);
     const scope = this.openScope();
     try {
-      return (await scope.stageManagementChange(
+      return toManagementPublicChangeResult(await scope.stageManagementChange(
         createManagementChangePlan({
           operation: 'CREATE',
           qualificationId: null,
@@ -129,35 +134,61 @@ export class ManageQualificationsImplementation implements ManageQualifications 
     }
   }
 
-  public async update(input: UpdateQualificationCommand): Promise<ManagementChangeResult> {
+  public async update(input: UpdateQualificationCommand): Promise<ManagementPublicChangeResult> {
     this.assertActorId(input.actorId);
-    this.assertFaceMapping(input.faceMapping);
+    if (!this.hasOwn(input, 'displayName') && !this.hasOwn(input, 'validFromMs') &&
+      !this.hasOwn(input, 'validUntilMs') && !this.hasOwn(input, 'faceMapping')) {
+      throw new ManagementApplicationError('UPDATE_FIELD_REQUIRED');
+    }
+    if (this.hasOwn(input, 'faceMapping')) this.assertFaceMapping(input.faceMapping);
     const scope = this.openScope();
     try {
       const current = await scope.readQualification(input.qualificationId);
       if (current === null) {
-        throw new Error('QUALIFICATION_NOT_FOUND');
+        throw new ManagementApplicationError('QUALIFICATION_NOT_FOUND');
       }
+      // Keep the qualification and mapping reads inside the same management scope.
+      // The mapping is intentionally omitted from the plan when PATCH omitted it.
+      await scope.readMapping(input.qualificationId, current.incarnation);
+      const displayName = this.hasOwn(input, 'displayName') ? input.displayName! : current.displayName;
+      const validFromMs = this.hasOwn(input, 'validFromMs') ? input.validFromMs! : current.state.validFromMs;
+      const validUntilMs = this.hasOwn(input, 'validUntilMs') ? input.validUntilMs! : current.state.validUntilMs;
+      const faceMapping = this.hasOwn(input, 'faceMapping')
+        ? input.faceMapping!
+        : null;
+      const faceMappingMode = this.hasOwn(input, 'faceMapping')
+        ? input.faceMapping === null ? 'REMOVE' as const : 'SET' as const
+        : 'KEEP' as const;
       const decision = decideQualificationUpdate({
         qualification: current.state,
-        proposedValidFromMs: input.validFromMs,
-        proposedValidUntilMs: input.validUntilMs,
+        proposedValidFromMs: validFromMs,
+        proposedValidUntilMs: validUntilMs,
         receivedAtMs: input.receivedAtMs,
       });
       if (!decision.allowed) {
-        throw new Error(decision.reason);
+        if (decision.reason === 'QUALIFICATION_ALREADY_EXPIRED' && this.needsTerminalExpiry(current.state, input.receivedAtMs)) {
+          await this.stageExpiry(scope, current, input.receivedAtMs, input.actorId);
+          throw new ManagementApplicationError(decision.reason, 'EXPIRED_TERMINAL_PERSISTED');
+        }
+        throw new ManagementApplicationError(decision.reason);
       }
-      return (await scope.stageManagementChange(
+      return toManagementPublicChangeResult(await scope.stageManagementChange(
         createManagementChangePlan({
           operation: 'UPDATE',
           qualificationId: input.qualificationId,
-          displayName: input.displayName,
-          validFromMs: input.validFromMs,
-          validUntilMs: input.validUntilMs,
-          faceMapping: input.faceMapping,
+          displayName,
+          validFromMs,
+          validUntilMs,
+          faceMapping,
+          faceMappingMode,
           revocationReason: null,
           receivedAtMs: input.receivedAtMs,
           actorId: input.actorId,
+          expectedQualification: {
+            qualificationId: current.qualificationId,
+            incarnation: current.incarnation,
+            version: current.version,
+          },
         }),
       ));
     } finally {
@@ -165,13 +196,46 @@ export class ManageQualificationsImplementation implements ManageQualifications 
     }
   }
 
-  public async revoke(input: RevokeQualificationCommand): Promise<ManagementChangeResult> {
+  private needsTerminalExpiry(
+    state: import('../domain/index.js').QualificationState,
+    receivedAtMs: number,
+  ): boolean {
+    return state.presence === 'NOT_ENTERED' && state.revokedAtMs === null &&
+      state.expiredTerminalAtMs === null && receivedAtMs >= state.validUntilMs;
+  }
+
+  private async stageExpiry(
+    scope: ManagementScope,
+    current: import('../ports/index.js').ManagementQualificationSnapshot,
+    receivedAtMs: number,
+    actorId: string,
+  ): Promise<void> {
+    await scope.stageManagementChange(createManagementChangePlan({
+      operation: 'EXPIRE',
+      qualificationId: current.qualificationId,
+      displayName: null,
+      validFromMs: null,
+      validUntilMs: null,
+      faceMapping: null,
+      faceMappingMode: 'REMOVE',
+      revocationReason: null,
+      receivedAtMs,
+      actorId,
+      expectedQualification: {
+        qualificationId: current.qualificationId,
+        incarnation: current.incarnation,
+        version: current.version,
+      },
+    }));
+  }
+
+  public async revoke(input: RevokeQualificationCommand): Promise<ManagementPublicChangeResult> {
     this.assertActorId(input.actorId);
     const scope = this.openScope();
     try {
       const current = await scope.readQualification(input.qualificationId);
       if (current === null) {
-        throw new Error('QUALIFICATION_NOT_FOUND');
+        throw new ManagementApplicationError('QUALIFICATION_NOT_FOUND');
       }
       const decision = decideQualificationRevocation({
         qualification: current.state,
@@ -179,9 +243,13 @@ export class ManageQualificationsImplementation implements ManageQualifications 
         reason: input.reason,
       });
       if (!decision.allowed) {
-        throw new Error(decision.reason);
+        if (decision.reason === 'QUALIFICATION_ALREADY_EXPIRED' && this.needsTerminalExpiry(current.state, input.receivedAtMs)) {
+          await this.stageExpiry(scope, current, input.receivedAtMs, input.actorId);
+          throw new ManagementApplicationError(decision.reason, 'EXPIRED_TERMINAL_PERSISTED');
+        }
+        throw new ManagementApplicationError(decision.reason);
       }
-      return (await scope.stageManagementChange(
+      return toManagementPublicChangeResult(await scope.stageManagementChange(
         createManagementChangePlan({
           operation: 'REVOKE',
           qualificationId: input.qualificationId,
@@ -192,6 +260,11 @@ export class ManageQualificationsImplementation implements ManageQualifications 
           revocationReason: input.reason,
           receivedAtMs: input.receivedAtMs,
           actorId: input.actorId,
+          expectedQualification: {
+            qualificationId: current.qualificationId,
+            incarnation: current.incarnation,
+            version: current.version,
+          },
         }),
       ));
     } finally {

@@ -19,6 +19,13 @@ export interface QualificationSnapshot {
   readonly state: QualificationState;
 }
 
+/** Management-only enrichment; recognition never needs these fields. */
+export interface ManagementQualificationSnapshot extends QualificationSnapshot {
+  readonly displayName: string;
+  readonly createdAtMs: number;
+  readonly updatedAtMs: number;
+}
+
 export interface FaceMappingSnapshot {
   readonly qualificationId: string;
   readonly qualificationIncarnation: string;
@@ -49,7 +56,7 @@ const recognitionPlanBrand: unique symbol = Symbol('RecognitionResultPlan');
 
 export interface ManagementChangePlan {
   readonly [managementPlanBrand]: true;
-  readonly operation: 'CREATE' | 'UPDATE' | 'REVOKE';
+  readonly operation: 'CREATE' | 'UPDATE' | 'REVOKE' | 'EXPIRE';
   readonly qualificationId: string | null;
   readonly displayName: string | null;
   readonly validFromMs: number | null;
@@ -58,11 +65,51 @@ export interface ManagementChangePlan {
     | Readonly<{ provider: string; externalSubjectId: string }>
     | null
     | undefined;
+  readonly faceMappingMode?: 'KEEP' | 'SET' | 'REMOVE';
   readonly revocationReason: string | null;
 }
 
-export interface ManagementChangeResult {
-  readonly operation: 'CREATE' | 'UPDATE' | 'REVOKE';
+export interface ManagementQualificationSummary {
+  readonly qualificationId: string;
+  readonly displayName: string;
+  readonly validFromMs: number;
+  readonly validUntilMs: number;
+  readonly presence: 'NOT_ENTERED' | 'INSIDE' | 'EXITED';
+  readonly revokedAtMs: number | null;
+  readonly revocationReason: string | null;
+  readonly expiredTerminalAtMs: number | null;
+  readonly faceBound: boolean;
+  readonly createdAtMs: number;
+  readonly updatedAtMs: number;
+}
+
+export interface ManagementCreateResult {
+  readonly operation: 'CREATE';
+  readonly qualificationId: string;
+  readonly summary: ManagementQualificationSummary;
+  readonly qrToken: string;
+}
+
+export interface ManagementUpdateResult {
+  readonly operation: 'UPDATE';
+  readonly qualificationId: string;
+  readonly summary: ManagementQualificationSummary;
+}
+
+export interface ManagementRevokeResult {
+  readonly operation: 'REVOKE';
+  readonly qualificationId: string;
+  readonly summary: ManagementQualificationSummary;
+}
+
+export type ManagementPublicChangeResult =
+  | ManagementCreateResult
+  | ManagementUpdateResult
+  | ManagementRevokeResult;
+
+/** Transitional internal shape for pre-G08a adapters and test doubles. */
+export interface LegacyManagementChangeResult {
+  readonly operation: 'CREATE' | 'UPDATE' | 'REVOKE' | 'EXPIRE';
   readonly qualificationId: string;
   readonly incarnation: string;
   readonly version: number;
@@ -72,9 +119,18 @@ export interface ManagementChangeResult {
     readonly validFromMs: number;
     readonly validUntilMs: number;
     readonly presence: 'NOT_ENTERED' | 'INSIDE' | 'EXITED';
+    readonly revokedAtMs?: number | null;
+    readonly revocationReason?: string | null;
+    readonly expiredTerminalAtMs?: number | null;
+    readonly faceBound?: boolean;
+    readonly createdAtMs?: number;
+    readonly updatedAtMs?: number;
   }>;
   readonly qrToken: string | null;
 }
+
+/** Legacy internal result; safe HTTP/application DTO is produced by the mapper. */
+export type ManagementChangeResult = LegacyManagementChangeResult;
 
 export interface RecognitionResultPlan {
   readonly [recognitionPlanBrand]: true;
@@ -110,10 +166,11 @@ export interface ManagementDataPort {
   readQualification(
     context: AccessScopeContext,
     qualificationId: string,
-  ): Promise<QualificationSnapshot | null>;
+  ): Promise<ManagementQualificationSnapshot | null>;
   readMapping(
     context: AccessScopeContext,
     qualificationId: string,
+    qualificationIncarnation: string,
   ): Promise<FaceMappingSnapshot | null>;
   stageManagementChange(
     context: AccessScopeContext,

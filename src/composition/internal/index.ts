@@ -30,6 +30,11 @@ export {
   type G07bWallClock,
 } from './g07b-admission-handler.js';
 export {
+  createG08aManagementComposition,
+  type G08aManagementComposition,
+  type G08aManagementCompositionOptions,
+} from './g08a-management-composition.js';
+export {
   HTTP_RESPONSE_DEADLINE_MS,
   HttpResponseOwnerError,
   createHttpResponseOwner,

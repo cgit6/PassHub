@@ -190,7 +190,8 @@ describe('G04b bootstrap fails closed against an existing dataset', () => {
       receivedAtMs: 1_800_000_000_000,
       actorId,
     });
-    expect(created).toMatchObject({ operation: 'CREATE', version: 0 });
+    expect(created.operation).toBe('CREATE');
+    if (created.operation !== 'CREATE') throw new Error('create result discriminator was not CREATE');
     expect(created.qrToken).toMatch(/^[A-Za-z0-9_-]{43}$/u);
     const storedAfterCreate = await database.collection<StringIdDocument>(G04B_QUALIFICATIONS_COLLECTION).findOne({ _id: created.qualificationId });
     expect(storedAfterCreate).toMatchObject({ createdBy: actorId, presence: 'NOT_ENTERED', version: 0 });
@@ -206,7 +207,10 @@ describe('G04b bootstrap fails closed against an existing dataset', () => {
       receivedAtMs: 1_800_000_001_000,
       actorId,
     });
-    expect(updated).toMatchObject({ operation: 'UPDATE', version: 1, qrToken: null });
+    expect(updated).toMatchObject({ operation: 'UPDATE' });
+    expect(updated).not.toHaveProperty('qrToken');
+    expect(updated).not.toHaveProperty('incarnation');
+    expect(updated).not.toHaveProperty('version');
     expect(await database.collection<Document>(G04A_FACE_SLOTS_COLLECTION).countDocuments({ qualificationId: created.qualificationId })).toBe(1);
 
     const secondMapping = { provider: 'DemoFace.new', externalSubjectId: 'subject-replacement' } as const;
@@ -219,7 +223,8 @@ describe('G04b bootstrap fails closed against an existing dataset', () => {
       receivedAtMs: 1_800_000_002_000,
       actorId,
     });
-    expect(replaced).toMatchObject({ operation: 'UPDATE', version: 2, qrToken: null });
+    expect(replaced).toMatchObject({ operation: 'UPDATE' });
+    expect(replaced).not.toHaveProperty('qrToken');
     expect(await database.collection<Document>(G04A_FACE_SLOTS_COLLECTION).countDocuments({ qualificationId: created.qualificationId })).toBe(1);
     expect(await database.collection<Document>(G04A_FACE_SLOTS_COLLECTION).countDocuments({ provider: firstMapping.provider, subject: firstMapping.externalSubjectId, qualificationId: { $type: 'string' } })).toBe(0);
     expect(await database.collection<Document>(G04A_FACE_SLOTS_COLLECTION).findOne({ provider: secondMapping.provider, subject: secondMapping.externalSubjectId })).toMatchObject({ qualificationId: created.qualificationId });
@@ -230,11 +235,15 @@ describe('G04b bootstrap fails closed against an existing dataset', () => {
       receivedAtMs: 1_800_000_003_000,
       actorId,
     });
-    expect(revoked).toMatchObject({ operation: 'REVOKE', version: 3, qrToken: null });
+    expect(revoked).toMatchObject({ operation: 'REVOKE' });
+    expect(revoked).not.toHaveProperty('qrToken');
+    expect(revoked).not.toHaveProperty('incarnation');
+    expect(revoked).not.toHaveProperty('version');
     expect(await database.collection<Document>(G04A_FACE_SLOTS_COLLECTION).countDocuments({ qualificationId: created.qualificationId })).toBe(0);
     expect(await database.collection<StringIdDocument>(G04B_QUALIFICATIONS_COLLECTION).findOne({ _id: created.qualificationId })).toMatchObject({
-      revokedAt: new Date(1_800_000_000_000),
+      revokedAt: new Date(1_800_000_003_000),
       revocationReason: 'completed test lifecycle',
+      updatedAt: new Date(1_800_000_000_000),
       version: 3,
     });
     expect(await database.collection<StringIdDocument>(G04B_METADATA_COLLECTION).findOne({ _id: 'system' })).toMatchObject({ slotCount: 2 });
@@ -260,6 +269,8 @@ describe('G04b bootstrap fails closed against an existing dataset', () => {
       displayName: 'QR lifecycle', validFromMs: 1_799_999_000_000, validUntilMs: 1_800_010_000_000,
       faceMapping: null, receivedAtMs: 1_800_000_000_000, actorId: randomUUID(),
     });
+    expect(created.operation).toBe('CREATE');
+    if (created.operation !== 'CREATE') throw new Error('create result discriminator was not CREATE');
     expect(created.qrToken).not.toBeNull();
     const entryDecision = await entry.recognizeAttempt.execute({
       input: { kind: 'QR_SCANNED', token: created.qrToken! },
@@ -1085,9 +1096,12 @@ describe('G04b bootstrap fails closed against an existing dataset', () => {
       faceMapping: { provider: 'DemoFace.first', externalSubjectId: 'first-subject' },
       receivedAtMs: 1_800_000_000_000, actorId,
     });
+    const firstStored = await database.collection<StringIdDocument>(G04B_QUALIFICATIONS_COLLECTION)
+      .findOne({ _id: first.qualificationId });
+    expect(firstStored).not.toBeNull();
     expect(await database.collection<Document>(G04A_FACE_SLOTS_COLLECTION).findOne({
       provider: 'DemoFace.first', subject: 'first-subject',
-    })).toMatchObject({ qualificationId: first.qualificationId, qualificationIncarnation: first.incarnation });
+    })).toMatchObject({ qualificationId: first.qualificationId, qualificationIncarnation: firstStored!.incarnation });
 
     const target = { provider: 'DemoFace.race', externalSubjectId: 'race-subject' } as const;
     const [bindResult, recognitionResult] = await Promise.allSettled([

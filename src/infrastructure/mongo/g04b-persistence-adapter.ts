@@ -13,7 +13,9 @@ import type {
   FaceMappingSnapshot,
   ManagementChangePlan,
   ManagementChangeResult,
+  ManagementQualificationSummary,
   ManagementDataPort,
+  ManagementQualificationSnapshot,
   QualificationSnapshot,
   RecognitionDataPort,
   RecognitionPersistenceResult,
@@ -57,17 +59,11 @@ export interface G04bClock {
 const SYSTEM_CLOCK: G04bClock = Object.freeze({ nowMs: () => Date.now() });
 
 export interface G04bManagementResult {
-  readonly operation: 'CREATE' | 'UPDATE' | 'REVOKE';
+  readonly operation: 'CREATE' | 'UPDATE' | 'REVOKE' | 'EXPIRE';
   readonly qualificationId: string;
   readonly incarnation: string;
   readonly version: number;
-  readonly summary: Readonly<{
-    qualificationId: string;
-    displayName: string;
-    validFromMs: number;
-    validUntilMs: number;
-    presence: QualificationState['presence'];
-  }>;
+  readonly summary: ManagementQualificationSummary;
   readonly qrToken: string | null;
 }
 
@@ -108,7 +104,8 @@ export interface G04bCanonicalSnapshot {
 export type G04bTransactionStage =
   | 'begin' | 'read' | 'guard' | 'qualification' | 'mapping' | 'event' | 'commit' | 'abort' | 'canonical';
 export type G04bTransactionErrorKind =
-  | 'DUPLICATE_KEY' | 'WRITE_CONFLICT' | 'SCHEMA_VALIDATION'
+  | 'DUPLICATE_KEY' | 'FACE_SUBJECT_ALREADY_BOUND' | 'FACE_SUBJECT_SLOT_CAPACITY_EXHAUSTED'
+  | 'WRITE_CONFLICT' | 'SCHEMA_VALIDATION'
   | 'IDEMPOTENCY_CONFLICT' | 'TRANSACTION_ABORTED' | 'UNKNOWN_COMMIT_RESULT' | 'OTHER';
 
 export class G04bTransactionError extends Error {
@@ -233,7 +230,7 @@ export class G04bMongoPersistenceAdapter
     return this.readSourceFacts(context, sourceId);
   }
 
-  public async readQualification(context: AccessScopeContext, qualificationId: string): Promise<QualificationSnapshot | null> {
+  public async readQualification(context: AccessScopeContext, qualificationId: string): Promise<ManagementQualificationSnapshot | null> {
     const state = await this.begin(context);
     try {
       const document = await this.requireCollections().qualifications.findOne({ _id: qualificationId }, { session: state.session });
@@ -243,13 +240,13 @@ export class G04bMongoPersistenceAdapter
     } catch (error: unknown) { throw await this.fail(context, state, error); }
   }
 
-  public async readMapping(context: AccessScopeContext, qualificationId: string): Promise<FaceMappingSnapshot | null> {
+  public async readMapping(context: AccessScopeContext, qualificationId: string, qualificationIncarnation?: string): Promise<FaceMappingSnapshot | null> {
     const state = await this.begin(context);
     try {
       const mappings = await this.requireCollections().faceSlots.find({
         qualificationId: { $eq: qualificationId, $type: 'string' },
       }, { session: state.session }).toArray();
-      const mapping = mappingFromSlots(mappings, qualificationId);
+      const mapping = mappingFromSlots(mappings, qualificationId, qualificationIncarnation);
       state.mappings.set(qualificationId, mapping);
       return mapping;
     } catch (error: unknown) { throw await this.fail(context, state, error); }
@@ -261,7 +258,7 @@ export class G04bMongoPersistenceAdapter
       const document = await this.requireCollections().qualifications.findOne({ qrLookupDigest: lookupDigest }, { session: state.session });
       if (document === null) return { qualification: null, mapping: null };
       state.qualifications.set(document._id, document);
-      const mapping = await this.mappingForQualification(document._id, state);
+      const mapping = await this.mappingForQualification(document._id, document.incarnation, state);
       state.mappings.set(document._id, mapping);
       return { qualification: toQualificationSnapshot(document), mapping };
     } catch (error: unknown) { throw await this.fail(context, state, error); }
@@ -444,6 +441,9 @@ export class G04bMongoPersistenceAdapter
     const managementEnvelope = readManagementPersistenceEnvelope(plan as object);
     if (managementEnvelope === null || !Number.isSafeInteger(managementEnvelope.receivedAtMs)) throw new G04bTechnicalError('management trusted envelope is required');
     if (!UUID_V4.test(managementEnvelope.actorId)) throw new G04bTechnicalError('management actorId must be a canonical UUID v4');
+    if (plan.operation === 'CREATE' && managementEnvelope.expectedQualification !== undefined) {
+      throw new G04bTechnicalError('create management plan must not carry qualification provenance');
+    }
     if (plan.operation === 'CREATE') {
       const qualificationId = randomUUID();
       const incarnation = randomUUID();
@@ -461,48 +461,104 @@ export class G04bMongoPersistenceAdapter
       await this.requireCollections().qualifications.insertOne(document, { session: state.session });
       await this.bumpGuard(state, 'qr');
       if (plan.faceMapping !== null && plan.faceMapping !== undefined) {
+        state.stage = 'mapping';
         await this.bindNewFace(state, qualificationId, incarnation, plan.faceMapping);
         await this.bumpGuard(state, 'face');
       }
+      state.stage = 'qualification';
       await this.ensureSlotCount(state);
-      return {
-        operation: 'CREATE', qualificationId, incarnation, version: 0,
-        summary: { qualificationId, displayName: document.displayName, validFromMs: validFrom.getTime(), validUntilMs: validUntil.getTime(), presence: document.presence },
-        qrToken: token,
-      };
+      return this.managementSummary('CREATE', document, 0, token, plan.faceMapping !== null && plan.faceMapping !== undefined);
     }
     if (plan.qualificationId === null) throw new G04bTechnicalError('management qualificationId is required');
-    const current = state.qualifications.get(plan.qualificationId) ?? await this.requireCollections().qualifications.findOne({ _id: plan.qualificationId }, { session: state.session });
+    const provenance = managementEnvelope.expectedQualification;
+    if (provenance === undefined || provenance.qualificationId !== plan.qualificationId) {
+      throw new G04bTechnicalError('management plan qualification provenance is missing or mismatched');
+    }
+    const currentFromScope = state.qualifications.get(plan.qualificationId);
+    if (currentFromScope !== undefined &&
+      (currentFromScope.incarnation !== provenance.incarnation || currentFromScope.version !== provenance.version)) {
+      throw new G04bTechnicalError('management plan qualification provenance is stale');
+    }
+    const current = currentFromScope ?? await this.requireCollections().qualifications.findOne({
+      _id: plan.qualificationId,
+      incarnation: provenance.incarnation,
+      version: provenance.version,
+    }, { session: state.session });
     if (current === null || current === undefined) throw new G04bTechnicalError('qualification is missing');
-    const expected = { _id: current._id, incarnation: current.incarnation, version: current.version };
-    if (plan.operation === 'REVOKE') {
-      const reason = requiredString(plan.revocationReason, 'revocationReason');
+    const expected = { _id: plan.qualificationId, incarnation: provenance.incarnation, version: provenance.version };
+    if (plan.operation === 'EXPIRE') {
+      if (current.presence !== 'NOT_ENTERED' || current.revokedAt !== null || current.expiredTerminalAt !== null || managementEnvelope.receivedAtMs < current.validUntil.getTime()) {
+        throw new G04bTechnicalError('invalid qualification expiry transition');
+      }
+      const expiredAt = new Date(managementEnvelope.receivedAtMs);
+      state.stage = 'qualification';
       const updated = await this.requireCollections().qualifications.updateOne(expected, {
-        $set: { revokedAt: now, revocationReason: reason, updatedAt: now }, $inc: { version: 1 },
+        $set: { expiredTerminalAt: expiredAt, updatedAt: now }, $inc: { version: 1 },
       }, { session: state.session });
-      assertModified(updated.modifiedCount, 'revoke qualification');
+      assertModified(updated.modifiedCount, 'expire qualification');
+      state.stage = 'mapping';
       await this.releaseFaceForQualification(state, current._id, current.incarnation);
       await this.bumpGuard(state, 'face');
+      state.stage = 'qualification';
       await this.ensureSlotCount(state);
-      return this.managementSummary('REVOKE', current, current.version + 1, null);
+      return this.managementSummary('EXPIRE', { ...current, expiredTerminalAt: expiredAt, updatedAt: now }, current.version + 1, null, false);
+    }
+    if (plan.operation === 'REVOKE') {
+      const reason = requiredString(plan.revocationReason, 'revocationReason');
+      const receivedAt = new Date(managementEnvelope.receivedAtMs);
+      state.stage = 'qualification';
+      const updated = await this.requireCollections().qualifications.updateOne(expected, {
+        $set: { revokedAt: receivedAt, revocationReason: reason, updatedAt: now }, $inc: { version: 1 },
+      }, { session: state.session });
+      assertModified(updated.modifiedCount, 'revoke qualification');
+      state.stage = 'mapping';
+      await this.releaseFaceForQualification(state, current._id, current.incarnation);
+      await this.bumpGuard(state, 'face');
+      state.stage = 'qualification';
+      await this.ensureSlotCount(state);
+      return this.managementSummary('REVOKE', { ...current, revokedAt: receivedAt, revocationReason: reason, updatedAt: now }, current.version + 1, null, false);
     }
     const displayName = requiredString(plan.displayName, 'displayName');
     const validFrom = new Date(requiredNumber(plan.validFromMs, 'validFromMs'));
     const validUntil = new Date(requiredNumber(plan.validUntilMs, 'validUntilMs'));
-    const currentMapping = state.mappings.has(current._id) ? state.mappings.get(current._id) ?? null : await this.mappingForQualification(current._id, state);
-    const mappingChanged = plan.faceMapping !== undefined;
-    if (mappingChanged && plan.faceMapping === null && currentMapping !== null) await this.releaseFaceForQualification(state, current._id, current.incarnation);
-    if (mappingChanged && plan.faceMapping !== null && plan.faceMapping !== undefined) {
-      if (currentMapping !== null && (currentMapping as FaceMappingSnapshot).mappingIncarnation !== undefined) await this.releaseFaceForQualification(state, current._id, current.incarnation);
+    const currentMapping = state.mappings.has(current._id)
+      ? state.mappings.get(current._id) ?? null
+      : await this.mappingForQualification(current._id, current.incarnation, state);
+    const currentSlot = await this.requireCollections().faceSlots.findOne({
+      qualificationId: current._id,
+      qualificationIncarnation: current.incarnation,
+    }, { session: state.session });
+    if ((currentMapping === null) !== (currentSlot === null) ||
+      (currentMapping !== null && (currentSlot === null ||
+        currentMapping.qualificationIncarnation !== currentSlot.qualificationIncarnation ||
+        currentMapping.mappingIncarnation !== currentSlot.slotIncarnation ||
+        currentMapping.version !== currentSlot.version))) {
+      throw new G04bTechnicalError('current face mapping snapshot is inconsistent with its qualification slot');
+    }
+    const mappingMode = plan.faceMappingMode ?? (plan.faceMapping === undefined ? 'KEEP' : plan.faceMapping === null ? 'REMOVE' : 'SET');
+    const sameRequestedFace = mappingMode === 'SET' && plan.faceMapping !== null && plan.faceMapping !== undefined &&
+      currentSlot !== null && currentSlot.provider === plan.faceMapping.provider && currentSlot.subject === plan.faceMapping.externalSubjectId;
+    const mappingChanged = mappingMode !== 'KEEP' && !sameRequestedFace;
+    if (mappingChanged && mappingMode === 'REMOVE' && currentMapping !== null) {
+      state.stage = 'mapping';
+      await this.releaseFaceForQualification(state, current._id, current.incarnation);
+    }
+    if (mappingChanged && mappingMode === 'SET' && plan.faceMapping !== null && plan.faceMapping !== undefined) {
+      state.stage = 'mapping';
+      if (currentMapping !== null) await this.releaseFaceForQualification(state, current._id, current.incarnation);
       await this.bindNewFace(state, current._id, current.incarnation, plan.faceMapping);
     }
+    state.stage = 'qualification';
     const updated = await this.requireCollections().qualifications.updateOne(expected, {
       $set: { displayName, validFrom, validUntil, updatedAt: now }, $inc: { version: 1 },
     }, { session: state.session });
     assertModified(updated.modifiedCount, 'update qualification');
     if (mappingChanged) await this.bumpGuard(state, 'face');
     await this.ensureSlotCount(state);
-    return this.managementSummary('UPDATE', { ...current, displayName, validFrom, validUntil }, current.version + 1, null);
+    const faceBound = mappingMode === 'KEEP'
+      ? currentMapping !== null
+      : mappingMode === 'SET' && plan.faceMapping !== null && plan.faceMapping !== undefined;
+    return this.managementSummary('UPDATE', { ...current, displayName, validFrom, validUntil, updatedAt: now }, current.version + 1, null, faceBound);
   }
 
   private async applyRecognitionResult(state: TransactionState, plan: RecognitionResultPlan): Promise<G04bRecognitionResult> {
@@ -560,7 +616,11 @@ export class G04bMongoPersistenceAdapter
       const current = state.qualifications.get(plan.qualificationId) ?? await this.requireCollections().qualifications.findOne({ _id: plan.qualificationId }, { session: state.session });
       if (current === null || current === undefined || current.incarnation !== plan.qualificationIncarnation || current.version !== plan.qualificationVersion) throw new G04bTechnicalError('recognition qualification guard failed');
       await this.applyQualificationEffect(state, current, plan, receivedAtMs);
-      if (plan.faceMappingEffect === 'RELEASE') await this.releaseFaceForQualification(state, current._id, current.incarnation);
+      if (plan.faceMappingEffect === 'RELEASE') {
+        state.stage = 'mapping';
+        await this.releaseFaceForQualification(state, current._id, current.incarnation);
+        state.stage = 'qualification';
+      }
     }
     if (plan.media === 'QR') await this.bumpGuard(state, 'qr');
     else await this.bumpGuard(state, 'face');
@@ -593,11 +653,19 @@ export class G04bMongoPersistenceAdapter
   }
 
   private async bindNewFace(state: TransactionState, qualificationId: string, qualificationIncarnation: string, mapping: Readonly<{ provider: string; externalSubjectId: string }>): Promise<void> {
-    const empty = await this.requireCollections().faceSlots.findOne({ qualificationId: null, qualificationIncarnation: null }, { session: state.session });
+    const faceSlots = this.requireCollections().faceSlots;
+    const bound = await faceSlots.findOne({ provider: mapping.provider, subject: mapping.externalSubjectId, qualificationId: { $type: 'string' } }, { session: state.session });
+    if (bound !== null) {
+      throw new G04bTransactionError({ kind: 'FACE_SUBJECT_ALREADY_BOUND', stage: 'mapping', code: 11000, labels: [] }, new Error('face subject is already bound'));
+    }
+    const empty = await faceSlots.findOne({ provider: mapping.provider, subject: mapping.externalSubjectId, qualificationId: null, qualificationIncarnation: null }, { session: state.session })
+      ?? await faceSlots.findOne({ qualificationId: null, qualificationIncarnation: null }, { session: state.session });
     if (empty === null) {
       const metadata = await this.readMetadata(state);
-      if (metadata.slotCount >= G04B_FACE_SLOT_CAPACITY) throw new G04bTechnicalError('FACE_SUBJECT_SLOT_CAPACITY_EXHAUSTED');
-      await this.requireCollections().faceSlots.insertOne({
+      if (metadata.slotCount >= G04B_FACE_SLOT_CAPACITY) {
+        throw new G04bTransactionError({ kind: 'FACE_SUBJECT_SLOT_CAPACITY_EXHAUSTED', stage: 'mapping', code: null, labels: [] }, new Error('face slot capacity exhausted'));
+      }
+      await faceSlots.insertOne({
         _id: randomUUID(), provider: mapping.provider, subject: mapping.externalSubjectId,
         qualificationId, qualificationIncarnation, slotIncarnation: randomUUID(), version: 0,
       }, { session: state.session });
@@ -605,7 +673,7 @@ export class G04bMongoPersistenceAdapter
       assertModified(countUpdate.modifiedCount, 'allocate face slot count');
       return;
     }
-    const updated = await this.requireCollections().faceSlots.updateOne({ _id: empty._id, qualificationId: null, qualificationIncarnation: null }, { $set: { provider: mapping.provider, subject: mapping.externalSubjectId, qualificationId, qualificationIncarnation }, $inc: { version: 1 } }, { session: state.session });
+    const updated = await faceSlots.updateOne({ _id: empty._id, qualificationId: null, qualificationIncarnation: null }, { $set: { provider: mapping.provider, subject: mapping.externalSubjectId, qualificationId, qualificationIncarnation }, $inc: { version: 1 } }, { session: state.session });
     assertModified(updated.modifiedCount, 'bind face slot');
   }
 
@@ -619,9 +687,9 @@ export class G04bMongoPersistenceAdapter
     assertModified(updated.modifiedCount, 'release face slot');
   }
 
-  private async mappingForQualification(qualificationId: string, state: TransactionState): Promise<FaceMappingSnapshot | null> {
+  private async mappingForQualification(qualificationId: string, qualificationIncarnation: string, state: TransactionState): Promise<FaceMappingSnapshot | null> {
     const slots = await this.requireCollections().faceSlots.find({ qualificationId: { $eq: qualificationId, $type: 'string' } }, { session: state.session }).toArray();
-    return mappingFromSlots(slots, qualificationId);
+    return mappingFromSlots(slots, qualificationId, qualificationIncarnation);
   }
 
   private async ensureSlotCount(state: TransactionState): Promise<void> {
@@ -643,8 +711,27 @@ export class G04bMongoPersistenceAdapter
     return metadata;
   }
 
-  private managementSummary(operation: 'UPDATE' | 'REVOKE', current: G04bQualificationDocument, version: number, qrToken: string | null): G04bManagementResult {
-    return { operation, qualificationId: current._id, incarnation: current.incarnation, version, summary: { qualificationId: current._id, displayName: current.displayName, validFromMs: current.validFrom.getTime(), validUntilMs: current.validUntil.getTime(), presence: current.presence }, qrToken };
+  private managementSummary(operation: 'CREATE' | 'UPDATE' | 'REVOKE' | 'EXPIRE', current: G04bQualificationDocument, version: number, qrToken: string | null, faceBound: boolean): G04bManagementResult {
+    return {
+      operation,
+      qualificationId: current._id,
+      incarnation: current.incarnation,
+      version,
+      summary: {
+        qualificationId: current._id,
+        displayName: current.displayName,
+        validFromMs: current.validFrom.getTime(),
+        validUntilMs: current.validUntil.getTime(),
+        presence: current.presence,
+        revokedAtMs: nullableTime(current.revokedAt),
+        revocationReason: current.revocationReason,
+        expiredTerminalAtMs: nullableTime(current.expiredTerminalAt),
+        faceBound,
+        createdAtMs: current.createdAt.getTime(),
+        updatedAtMs: current.updatedAt.getTime(),
+      },
+      qrToken,
+    };
   }
 
   private async begin(context: AccessScopeContext): Promise<TransactionState> {
@@ -706,11 +793,16 @@ export class G04bMongoPersistenceAdapter
 }
 
 export function classifyG04bTransactionError(error: unknown, stage: G04bTransactionStage): G04bErrorFacts {
-  const candidate = error as Partial<MongoError> & { code?: unknown; errorLabels?: unknown };
+  const candidate = error as Partial<MongoError> & { code?: unknown; errorLabels?: unknown; index?: unknown; keyPattern?: unknown };
   const code = typeof candidate.code === 'number' ? candidate.code : null;
   const labels = Array.isArray(candidate.errorLabels) ? candidate.errorLabels.filter((label): label is string => typeof label === 'string') : [];
   let kind: G04bTransactionErrorKind = 'OTHER';
-  if (code === 11000 || code === 11001) kind = 'DUPLICATE_KEY';
+  const keyPattern = candidate.keyPattern;
+  const faceSubjectKey = typeof keyPattern === 'object' && keyPattern !== null &&
+    Object.keys(keyPattern as Record<string, unknown>).sort().join(',') === 'provider,subject';
+  if ((code === 11000 || code === 11001) && stage === 'mapping' &&
+    (candidate.index === 'g04a_face_subject_unique_v1' || faceSubjectKey)) kind = 'FACE_SUBJECT_ALREADY_BOUND';
+  else if (code === 11000 || code === 11001) kind = 'DUPLICATE_KEY';
   else if (code === 112) kind = 'WRITE_CONFLICT';
   else if (code === 121) kind = 'SCHEMA_VALIDATION';
   else if (stage === 'commit' && code === 251) kind = 'UNKNOWN_COMMIT_RESULT';
@@ -720,25 +812,46 @@ export function classifyG04bTransactionError(error: unknown, stage: G04bTransact
   return { kind, stage, code, labels };
 }
 
-function toQualificationSnapshot(document: G04bQualificationDocument): QualificationSnapshot {
+function toQualificationSnapshot(document: G04bQualificationDocument): ManagementQualificationSnapshot {
   const state: QualificationState = {
     validFromMs: document.validFrom.getTime(), validUntilMs: document.validUntil.getTime(), presence: document.presence,
     enteredAtMs: nullableTime(document.enteredAt), exitedAtMs: nullableTime(document.exitedAt), revokedAtMs: nullableTime(document.revokedAt),
     revocationReason: document.revocationReason, expiredTerminalAtMs: nullableTime(document.expiredTerminalAt),
   };
   assertQualificationState(state);
-  return { qualificationId: document._id, incarnation: document.incarnation, version: document.version, state };
+  return {
+    qualificationId: document._id,
+    incarnation: document.incarnation,
+    version: document.version,
+    displayName: document.displayName,
+    createdAtMs: document.createdAt.getTime(),
+    updatedAtMs: document.updatedAt.getTime(),
+    state,
+  };
 }
 
-function mappingFromSlots(slots: readonly { qualificationId: string | null; qualificationIncarnation: string | null; slotIncarnation: string; version: number }[], qualificationId: string): FaceMappingSnapshot | null {
+function mappingFromSlots(
+  slots: readonly { qualificationId: string | null; qualificationIncarnation: string | null; slotIncarnation: string; version: number; provider: string; subject: string }[],
+  qualificationId: string,
+  expectedQualificationIncarnation?: string,
+): FaceMappingSnapshot | null {
   if (slots.length > 1) throw new G04bTechnicalError(`qualification ${qualificationId} has multiple face mappings`);
   const slot = slots[0];
+  if (slot !== undefined && slot.qualificationId !== null && slot.qualificationIncarnation !== null &&
+    expectedQualificationIncarnation !== undefined && slot.qualificationIncarnation !== expectedQualificationIncarnation) {
+    throw new G04bTechnicalError(`face mapping for qualification ${qualificationId} has a stale incarnation`);
+  }
   return slot === undefined || slot.qualificationId === null || slot.qualificationIncarnation === null ? null : {
     qualificationId: slot.qualificationId, qualificationIncarnation: slot.qualificationIncarnation, mappingIncarnation: slot.slotIncarnation, version: slot.version,
   };
 }
-function mappingFromSlot(slot: { qualificationId: string | null; qualificationIncarnation: string | null; slotIncarnation: string; version: number }): FaceMappingSnapshot | null {
-  return slot.qualificationId === null || slot.qualificationIncarnation === null ? null : { qualificationId: slot.qualificationId, qualificationIncarnation: slot.qualificationIncarnation, mappingIncarnation: slot.slotIncarnation, version: slot.version };
+function mappingFromSlot(slot: { qualificationId: string | null; qualificationIncarnation: string | null; slotIncarnation: string; version: number; provider: string; subject: string }): FaceMappingSnapshot | null {
+  return slot.qualificationId === null || slot.qualificationIncarnation === null ? null : {
+    qualificationId: slot.qualificationId,
+    qualificationIncarnation: slot.qualificationIncarnation,
+    mappingIncarnation: slot.slotIncarnation,
+    version: slot.version,
+  };
 }
 function redactCanonical(input: {
   readonly event: G04bEventDocument;
