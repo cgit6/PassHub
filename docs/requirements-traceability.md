@@ -1,6 +1,6 @@
 # PassHub 有效要求與實作追蹤矩陣
 
-規劃狀態：**D160封口；D161完成舊碼清除；D166改定正式Jest runner；G02–G09b已發行各自限定evidence，目前停止於G09b；下一合法gate G10a尚未開始**。工程狀態：**29條為V、107條仍U；G09b只將具完整直接證據的E04升為V**。整理日期：2026-09-28。
+規劃狀態：**D160封口；D161完成舊碼清除；D166改定正式Jest runner；G02–G09b已發行各自限定evidence，目前停止於G09b；D184已使下一合法gate G10a達到READY但尚未開始**。工程狀態：**29條為V、107條仍U；D184只有開發前契約，沒有新增工程證據或升格**。整理日期：2026-09-28。
 
 這份文件回答：「討論過的要求，實作時如何避免漏掉？」它不是已完成成果，也不授權開始重寫程式。
 
@@ -8,8 +8,8 @@
 
 ## 1. 來源、用法與完成定義
 
-- 來源：[業務範圍](business-scope.md)、[討論紀錄](discuss.md) D01–D183 及實作方案。衝突依明確採用的新版；D114預設接受是本輪授權，不捏造逐題答覆。候選／背景不當採用，官方來源不當工程證據。
-- 本稿整理前的來源 SHA-256：`discuss.md = 96a222bde5938d5aa9a5d250ea61b79a7916fd4b494d3f63f4ec49e833d87da7`；`business-scope.md = 4c8969d698c1e5f315d6ada2a7312482b5b6b01e6098f38004314874a280ca09`。後續更新須記錄基線變動，不以舊摘要覆蓋新決策。
+- 來源：[業務範圍](business-scope.md)、[討論紀錄](discuss.md) D01–D184 及實作方案。衝突依明確採用的新版；D114預設接受是本輪授權，不捏造逐題答覆。候選／背景不當採用，官方來源不當工程證據。
+- 本稿同步時的來源 SHA-256：`discuss.md = db4e46746d7175b4297bf0cbf1be99985d10710875668957e29322c5827a84ed`；`business-scope.md = e02ea25637a20e6cf5e2095b801b0950533bf5647ab9413b58c9205ce88f50bb`。後續更新須記錄基線變動，不以舊摘要覆蓋新決策。
 - 以下「責任」是行為邊界，實際接線／目錄規劃見D140–D141；G02–G08b只具各gate限定程式／測試符號與局部 evidence，其餘不能由規劃欄推定已建立。
 - 每列的 `T-要求ID` 是**預定驗收情境編號**，不是已存在的測試。欄內分號分開的情境都要覆蓋；必要時拆成多個實際測試。
 - 每列 `U` 代表「尚未由完整直接證據閉合」；可記錄已驗的局部切片，但不能因相似功能、測試名稱或部分情境直接標為完成。
@@ -294,7 +294,7 @@
 | P09 | D146–D147 bodyParser:false先接raw hook／同步準入及Auth provisional FIFO，D148分池與D151嚴格入口。 | L01–L02、L28–L34；G05a/G07a/G07b |
 | P10 | D149 registry4096無日間淘汰、epoch前置、writeRunClaim；ordinary restart同epoch關寫、只有限安全readonly回放，private fullreset重新開寫。 | L06、L13、L20–L21、L35；G05c/G11 |
 | P11 | D152三list固定keyset／route-filter-epoch cursor；D182固定SHA-256 fixture分布、十case first／fixed-next、四query索引前後各2,000次量測、40份真adapter explain、正確性gate及私有／公開證據分層。 | B44–B47、E04；G09a/G09b |
-| P12 | D153 request/operation/epoch/run allowlist、有限best-effort logs及私密read/socket，hold ACK前許可屏障／bounded current-last control回放。 | B40、B50、E05；G10a |
+| P12 | D153／D184 exact uniform allowlist、有限best-effort FS logs及私密LOGS_READ／socket，logical-step permission、hold ACK前屏障、drain及bounded current-last replay。 | B40、B50、L07–L12、L36、E05–E06、M05、M07；G10a（本關僅直接切片，跨G10b／G10c／G11者仍U） |
 | P13 | D148連線／reader/body/upload/validation/scrypt/query/canonical限額及fixed-minute rate、IP表256；D155信固定proxyIP/32。 | L01、L35、M04；G07a/G07b/G11 |
 | P14 | D154–D155單API/單成員replset/NGINX；systemd03臺北Persistent=false、host lock/marker、API與Mongo確停及恢復、六collection精確清理／runTicket分bootstrap-ready／failclosed。 | A18、M01、M05–M10；G11 |
 | P15 | D156未被D166取代的命令／期限／clean sourceCommit規則；D166正式Jest runner與其證據失效／重驗範圍；D157固定25STOP及maintenance600/1800。文件封口G00，完整release136證據G12；本輪只討論。 | E01–E09；G00/G01a–G12 |
@@ -317,7 +317,7 @@
 4. 獨立覆核者直接讀原始 D 段與測試，反查矩陣是否漏要求或誤採舊提案；不只閱讀實作者摘要。
 5. 交付差異與證據後停止。未達條件不進下一關，不因時間壓力靜默縮減要求；必要變更先與使用者確認。
 
-**當前停止點：G09b分case查詢效能 evidence 已通過；clean `dd0bc14`正式run使用固定10k／4k／40k fixture，完成10 cases×2 pages×2 states、4,000 raw及40 executionStats，correctness／hash／index inventory全綠。矩陣為29V／107U；本關只將E04升為V，E06維持U。20／20 p50及19／20 p95在本次AFTER較低，唯一`inside-all / first` p95約+3.6%；不是因果、SLA或容量宣稱。依25 STOP停止於G09b，下一合法gate G10a尚未開始。**
+**當前停止點：G09b分case查詢效能 evidence 已通過；clean `dd0bc14`正式run使用固定10k／4k／40k fixture，完成10 cases×2 pages×2 states、4,000 raw及40 executionStats，correctness／hash／index inventory全綠。矩陣為29V／107U；本關只將E04升為V，E06維持U。20／20 p50及19／20 p95在本次AFTER較低，唯一`inside-all / first` p95約+3.6%；不是因果、SLA或容量宣稱。依25 STOP停止於G09b；D184已使下一合法gate G10a達到READY但尚未開始，沒有新增工程證據。**
 
 ## 8. 追蹤矩陣建立時的文件覆核紀錄（歷史）
 
@@ -337,7 +337,7 @@
 - 僅更新業務文件及本矩陣的同步狀態／驗收前提；136 條要求的工程證據仍 U，15 項 P 清單不變。沒有開始重寫、執行測試、清除資料或重啟服務。
 
 
-## 10. D100–D183 細化要求與固定關卡（當前）
+## 10. D100–D184 細化要求與固定關卡（當前）
 
 下列不是另加產品功能；是既有要求的新契約／反例／驗收細化。原136 ID保留，T-ID可拆多個測試，**本節的子情境也必須映射到實際測試與結果**，不能只讓第2節同名test存在便宣稱覆蓋。
 
@@ -362,12 +362,31 @@
 | D182 | G09b deterministic SHA-256 fixture：10k Qualification精確五組、4k Face slots、40k Event精確五組；Qualification／INSIDE＋八Event cases，各first／oracle fixed-next及tie≥64。BEFORE／AFTER只切四query non-unique indexes，每格10 warmup／100 serial measured，共4,000 raw ns，nearest-rank p50／p95；真adapter command-monitoring＋executionStats 40份，主cursor／lookup分開。兩state均須通過hash／schema／reference／invariants／index inventory／oracle／輸出一致／sample／explain／environment；退步照報。Node24.21／Mongo8.0.32 rs0、1800秒、隔離DB、私有完整／公開去敏證據。只封閉開發前契約，不改API／production／Demo，不是工程證據。 | B44–B49、E04、E06、E09 |
 | D183 | G09b clean `dd0bc14`正式run通過：manifest 50 artifact hashes一致；10k／4k／40k固定fixture、10 cases first／next、BEFORE／AFTER correctness及四索引切換全綠；4,000 raw與40 executionStats完整。單次固定順序觀察20／20 p50、19／20 p95較低，`inside-all / first` p95約+3.6%；不宣稱因果／SLA。只升E04，E06維持U；STOP移至G09b，下一G10a。 | E04、E06、E09 |
 | D153 | allowlist request/operation/epoch/run/fixedcode、有限log/drop非必要Event；socket私密權限；hold同步屏障ACK/不撤issued；manual與maintenance獨立；current-last control replay有界/stale拒絕；late callback歸屬不凍permission。 | B40、B50、L07–L12、E05–E06、M05、M07 |
+| D184 | G10a exact開發前契約：manual阻擋所有READY、不預判rate／registry／ORIGINAL，release後FIFO start才分類；rate／JOINED／REPLAY／invalid為G08 0次，eligible ORIGINAL exact1；existing-only memory join／replay不註冊READY且繞manual。maintenance封閉new／READY／validation，query另線性化；drain只等完整issuedPersistence＋activeQueryReads。closed logger／LOGS_READ FD snapshot、完整AF_UNIX framing／JSON錯誤分層／watchdog／CLI、wire／response／nested snapshot均自足定義。只使G10a READY，不做G10b/G10c/G11，且不升V。 | B40、B50、L07–L12、L36、E05–E06、M05、M07 |
 | D154–D155 | LinuxCompose單API/單member非HA、NGINXpins/HTTPS前提/固定proxy/禁止upstreamretry；systemd03TaipeiPersistentfalse/hostlockmarker/drain30/API+Mongo確認stop/恢復PRIMARY/僅passhub_demo六collection deleteMany保indexes；seed不整庫原子/任何fail off；受控ticketbootstrap與ready分開/普通boot不接claim；proxy/Mongo/容器全表面去敏及秘密scan。 | A18、L11–L13、M01–M10、B50、E05–E09 |
 | D156–D157、D166 | Jest runner先編TS/真HTTPMongo/固定fault工具digestgate；期限fail非rollback/cleanup不蓋錯；正式clean sourceCommit/指紋及報告revision區分/變更失效/普通CI非完整證據；25STOP／每關報驗證再停。D166取代D156的Node unit runner選擇，其他證據規則保留。 | E01–E09、A01–A02、L07–L23、M05–M10 |
 
 ### 10.1 136 要求逐列gate索引
 
 下列gate是規劃責任／驗收落點，不是測試已存在或通過。每ID保留第2/3節全情境與第10節細化；G12再獨審全部要求與排除。實作時必填第7節帳本（code/test/command/result/commit/artifact/reviewer）。
+
+D184使G10a可開始，但不改下表的跨gate責任：B40的安全／技術紀錄由G10a提供日誌切片，完整錯誤／fault表面仍落G10b／G10c；B50、L07–L12、L36、E05、E06、M05及M07也包含fault、未知續辦、部署或維護責任。即使G10a所有限定測試通過，這些要求仍保持U，直到各列全部驗收情境取得直接證據；不得把`G10a`出現在gate欄解讀為本關自動升格。
+
+D184的permission oracle位於G07呼叫G08前。每writer最多invoke一次；manual gate阻擋所有READY writer，不預判rate／registry／ORIGINAL，release只wake一次並依FIFO start，executor內才可能rate reject、registry JOINED／REPLAY、invalid或ORIGINAL。前三類與invalid皆G08=0；只有通過rate／registry／prework terminal checks且取得ORIGINAL execution資格的eligible分支，才同步permission check→issuedPersistence++→invoke且exact once，完整work含scope open至finally，settle才--。existing-only registry join／replay是memory-only、不註冊READY且不受manual；maintenance仍依入口策略優先。maintenance分new直接503／KNOWN_NO_EFFECT／DB0／Event0、READY nominal prestart SETTLED KNOWN_NO_EFFECT、WAITING_VALIDATION maintenanceCanceled後收束但不得register／invoke，且不啟動新validation；recognition reservation／origin／validation／HTTP leases依生命期exact once釋放。query為check→activeQueryReads++→invoke零await，throw／finally--；drain只等完整G08 work與已invoke query，不等validation／Auth DB且不證DB isolation。canonical replay是memory-only、不受maintenance阻擋也不計數；unknown confirmation不在G10a。
+
+logger exact keys為`schemaVersion/timestamp/kind/code/requestUUID/operationUUID/datasetEpoch/processRunId/ownerRef/route/phase/round/group/budgetRemainingMs/budgetRemainingUnits/commandName/driverRequestId/requestControlId/controlId/revision`。所有record的datasetEpoch／processRunId必填canonical lowercase UUID；route=`MANAGEMENT_CREATE|MANAGEMENT_UPDATE|MANAGEMENT_REVOKE|RECOGNITION|QUERY|LOGIN|CONTROL|null`；phase=`INGRESS|ADMISSION|PERSISTENCE|DRIVER|CONTROL|null`；round1..3、group EXECUTION／CONFIRMATION、budgets 0..15000／0..7、driverRequestId nonnegative safe integer、revision canonical decimal，各可null。code恰為`REQUEST_ACCEPTED/OPERATION_REGISTERED/OPERATION_BLOCKED/BUSINESS_STEP_REGISTERED/BUSINESS_STEP_ISSUED/BUSINESS_STEP_SETTLED/DRIVER_STARTED/DRIVER_SUCCEEDED/DRIVER_FAILED/HOLD_ACKNOWLEDGED/RELEASE_ACKNOWLEDGED/DRAIN_STARTED/DRAINED/DRAIN_NOT_DRAINED/CONTROL_REJECTED`，commandName恰為`find/aggregate/insert/update/delete/findAndModify/commitTransaction/abortTransaction/endSessions`。REQUEST_ACCEPTED=RUNTIME／INGRESS，request必填、operation／owner null，route為業務／QUERY／LOGIN；OPERATION_*=RUNTIME／ADMISSION，request／operation／owner／業務route必填；BUSINESS_STEP_*=RUNTIME／PERSISTENCE且同前必填、四budget全null或全非null；DRIVER_*=DRIVER／DRIVER且command／driverRequestId必填，業務route另需request／operation／owner，QUERY／LOGIN則request必填而operation／owner null；CONTROL六碼的request／operation／owner／round／group／budgets／command／driverRequestId全null，route／phase為CONTROL，requestControlId／datasetEpoch／processRunId／revision必填，controlId只在五個非REJECTED code必填。所有未適用欄必為null。
+
+logger final UTF-8 JSON＋LF≤2048 bytes，async FIFO waiting queue=128；oversize、queue-full、serialize／open／write／rotate failure皆drop／飽和increment droppedCount並sticky `LOGGING_DEGRADED`，不改business outcome。absolute log dir須0700／same euid／non-symlink，active＋`.1`…`.4`五檔各≤10MiB、0600／regular／same euid；rotation與startup NDJSON／UTF-8／final-LF驗證fail closed且不自動修復。
+
+LOGS_READ收canonical lowercase operationUUID及optional safe-integer limit1..100（default20），無epoch／run／replay；依`.4`→active取latest limit再chronological，empty=`[]/false`、超過limit才truncated=true，每筆驗schema。healthy init在shared sink mutex建立active，reader／append／rotation共用該mutex且acquisition可Abort；鎖內readonly open並lstat/fstat核same inode／regular／owner／0600與snapshot lengths，鎖外分塊讀open FD；archives ENOENT skip但init後active必有，其他／parse／I/O錯誤無partial，finally close全部FD，late reader無effect且mutex可再進。
+
+control只用AF_UNIX且禁止TCP；socket只依filesystem DAC，CLI須same euid。不存在dir以existing real absolute direct parent、`realpath(parent)==parent`、nonrecursive mkdir0700建立，EEXIST重驗；final dir real／non-symlink／same-euid／0700，socket direct child、fixed basename非`.`／`..`、0600；失敗startup fail且不改其他path。existing socket symlink／non-socket／wrong owner fail；same-owner先connect，active fail，只在ECONNREFUSED且dev/ino二次相同才unlink；shutdown只unlink自身inode。one connection one request/response then close；strict UTF-8/noBOM、half-close EOF後dispatch、exact one LF at final byte、no trailing/second LF、request including LF≤4096。只有fatal UTF-8／BOM、超過4096、EOF前2秒timeout、LF非唯一final byte／second LF／trailing及第9 active屬transport／framing錯誤，destroy noresponse/effect0，max8。frame合法後JSON syntax、root非plain object或array、任意深度duplicate、unknown／extra／missing key、wrong type/value皆回INVALID_REQUEST；duplicate須在`JSON.parse`覆寫前偵測。root可安全解析且有唯一canonical requestControlId才於error保留，否則null。response complete single NDJSON、exact one LF、≤256KiB。
+
+processing watchdog為STATUS／HOLD／RELEASE／LOGS_READ 2秒、DRAIN `timeoutMs+1000ms`；read-only timeout回LOG_READ_UNAVAILABLE或INTERNAL_UNAVAILABLE，mutation prechange不占replay、postchange先cache INTERNAL且不rollback，late task無effect；write另2秒，disconnect不rollback，partial拒。CLI total非DRAIN=8000ms、DRAIN=`timeoutMs+7000ms`，嚴格大於server acquisition 2秒＋processing（2秒或`timeoutMs+1000ms`）＋write 2秒，另留2秒餘裕。exit0 stdout完整success NDJSON／stderr empty；exit2 stdout完整server error NDJSON／stderr exact server code＋LF；exit3 stdout empty，且依優先序只輸出一個literal＋LF：完整候選frame但response framing／UTF-8／JSON／schema錯為`CONTROL_PROTOCOL_ERROR`；任一terminal（deadline／EOF／socket error）時received bytes>0而未取得complete valid response＋EOF為`CONTROL_RESPONSE_PARTIAL`；received bytes=0且deadline為`CONTROL_REQUEST_TIMEOUT`；received bytes=0且已connect後socket／write error為`CONTROL_TRANSPORT_ERROR`；未connect為`CONTROL_CONNECT_FAILED`。
+
+wire `v="c1"`且UUID全canonical lowercase；frame合法後的JSON／DTO錯誤回INVALID_REQUEST，well-formed epoch／run mismatch才STALE_EPOCH／STALE_RUN。STATUS exact `v/requestControlId/command/epoch/run`，HOLD再加expectedRevision，RELEASE再加expectedRevision/controlId，DRAIN再加expectedRevision/timeoutMs，LOGS_READ exact `v/requestControlId/command/operationUUID[/limit]`且豁免epoch/run/replay。expectedRevision=`0|[1-9][0-9]*`，timeoutMs safe integer1..30000，limit safe integer1..100。success exact 10 keys=`v/requestControlId/ok/command/outcome/revision/controlId/snapshot/records/truncated`，outcomes恰`STATUS|HELD|RELEASED|DRAINED|NOT_DRAINED|LOGS_READ`；revision全success必填，controlId只在HOLD新ID／RELEASE匹配ID／DRAIN maintenance ID非null，snapshot只在四個非LOGS_READ命令非null，records／truncated只在LOGS_READ非null。error exact `v/requestControlId/ok=false/code`，root安全解析且唯一canonical ID時保留，否則null，codes恰`INVALID_REQUEST|STALE_EPOCH|STALE_RUN|STALE_REVISION|REQUEST_CONTROL_CONFLICT|CONTROL_BUSY|MANUAL_HOLD_EXISTS|NO_MANUAL_HOLD|CONTROL_ID_MISMATCH|MAINTENANCE_HOLD_EXISTS|LOG_READ_UNAVAILABLE|INTERNAL_UNAVAILABLE`。snapshot exact keys=`epoch/run/revision/phase/manual/maintenance/writers/issuedPersistence/activeQueryReads/registryUnknown/logging`，phase恰`RUNNING|MANUAL_HOLD|MAINTENANCE_DRAINING|MAINTENANCE_HELD|MANUAL_AND_MAINTENANCE_DRAINING|MANUAL_AND_MAINTENANCE_HELD`；manual exact own keys=`{active:boolean,controlId:canonical-lowercase-UUID|null}`且no extra，active iff ID；maintenance exact own keys=`{active:boolean,controlId:canonical-lowercase-UUID|null,outcome:null|WAITING|DRAINED|NOT_DRAINED|INTERNAL_UNAVAILABLE}`且no extra，inactive iff ID/outcome null、active iff ID及outcome非null、WAITING iff draining、terminal iff held；writers exact=`provisional/queued/running/blocked/unknown`，manual下所有READY仍queued，G08 invoke後才running／issuedPersistence。這些只是開發前驗收定義，不是工程證據。
+
+正式驗收為`npm run test:g10a`；unit每case10秒／total60秒，socket／integration每case60秒／total300秒，Node24.21與MongoDB8.0.32單成員rs0。PC oracle必驗manual阻擋所有READY且不預判，release後FIFO start才分類；eligible ORIGINAL G08 exact1，rate、JOINED／REPLAY、invalid G08 0次；existing-only memory join／replay不註冊READY並繞manual，maintenance仍按入口處理。另驗full-work drain、late wire、maintenance三生命期、late Auth DB與query linearization；fatal framing和合法frame後JSON／DTO錯誤分層、任意深度duplicate、requestControlId保留規則、nested snapshot exact own keys／no-extra；slow LOGS_READ abort後FD全close／mutex canary；socket path／watchdog；CLI 8000ms及`timeoutMs+7000ms`邊界完成與五個exit3分類優先序。這些只是開發前驗收定義，不是工程證據。
 
 | 要求ID | 固定gate（規劃對應） |
 |---|---|
@@ -410,7 +429,7 @@
 | B37 | G04b、G05a、G05b、G07b、G08b、G10b、G10c |
 | B38 | G04b、G05a、G05b、G07b、G08b、G10b、G10c |
 | B39 | G04b、G05a、G05b、G07b、G08b、G10b、G10c |
-| B40 | G04b、G05a、G05b、G07b、G08b、G10b、G10c |
+| B40 | G04b、G05a、G05b、G07b、G08b、G10a、G10b、G10c |
 | B41 | G04b、G05a、G05b、G07b、G08b、G10b、G10c |
 | B42 | G04b、G05a、G05b、G07b、G08b、G10b、G10c |
 | B43 | G04b、G05a、G05b、G07b、G08b、G10b、G10c |
@@ -481,9 +500,9 @@
 | M02 | G11、G12 |
 | M03 | G11、G12 |
 | M04 | G07a、G07b、G11 |
-| M05 | G11 |
+| M05 | G10a、G11 |
 | M06 | G11 |
-| M07 | G11 |
+| M07 | G10a、G11 |
 | M08 | G11 |
 | M09 | G11 |
 | M10 | G11 |
