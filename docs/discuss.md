@@ -23,7 +23,7 @@ aliases:
   - "PassHub 求職作品範圍決策"
   - "PassHub 架構辯論"
 created: "2026-09-15"
-updated: "2026-09-27"
+updated: "2026-09-28"
 ---
 
 # PassHub v1 業務邊界與架構討論紀錄
@@ -31,18 +31,18 @@ updated: "2026-09-27"
 ## 快速檢索卡
 
 - 核心問題：在小型訪客資格／模擬辨識決策業務上，形成合理、模組化、可驗證的Node.js/TypeScript架構與逐關方案；不以兩天時限取代品質論證。
-- 當前結論：D160完成規劃封口；D161完成舊碼清除；D163–D179保存G02–G08b各自限定證據；D180／D181分別封閉並驗收G09a；D182已封閉G09b效能實驗的開發前契約。正式工程仍停止於G09a，G09b僅READY且尚未開始；矩陣維持28V／108U，完整v1未完成。
+- 當前結論：D160完成規劃封口；D161完成舊碼清除；D163–D179保存G02–G08b各自限定證據；D180／D181分別封閉並驗收G09a；D182／D183分別封閉並驗收G09b。正式工程停止於G09b，下一合法gate G10a尚未開始；矩陣為29V／107U，完整v1未完成。
 - 關鍵爭點：D129原生中止兩送有界組預扣不退、跨窗口局部例外；D130較早確認起點／D131七格；D143 Face反向unique同txn替換必须G04a先真測。D149同epoch普通restart關寫是明示可用性代價，不能依memory空接管。
 - 適用於：D01–D165有效採用／修正、獨立角色公開論點、官方查證及剩餘gate風險。採Nest預設Express/strictTS/官方driver/單API/單Mongo member replica set，非無框架或HA；25STOP見D157及實作方案。
 - 不適用於：把歷史候選／官方語法／manifest／獨立唯讀實驗當PassHub已完成成果。D117 JSON v2已取代binary v1，D130永久終局候選未採，D89安全條件續辦仍有效；D161只有A01為V。
-- 待驗證：G09b及其後gate。G09a已證五條安全查詢、read-observation lease、keyset、AND filters、去敏投影與真Mongo讀取；仍未驗G09b效能、G10 driver wire／native清理／真回程loss／logs／hold、G11部署及完整release。
+- 待驗證：G10及其後gate。G09a已證安全查詢，G09b已完成固定fixture、4,000 raw及40 executionStats限定實驗；仍未驗G10 driver wire／native清理／真回程loss／logs／hold、G11部署及完整release。
 - 實作者入口：[實作方案](implementation-plan.md)，再讀[136要求矩陣](requirements-traceability.md)及[業務規格](business-scope.md)，並回查對應D原文。未來每子關報實際證據後STOP，D114不授權未來不停實作。
 
 ## 閱讀狀態與階段界線
 
-- 最新狀態：D181記錄G09a安全查詢／keyset限定gate已通過並停止於G09a；D182只使下一合法gate G09b達到READY，尚未開始。G09b perf、G10 fault／control／logs、G11 deployment及完整v1仍未完成。矩陣為28V／108U。
+- 最新狀態：D183記錄G09b限定gate已通過並停止於G09b；下一合法gate G10a尚未開始。G10 fault／control／logs、G11 deployment及完整v1仍未完成。矩陣為29V／107U。
 - D01–D35 及所有較早摘要／交接保留歷史；其中「K1尚未同步」「尚未開始第二階段」「API/schema未定」不代表當前狀態。最新有效版本由D117/119/122/125/129–139/140–157及後續明確覆核修正判定，歷史block不回寫。下方回溯狀態描述只對當時有效，不能用來覆蓋新版。
-- 文件整體settled代表有效規劃已採用；D161留下舊碼處理證據，D163–D179留下G02–G08b各自限定證據，D180留下G09a開發前契約，D181留下G09a安全查詢／真Mongo讀取限定證據，D182留下G09b開發前實驗契約。partially-sourced仍含專案取捨、官方查證與未實測組合；上述限定gates不代表G09b效能、G10 fault／control／logs、G11部署或其餘108要求通過。
+- 文件整體settled代表有效規劃已採用；D161留下舊碼處理證據，D163–D179留下G02–G08b各自限定證據，D180／D181留下G09a契約及證據，D182／D183留下G09b契約及證據。partially-sourced仍含專案取捨、官方查證與未實測組合；上述限定gates不代表G10 fault／control／logs、G11部署或其餘107要求通過。
 - 「使用者已接受」與「辯論暫定」逐 block 區分。授權保存辯論不等於確認候選架構，也不等於授權重寫程式。
 - D36–D41 為 2026-09-16 回溯追加；統一使用建檔時間，不捏造各輪原始時間。
 - D42–D46 為 2026-09-17 回溯追加；統一記錄保存時間，不捏造各輪原始時間。公開程式查核另保留查詢日期及固定 commit。
@@ -3356,3 +3356,13 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - 索引與explain：BEFORE只drop四個具名query non-unique indexes，AFTER按既定keys精確重建；unique／partial／comparison／user／source／`_id`均不動。同DB／fixture、各階段clear plan cache，不用hint／`allowDiskUse`。command-monitoring client捕捉真adapter aggregate後取`executionStats`，每state／case／page一份共40份，主cursor與Face lookup分開保存及摘要。
 - gate與證據：兩個index states均須通過counts、fixture hash、schema／reference／Event invariants、index inventory、10 case first／next exact IDs、tie無gap／duplicate、before-after outputs一致、sample count、explain及environment；任一缺口即STOP。正式命令`npm run test:perf -- --gate g09b`，Node 24.21／MongoDB 8.0.32 `rs0`、isolated perf DB、1800秒；cleanup錯誤不得蓋原錯。私有`output/evidence/g09b/<runId>/`留完整manifest／fixture／raw／summary／explains／environment／indexes／correctness；tracked `docs/evidence/g09b/`只留report、summary、fixture-manifest與explain-summary。
 - 邊界：G09b不得改業務API、production查詢語意或公開Demo，不做HTTP/Auth/read lease效能宣稱；G10的fault／logs／private control、G11 deployment及G12 release均不在本關。D182只修改docs且不升格要求；下一步可開始G09b，但仍須依25 STOP在該gate提交實際證據後停止。
+
+### D183｜G09b 分 case 查詢效能限定 gate 通過並停止
+
+- 日期：2026-09-28；狀態：production architecture與formal tester均PASS；PM再依D182核對clean正式run、manifest及全部artifact hashes。G09b限定gate PASS，依25 STOP停止於G09b；下一合法gate為G10a，尚未開始。
+- 正式證據：source commit `dd0bc1455cbb5698181960f4d1749c2230ca209a`且`sourceDirty=false`；正式run為`output/evidence/g09b/g09b-b2-1669530-1790525819869/`，manifest SHA-256 `618a074e5e58c94b90ed5d98791ca47964d77e6b74a409b561a64b5953a52ada`。manifest所列50個artifact由PM重算全部一致；公開精簡證據見`docs/evidence/g09b/report.md`及同目錄三份JSON，不追蹤raw／完整explain。
+- correctness與索引：fixture／readback hash同為`c86eb1…de48`；10k Qualification、4k Face slot、40k Event及10 cases exact counts成立。BEFORE／AFTER的schema／reference／Event invariants、oracle first／next IDs、tie≥64、無gap／duplicate、輸出一致及index inventories全綠；BEFORE只缺四個query non-unique indexes，AFTER精確恢復。
+- 量測與explain：10 cases×first／next×BEFORE／AFTER共40 cells；每格10 warmup／100 measured，合計4,000 raw，串行、不刪outlier。40／40真adapter aggregate各有一個有效command-monitoring capture及executionStats，共40個capture IDs與20個SHA-256 command identities；相同case／page在BEFORE／AFTER刻意使用同一查詢命令。40份皆含主cursor摘要，其中8份另含Face lookup摘要。
+- 結果與限制：本次AFTER有20／20 p50及19／20 p95較低；唯一p95例外為`inside-all / first`約+3.6%。BEFORE固定先跑，單一WSL2主機與單成員Mongo環境可能受cache／暖機／順序影響；結果不是索引單因果、SLA、容量或跨環境保證。
+- 需求裁定：136個unique requirement IDs無重複；只將完整直接支持的E04由U升V，矩陣由28V／108U成為29V／107U。E06仍含完整規則／權限／秘密／冪等／並行／fault／budget／維護，維持U。
+- 停止邊界：G10 transport-loss／fault／private control／logs、G11 maintenance／deployment、OpenAPI、CI、公開Demo與G12完整release未完成。D183只封存docs／公開摘要，不修改production、tests、scripts或package。

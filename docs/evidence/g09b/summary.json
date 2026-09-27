@@ -1,0 +1,346 @@
+{
+  "format": "g09b-public-summary-v1",
+  "runId": "g09b-b2-1669530-1790525819869",
+  "sourceCommit": "dd0bc1455cbb5698181960f4d1749c2230ca209a",
+  "sourceDirty": false,
+  "fixtureHash": "c86eb1cdd84c5b7ce204bd2d24f96af37d32f67f5e8fba06f8f0f28848f4de48",
+  "manifestHash": "618a074e5e58c94b90ed5d98791ca47964d77e6b74a409b561a64b5953a52ada",
+  "rawSamples": 4000,
+  "cells": 40,
+  "warmupsPerCell": 10,
+  "measuredPerCell": 100,
+  "p50LowerCells": 20,
+  "p95LowerCells": 19,
+  "p95HigherCells": [
+    {
+      "caseId": "inside-all",
+      "page": "first",
+      "beforeNs": 89430377,
+      "afterNs": 92657837,
+      "deltaPercent": 3.6
+    }
+  ],
+  "note": "BEFORE ran before AFTER on one WSL2 host. This is an observed result, not a causal index claim or SLA. Full raw samples remain in the ignored formal-run directory.",
+  "pairedCells": [
+    {
+      "caseId": "qualifications-all",
+      "page": "first",
+      "before": {
+        "p50Ns": 122312643,
+        "p95Ns": 157654791
+      },
+      "after": {
+        "p50Ns": 112296287,
+        "p95Ns": 138603213
+      },
+      "deltaPercent": {
+        "p50": -8.2,
+        "p95": -12.1
+      }
+    },
+    {
+      "caseId": "qualifications-all",
+      "page": "next",
+      "before": {
+        "p50Ns": 122729616,
+        "p95Ns": 154743463
+      },
+      "after": {
+        "p50Ns": 112841077,
+        "p95Ns": 140315931
+      },
+      "deltaPercent": {
+        "p50": -8.1,
+        "p95": -9.3
+      }
+    },
+    {
+      "caseId": "inside-all",
+      "page": "first",
+      "before": {
+        "p50Ns": 73352677,
+        "p95Ns": 89430377
+      },
+      "after": {
+        "p50Ns": 69541898,
+        "p95Ns": 92657837
+      },
+      "deltaPercent": {
+        "p50": -5.2,
+        "p95": 3.6
+      }
+    },
+    {
+      "caseId": "inside-all",
+      "page": "next",
+      "before": {
+        "p50Ns": 86606540,
+        "p95Ns": 106052367
+      },
+      "after": {
+        "p50Ns": 75096544,
+        "p95Ns": 99103589
+      },
+      "deltaPercent": {
+        "p50": -13.3,
+        "p95": -6.6
+      }
+    },
+    {
+      "caseId": "events-all",
+      "page": "first",
+      "before": {
+        "p50Ns": 26040356,
+        "p95Ns": 31482340
+      },
+      "after": {
+        "p50Ns": 1001302,
+        "p95Ns": 2083693
+      },
+      "deltaPercent": {
+        "p50": -96.2,
+        "p95": -93.4
+      }
+    },
+    {
+      "caseId": "events-all",
+      "page": "next",
+      "before": {
+        "p50Ns": 39527023,
+        "p95Ns": 48105240
+      },
+      "after": {
+        "p50Ns": 1105666,
+        "p95Ns": 1764210
+      },
+      "deltaPercent": {
+        "p50": -97.2,
+        "p95": -96.3
+      }
+    },
+    {
+      "caseId": "events-hot",
+      "page": "first",
+      "before": {
+        "p50Ns": 20915879,
+        "p95Ns": 29226587
+      },
+      "after": {
+        "p50Ns": 1088601,
+        "p95Ns": 2044342
+      },
+      "deltaPercent": {
+        "p50": -94.8,
+        "p95": -93
+      }
+    },
+    {
+      "caseId": "events-hot",
+      "page": "next",
+      "before": {
+        "p50Ns": 33299730,
+        "p95Ns": 39693779
+      },
+      "after": {
+        "p50Ns": 1288180,
+        "p95Ns": 2193127
+      },
+      "deltaPercent": {
+        "p50": -96.1,
+        "p95": -94.5
+      }
+    },
+    {
+      "caseId": "events-rejected",
+      "page": "first",
+      "before": {
+        "p50Ns": 25594441,
+        "p95Ns": 32126410
+      },
+      "after": {
+        "p50Ns": 1001711,
+        "p95Ns": 2003841
+      },
+      "deltaPercent": {
+        "p50": -96.1,
+        "p95": -93.8
+      }
+    },
+    {
+      "caseId": "events-rejected",
+      "page": "next",
+      "before": {
+        "p50Ns": 39552867,
+        "p95Ns": 53897221
+      },
+      "after": {
+        "p50Ns": 1274689,
+        "p95Ns": 2375575
+      },
+      "deltaPercent": {
+        "p50": -96.8,
+        "p95": -95.6
+      }
+    },
+    {
+      "caseId": "events-expired",
+      "page": "first",
+      "before": {
+        "p50Ns": 22274273,
+        "p95Ns": 26661305
+      },
+      "after": {
+        "p50Ns": 1318420,
+        "p95Ns": 2727858
+      },
+      "deltaPercent": {
+        "p50": -94.1,
+        "p95": -89.8
+      }
+    },
+    {
+      "caseId": "events-expired",
+      "page": "next",
+      "before": {
+        "p50Ns": 34334483,
+        "p95Ns": 41215745
+      },
+      "after": {
+        "p50Ns": 1325691,
+        "p95Ns": 2616919
+      },
+      "deltaPercent": {
+        "p50": -96.1,
+        "p95": -93.7
+      }
+    },
+    {
+      "caseId": "events-hot-rejected",
+      "page": "first",
+      "before": {
+        "p50Ns": 22563417,
+        "p95Ns": 27049661
+      },
+      "after": {
+        "p50Ns": 1356570,
+        "p95Ns": 2519718
+      },
+      "deltaPercent": {
+        "p50": -94,
+        "p95": -90.7
+      }
+    },
+    {
+      "caseId": "events-hot-rejected",
+      "page": "next",
+      "before": {
+        "p50Ns": 35104038,
+        "p95Ns": 46493051
+      },
+      "after": {
+        "p50Ns": 1358391,
+        "p95Ns": 2841919
+      },
+      "deltaPercent": {
+        "p50": -96.1,
+        "p95": -93.9
+      }
+    },
+    {
+      "caseId": "events-hot-expired",
+      "page": "first",
+      "before": {
+        "p50Ns": 20389106,
+        "p95Ns": 27323758
+      },
+      "after": {
+        "p50Ns": 1290469,
+        "p95Ns": 2609664
+      },
+      "deltaPercent": {
+        "p50": -93.7,
+        "p95": -90.4
+      }
+    },
+    {
+      "caseId": "events-hot-expired",
+      "page": "next",
+      "before": {
+        "p50Ns": 33585037,
+        "p95Ns": 41190117
+      },
+      "after": {
+        "p50Ns": 1213095,
+        "p95Ns": 2407881
+      },
+      "deltaPercent": {
+        "p50": -96.4,
+        "p95": -94.2
+      }
+    },
+    {
+      "caseId": "events-rejected-expired",
+      "page": "first",
+      "before": {
+        "p50Ns": 27062469,
+        "p95Ns": 32262382
+      },
+      "after": {
+        "p50Ns": 1028103,
+        "p95Ns": 2327987
+      },
+      "deltaPercent": {
+        "p50": -96.2,
+        "p95": -92.8
+      }
+    },
+    {
+      "caseId": "events-rejected-expired",
+      "page": "next",
+      "before": {
+        "p50Ns": 38308257,
+        "p95Ns": 52129857
+      },
+      "after": {
+        "p50Ns": 1160951,
+        "p95Ns": 2464705
+      },
+      "deltaPercent": {
+        "p50": -97,
+        "p95": -95.3
+      }
+    },
+    {
+      "caseId": "events-hot-rejected-expired",
+      "page": "first",
+      "before": {
+        "p50Ns": 22651014,
+        "p95Ns": 28473738
+      },
+      "after": {
+        "p50Ns": 1047192,
+        "p95Ns": 2095477
+      },
+      "deltaPercent": {
+        "p50": -95.4,
+        "p95": -92.6
+      }
+    },
+    {
+      "caseId": "events-hot-rejected-expired",
+      "page": "next",
+      "before": {
+        "p50Ns": 35465907,
+        "p95Ns": 42503451
+      },
+      "after": {
+        "p50Ns": 1360092,
+        "p95Ns": 3626458
+      },
+      "deltaPercent": {
+        "p50": -96.2,
+        "p95": -91.5
+      }
+    }
+  ]
+}

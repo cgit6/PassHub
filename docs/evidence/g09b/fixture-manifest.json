@@ -1,0 +1,53 @@
+{
+  "format": "g09b-public-fixture-manifest-v1",
+  "seed": "passhub-g09b-v1-20260927",
+  "fixtureHash": "c86eb1cdd84c5b7ce204bd2d24f96af37d32f67f5e8fba06f8f0f28848f4de48",
+  "counts": {
+    "qualifications": 10000,
+    "faceSlots": 4000,
+    "events": 40000,
+    "users": 2,
+    "sources": 2,
+    "metadata": 1
+  },
+  "qualificationGroups": {
+    "activeNotEntered": 4000,
+    "revokedNotEntered": 1000,
+    "expiredTerminalNotEntered": 1000,
+    "inside": 2000,
+    "exited": 2000
+  },
+  "faceSlotGroups": {
+    "activeNotEntered": 2000,
+    "inside": 2000,
+    "slotCount": 4000
+  },
+  "eventGroups": {
+    "hotRejectedExpired": 5000,
+    "hotAccepted": 5000,
+    "otherRejectedExpired": 10000,
+    "otherAccepted": 10000,
+    "nullFaceUnknown": 10000
+  },
+  "cases": [
+    { "id": "qualifications-all", "expectedMatchCount": 10000 },
+    { "id": "inside-all", "expectedMatchCount": 2000 },
+    { "id": "events-all", "expectedMatchCount": 40000 },
+    { "id": "events-hot", "expectedMatchCount": 10000 },
+    { "id": "events-rejected", "expectedMatchCount": 25000 },
+    { "id": "events-expired", "expectedMatchCount": 15000 },
+    { "id": "events-hot-rejected", "expectedMatchCount": 5000 },
+    { "id": "events-hot-expired", "expectedMatchCount": 5000 },
+    { "id": "events-rejected-expired", "expectedMatchCount": 15000 },
+    { "id": "events-hot-rejected-expired", "expectedMatchCount": 5000 }
+  ],
+  "oracle": {
+    "pageLimit": 20,
+    "fetchLimit": 21,
+    "pagesPerCase": 2,
+    "minimumTieBucket": 64,
+    "beforeAfterEqual": true,
+    "noPageGaps": true,
+    "noPageDuplicates": true
+  }
+}

@@ -1,9 +1,9 @@
 # PassHub v1 業務邊界規格
 
-- 文件狀態：業務與實作規劃已收斂；G02–G03c、窄 G04a、G04b、G05a–G05c、G06a–G06b、G07a–G07b、G08a管理鏈、G08b辨識鏈及G09a安全查詢已有各自限定工程證據，依25 STOP停止於G09a；D182已使G09b開發前契約達到READY，但尚未開始，完整v1工程驗證仍未完成
-- 更新日期：2026-09-27
+- 文件狀態：業務與實作規劃已收斂；G02–G09b已有各自限定工程證據，依25 STOP停止於G09b；下一合法gate G10a尚未開始，完整v1工程驗證仍未完成
+- 更新日期：2026-09-28
 - 適用版本：PassHub v1
-- 文件目的：以 D01–D35 為業務底稿，同步至 D182 的有效修正；實作細節及逐關驗收集中在 implementation-plan.md，不把官方查證、歷史候選或待做測試當成工程成果
+- 文件目的：以 D01–D35 為業務底稿，同步至 D183 的有效修正；實作細節及逐關驗收集中在 implementation-plan.md，不把官方查證、歷史候選或待做測試當成工程成果
 
 原始依據見[討論紀錄](./discuss.md)，逐項實作及驗收對應見[要求追蹤矩陣](./requirements-traceability.md)。本文件的「已確認」是規格採用狀態，不代表程式／測試已完成。
 
@@ -426,7 +426,7 @@ Source＋external event ID 使用資料庫唯一約束。相同內容採 D117 �
 - 不淘汰已登記準時項騰槽；HTTP 逾時、斷線、結果未知不釋放原項／仍在工作驗證。競爭下取得、轉交、歸還各只能按實際生命期正確執行。
 - 原項 32 不是並行寫入數，仍單 writer FIFO。其他資源初值依 D148–D149：connection 64、raw reader 16、body 16KiB／上傳絕對五秒、scrypt 1無queue、queryDB 1、canonical回放 2、原確認 1；所有工作真收束才返自己的額度。
 
-G07b已對內部技術composition驗證同步準入、同鍵join／replay／conflict、existing-only不升新、分池與部分滿載／釋放邊界；G08a另驗Operator-only管理入口、嚴格管理DTO、create／PATCH／revoke、QR只在建立回覆、Face綁定／釋放／容量與真Mongo原子保存，以及管理寫入沿用FIFO receivedAt；G08b再完成限定的QR／Face／UNKNOWN辨識鏈與真Mongo共同保存證據。G09a已驗五條安全查詢、read-observation lease、keyset、去敏投影及真HTTP／真Mongo查詢；尚未包含G09b效能、G10 transport fault／logs／control、G11維護部署或完整v1。
+G07b已對內部技術composition驗證同步準入、同鍵join／replay／conflict、existing-only不升新、分池與部分滿載／釋放邊界；G08a另驗Operator-only管理入口、嚴格管理DTO、create／PATCH／revoke、QR只在建立回覆、Face綁定／釋放／容量與真Mongo原子保存，以及管理寫入沿用FIFO receivedAt；G08b再完成限定的QR／Face／UNKNOWN辨識鏈與真Mongo共同保存證據。G09a已驗五條安全查詢、read-observation lease、keyset、去敏投影及真HTTP／真Mongo查詢；G09b已完成D182固定fixture、索引前後4,000筆raw及40份executionStats的限定實驗。尚未包含G10 transport fault／logs／control、G11維護部署或完整v1。
 
 ## 8. 最小營運查詢
 
@@ -739,7 +739,7 @@ G09b只量測既有production Mongo query adapter，不修改業務API、查詢�
 - command-monitoring client捕捉production adapter真正送出的aggregate，再以`executionStats`取得每個index state／case／page一份explain，共40份；主cursor與Face lookup分開呈現。私有證據保存sanitized完整explain，公開證據只保存去敏摘要。
 - BEFORE與AFTER都必須通過counts／hash／schema／reference／Event跨欄位不變量、index inventory、10 cases first／next exact IDs、tie無gap／duplicate、兩階段輸出一致、sample count、explain及環境核對。任何正確性或證據缺口均使gate停止；索引後較慢、無改善或`COLLSCAN`則如實報告，不單獨構成gate失敗，也不得解鎖改善宣稱。
 
-私有run輸出預定於`output/evidence/g09b/<runId>/`保存manifest、fixture summary、raw JSONL、summary、完整explains、environment、兩階段index catalogs及correctness結果；tracked公開輸出預定為`docs/evidence/g09b/report.md`、`summary.json`、`fixture-manifest.json`及`explain-summary.json`。這些皆為G09b完成後的預期證據，目前尚不存在；cleanup失敗須另行回報，不能覆蓋原始測試錯誤。
+正式私有run `output/evidence/g09b/g09b-b2-1669530-1790525819869/`已保存manifest、fixture、raw JSONL、summary、40份完整explains、environment、兩階段index inventories及correctness，並由`.gitignore`排除；manifest SHA-256為`618a074e5e58c94b90ed5d98791ca47964d77e6b74a409b561a64b5953a52ada`。tracked公開證據為[報告](evidence/g09b/report.md)、[summary](evidence/g09b/summary.json)、[fixture manifest](evidence/g09b/fixture-manifest.json)及[explain summary](evidence/g09b/explain-summary.json)，不追蹤raw或完整explain。
 - D153結構化allowlist與request／operationUUID、有限日志輪替及私密查詢，配合D155代理／Mongo／容器輸出已知秘密掃描；不能把best-effort技術日志冒充必要Event。
 - 自動化測試涵蓋第 11 節全部業務情境、固定 reason-code 優先序、一次顯示 QR、查詢去敏、準時 FIFO、未知停寫與續辦、共用預算、容量準入／釋放、每日重置及最低公平使用限制；逐項連至追蹤矩陣及真實執行證據。
 - CI使用D125精確基線與D156未被取代的命令／期限規則及D166正式Jest runner；fault／perf專項雖opt-in，仍是完整交付必需證據，普通CI綠燈不能解鎖全部成果。
@@ -772,10 +772,10 @@ G09b只量測既有production Mongo query adapter，不修改業務API、查詢�
 
 P01–P15採用決策與逐關驗收見[實作方案](implementation-plan.md)及追蹤矩陣。剩餘不是讓實作者自由選架構：Face唯一索引替換微型真測、固定工具相容性及fault映像digest是明確前置gate；未過便停止回討論，不靜默換策。外部主機／domain／TLS需環境提供。D161已取代舊碼私密備份要求，不再建立legacy備份。
 
-目前矩陣為 A01、A05–A09、A11–A16、B04、B08、B09、B13、B19、B27、B35、B41、B42、B44–B49、B52 共28項V，其餘108項仍U；G09a只把本關完整直接支持的B44–B49升為V。這不代表完整v1、效能、所有秘密輸出表面、fault protocol或部署完成；B50、A17、A18、M04及E項仍因跨gate責任維持U。依25 STOP停止於G09a；D182只使下一合法gate G09b達到READY，尚未開始且未新增工程證據。
+目前矩陣為 A01、A05–A09、A11–A16、B04、B08、B09、B13、B19、B27、B35、B41、B42、B44–B49、B52及E04共29項V，其餘107項仍U；G09b只把完整直接支持的E04升為V，E06仍因跨gate責任維持U。這不代表完整v1、SLA、所有秘密輸出表面、fault protocol或部署完成。依25 STOP停止於G09b；下一合法gate為G10a，尚未開始。
 
 ## 決策來源
 
-本文件以[討論紀錄](./discuss.md) D01–D35為業務底稿，同步至D182；D114明確授權持續逐題討論、預設接受及必要文件同步，非逐題個別回答。D69依D72、D17依D76修正；D89安全續辦保留，D130永久終局候選未採；D117取代binaryv1、D131七格取代三次、D129原生兩送局部例外、D149同epoch普通重啟寫入關閉，D174–D179的逐關限定證據、D180的G09a開發前契約、D181的G09a限定驗收及D182的G09b開發前契約皆有效。其餘歷史候選及背景不新增產品要求。
+本文件以[討論紀錄](./discuss.md) D01–D35為業務底稿，同步至D183；D114明確授權持續逐題討論、預設接受及必要文件同步，非逐題個別回答。D69依D72、D17依D76修正；D89安全續辦保留，D130永久終局候選未採；D117取代binaryv1、D131七格取代三次、D129原生兩送局部例外、D149同epoch普通重啟寫入關閉，D174–D179的逐關限定證據、D180／D182的開發前契約及D181／D183的限定驗收皆有效。其餘歷史候選及背景不新增產品要求。
 
 本次同步不是新業務決策，也不改寫原始討論。未來若變更已確認結論，須先新增討論決策 block，再同步本文件、驗收及追蹤矩陣。實作／測試／公開證據未完成前，不把文件採用視為履歷成果。

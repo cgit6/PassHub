@@ -1,0 +1,704 @@
+{
+  "format": "g09b-public-explain-summary-v1",
+  "runId": "g09b-b2-1669530-1790525819869",
+  "count": 40,
+  "states": {
+    "BEFORE": 20,
+    "AFTER": 20
+  },
+  "primaryCursorSummaries": 40,
+  "lookupSummaries": 8,
+  "captureContract": {
+    "source": "production G04bMongoPersistenceAdapter aggregate via an independent command-monitoring client",
+    "captureCountPerCell": 1,
+    "verbosity": "executionStats",
+    "mainCursorAndLookupSeparated": true,
+    "sanitized": true
+  },
+  "fullPrivateArtifactHash": "05375798d6a429ed29127e3ff6539ef193ac2ae372300be3e8c8da6729d3ccd3",
+  "fullPrivateArtifact": "output/evidence/g09b/g09b-b2-1669530-1790525819869/explain-summary.json",
+  "uniqueCaptureIds": 40,
+  "uniqueCommandIdentities": 20,
+  "entries": [
+    {
+      "state": "BEFORE",
+      "caseId": "qualifications-all",
+      "page": "first",
+      "captureId": "BEFORE/qualifications-all/first",
+      "captureCount": 1,
+      "commandIdentity": "f29f6a978be6d1fa877c932dbf544d9ae29ce883e63466d49913e7a92a35eab2",
+      "primary": {
+        "stage": "PROJECTION_SIMPLE",
+        "nReturned": 21,
+        "totalKeysExamined": 0,
+        "totalDocsExamined": 10000,
+        "executionTimeMillis": 135
+      },
+      "lookup": {
+        "nReturned": 21,
+        "totalKeysExamined": 67755,
+        "totalDocsExamined": 67755,
+        "collectionScans": 0,
+        "indexesUsed": [
+          "_id_"
+        ],
+        "executionTimeMillisEstimate": 135
+      }
+    },
+    {
+      "state": "BEFORE",
+      "caseId": "qualifications-all",
+      "page": "next",
+      "captureId": "BEFORE/qualifications-all/next",
+      "captureCount": 1,
+      "commandIdentity": "fb4f8f650632fac521183c1993f1b87ea196ac0769d98c2c2284b550d6d88482",
+      "primary": {
+        "stage": "SUBPLAN",
+        "nReturned": 21,
+        "totalKeysExamined": 0,
+        "totalDocsExamined": 10000,
+        "executionTimeMillis": 136
+      },
+      "lookup": {
+        "nReturned": 21,
+        "totalKeysExamined": 70755,
+        "totalDocsExamined": 70755,
+        "collectionScans": 0,
+        "indexesUsed": [
+          "_id_"
+        ],
+        "executionTimeMillisEstimate": 136
+      }
+    },
+    {
+      "state": "BEFORE",
+      "caseId": "inside-all",
+      "page": "first",
+      "captureId": "BEFORE/inside-all/first",
+      "captureCount": 1,
+      "commandIdentity": "d1a070aae366c61effa13d02463a414f861d02f81a967850139d5587f1ff2a56",
+      "primary": {
+        "stage": "PROJECTION_SIMPLE",
+        "nReturned": 21,
+        "totalKeysExamined": 0,
+        "totalDocsExamined": 10000,
+        "executionTimeMillis": 82
+      },
+      "lookup": {
+        "nReturned": 21,
+        "totalKeysExamined": 40232,
+        "totalDocsExamined": 40232,
+        "collectionScans": 0,
+        "indexesUsed": [
+          "_id_"
+        ],
+        "executionTimeMillisEstimate": 82
+      }
+    },
+    {
+      "state": "BEFORE",
+      "caseId": "inside-all",
+      "page": "next",
+      "captureId": "BEFORE/inside-all/next",
+      "captureCount": 1,
+      "commandIdentity": "891dcb580cdcd345efde6f64b4075e95ae4fc61c3a4154700e5412ba842a18ae",
+      "primary": {
+        "stage": "PROJECTION_SIMPLE",
+        "nReturned": 21,
+        "totalKeysExamined": 0,
+        "totalDocsExamined": 10000,
+        "executionTimeMillis": 81
+      },
+      "lookup": {
+        "nReturned": 21,
+        "totalKeysExamined": 45646,
+        "totalDocsExamined": 45646,
+        "collectionScans": 0,
+        "indexesUsed": [
+          "_id_"
+        ],
+        "executionTimeMillisEstimate": 82
+      }
+    },
+    {
+      "state": "BEFORE",
+      "caseId": "events-all",
+      "page": "first",
+      "captureId": "BEFORE/events-all/first",
+      "captureCount": 1,
+      "commandIdentity": "55663638347567c250c0179b1befafc518cf45e6d499f38b25a449b5c0bc7123",
+      "primary": {
+        "stage": "PROJECTION_SIMPLE",
+        "nReturned": 21,
+        "totalKeysExamined": 0,
+        "totalDocsExamined": 40000,
+        "executionTimeMillis": 26
+      }
+    },
+    {
+      "state": "BEFORE",
+      "caseId": "events-all",
+      "page": "next",
+      "captureId": "BEFORE/events-all/next",
+      "captureCount": 1,
+      "commandIdentity": "bc973475a732b45c7a78bdfe7c037c342f30a72081baf782dfa793533749dd4c",
+      "primary": {
+        "stage": "SUBPLAN",
+        "nReturned": 21,
+        "totalKeysExamined": 0,
+        "totalDocsExamined": 40000,
+        "executionTimeMillis": 73
+      }
+    },
+    {
+      "state": "BEFORE",
+      "caseId": "events-hot",
+      "page": "first",
+      "captureId": "BEFORE/events-hot/first",
+      "captureCount": 1,
+      "commandIdentity": "8a491367b370e3d042eff3571f004bb7fb99b13d67edc07e08d60eb2c8a78012",
+      "primary": {
+        "stage": "PROJECTION_SIMPLE",
+        "nReturned": 21,
+        "totalKeysExamined": 0,
+        "totalDocsExamined": 40000,
+        "executionTimeMillis": 19
+      }
+    },
+    {
+      "state": "BEFORE",
+      "caseId": "events-hot",
+      "page": "next",
+      "captureId": "BEFORE/events-hot/next",
+      "captureCount": 1,
+      "commandIdentity": "59001e60987e65b01bf99fafdac3bb1ae03459ba3908db12d390f18f7aed7647",
+      "primary": {
+        "stage": "PROJECTION_SIMPLE",
+        "nReturned": 21,
+        "totalKeysExamined": 0,
+        "totalDocsExamined": 40000,
+        "executionTimeMillis": 50
+      }
+    },
+    {
+      "state": "BEFORE",
+      "caseId": "events-rejected",
+      "page": "first",
+      "captureId": "BEFORE/events-rejected/first",
+      "captureCount": 1,
+      "commandIdentity": "d2abc2e680c4b83ad0d2858856867349d2c0c72b0e5e6fed31c59cc16be1ee30",
+      "primary": {
+        "stage": "PROJECTION_SIMPLE",
+        "nReturned": 21,
+        "totalKeysExamined": 0,
+        "totalDocsExamined": 40000,
+        "executionTimeMillis": 24
+      }
+    },
+    {
+      "state": "BEFORE",
+      "caseId": "events-rejected",
+      "page": "next",
+      "captureId": "BEFORE/events-rejected/next",
+      "captureCount": 1,
+      "commandIdentity": "bc2777b3a06186a2560e9b5c535d119a9226b18fb4127c6167be2ef52cb26fd2",
+      "primary": {
+        "stage": "PROJECTION_SIMPLE",
+        "nReturned": 21,
+        "totalKeysExamined": 0,
+        "totalDocsExamined": 40000,
+        "executionTimeMillis": 36
+      }
+    },
+    {
+      "state": "BEFORE",
+      "caseId": "events-expired",
+      "page": "first",
+      "captureId": "BEFORE/events-expired/first",
+      "captureCount": 1,
+      "commandIdentity": "50b3a6f0449bbbe7271e9db30582e0db32a7f059c9cda82756151f49dfea00b8",
+      "primary": {
+        "stage": "PROJECTION_SIMPLE",
+        "nReturned": 21,
+        "totalKeysExamined": 0,
+        "totalDocsExamined": 40000,
+        "executionTimeMillis": 20
+      }
+    },
+    {
+      "state": "BEFORE",
+      "caseId": "events-expired",
+      "page": "next",
+      "captureId": "BEFORE/events-expired/next",
+      "captureCount": 1,
+      "commandIdentity": "e4d1e1c2d47cf5b773ba56f7fdbb6a150f6b76a3ca4fe9ae0934dcb9ef7150c8",
+      "primary": {
+        "stage": "PROJECTION_SIMPLE",
+        "nReturned": 21,
+        "totalKeysExamined": 0,
+        "totalDocsExamined": 40000,
+        "executionTimeMillis": 39
+      }
+    },
+    {
+      "state": "BEFORE",
+      "caseId": "events-hot-rejected",
+      "page": "first",
+      "captureId": "BEFORE/events-hot-rejected/first",
+      "captureCount": 1,
+      "commandIdentity": "a60d4aba4124765e5fd920fc400e8626ecd43ce9da5b79f865aac22efaa4e66a",
+      "primary": {
+        "stage": "PROJECTION_SIMPLE",
+        "nReturned": 21,
+        "totalKeysExamined": 0,
+        "totalDocsExamined": 40000,
+        "executionTimeMillis": 21
+      }
+    },
+    {
+      "state": "BEFORE",
+      "caseId": "events-hot-rejected",
+      "page": "next",
+      "captureId": "BEFORE/events-hot-rejected/next",
+      "captureCount": 1,
+      "commandIdentity": "76d9308df602d73975a297e152e90b69ca111af20b991d5af13042aa5d2f5613",
+      "primary": {
+        "stage": "PROJECTION_SIMPLE",
+        "nReturned": 21,
+        "totalKeysExamined": 0,
+        "totalDocsExamined": 40000,
+        "executionTimeMillis": 38
+      }
+    },
+    {
+      "state": "BEFORE",
+      "caseId": "events-hot-expired",
+      "page": "first",
+      "captureId": "BEFORE/events-hot-expired/first",
+      "captureCount": 1,
+      "commandIdentity": "afd2d6b0a40acec10ea4b1b6e410f52c8384abdc071f447efe53158be115758a",
+      "primary": {
+        "stage": "PROJECTION_SIMPLE",
+        "nReturned": 21,
+        "totalKeysExamined": 0,
+        "totalDocsExamined": 40000,
+        "executionTimeMillis": 21
+      }
+    },
+    {
+      "state": "BEFORE",
+      "caseId": "events-hot-expired",
+      "page": "next",
+      "captureId": "BEFORE/events-hot-expired/next",
+      "captureCount": 1,
+      "commandIdentity": "5617ec8a1418c704bec21520200774ec3081a41c6daf96667445ebf74ba7016b",
+      "primary": {
+        "stage": "PROJECTION_SIMPLE",
+        "nReturned": 21,
+        "totalKeysExamined": 0,
+        "totalDocsExamined": 40000,
+        "executionTimeMillis": 31
+      }
+    },
+    {
+      "state": "BEFORE",
+      "caseId": "events-rejected-expired",
+      "page": "first",
+      "captureId": "BEFORE/events-rejected-expired/first",
+      "captureCount": 1,
+      "commandIdentity": "04847822a7e1b1321c80db7b943f29e645883ec40e51c075badeb6f7dbed960d",
+      "primary": {
+        "stage": "PROJECTION_SIMPLE",
+        "nReturned": 21,
+        "totalKeysExamined": 0,
+        "totalDocsExamined": 40000,
+        "executionTimeMillis": 24
+      }
+    },
+    {
+      "state": "BEFORE",
+      "caseId": "events-rejected-expired",
+      "page": "next",
+      "captureId": "BEFORE/events-rejected-expired/next",
+      "captureCount": 1,
+      "commandIdentity": "f562768193f8c2e1ccea9a8df3c664bcb411e45bcc9b9ac52c4ba9585dcdb0eb",
+      "primary": {
+        "stage": "PROJECTION_SIMPLE",
+        "nReturned": 21,
+        "totalKeysExamined": 0,
+        "totalDocsExamined": 40000,
+        "executionTimeMillis": 39
+      }
+    },
+    {
+      "state": "BEFORE",
+      "caseId": "events-hot-rejected-expired",
+      "page": "first",
+      "captureId": "BEFORE/events-hot-rejected-expired/first",
+      "captureCount": 1,
+      "commandIdentity": "02a325d8ea37beb91be93387d54c21b6ab4e746eaa06fd74b8afca061ea1cfc2",
+      "primary": {
+        "stage": "PROJECTION_SIMPLE",
+        "nReturned": 21,
+        "totalKeysExamined": 0,
+        "totalDocsExamined": 40000,
+        "executionTimeMillis": 23
+      }
+    },
+    {
+      "state": "BEFORE",
+      "caseId": "events-hot-rejected-expired",
+      "page": "next",
+      "captureId": "BEFORE/events-hot-rejected-expired/next",
+      "captureCount": 1,
+      "commandIdentity": "afdc5efce9dfd28631026c1d596bb7aafe883a7a2bd9fecfe7fbc8bb42ffe24c",
+      "primary": {
+        "stage": "PROJECTION_SIMPLE",
+        "nReturned": 21,
+        "totalKeysExamined": 0,
+        "totalDocsExamined": 40000,
+        "executionTimeMillis": 32
+      }
+    },
+    {
+      "state": "AFTER",
+      "caseId": "qualifications-all",
+      "page": "first",
+      "captureId": "AFTER/qualifications-all/first",
+      "captureCount": 1,
+      "commandIdentity": "f29f6a978be6d1fa877c932dbf544d9ae29ce883e63466d49913e7a92a35eab2",
+      "primary": {
+        "stage": "LIMIT",
+        "nReturned": 21,
+        "totalKeysExamined": 21,
+        "totalDocsExamined": 21,
+        "executionTimeMillis": 104
+      },
+      "lookup": {
+        "nReturned": 21,
+        "totalKeysExamined": 67755,
+        "totalDocsExamined": 67755,
+        "collectionScans": 0,
+        "indexesUsed": [
+          "_id_"
+        ],
+        "executionTimeMillisEstimate": 104
+      }
+    },
+    {
+      "state": "AFTER",
+      "caseId": "qualifications-all",
+      "page": "next",
+      "captureId": "AFTER/qualifications-all/next",
+      "captureCount": 1,
+      "commandIdentity": "fb4f8f650632fac521183c1993f1b87ea196ac0769d98c2c2284b550d6d88482",
+      "primary": {
+        "stage": "SUBPLAN",
+        "nReturned": 21,
+        "totalKeysExamined": 22,
+        "totalDocsExamined": 21,
+        "executionTimeMillis": 117
+      },
+      "lookup": {
+        "nReturned": 21,
+        "totalKeysExamined": 70755,
+        "totalDocsExamined": 70755,
+        "collectionScans": 0,
+        "indexesUsed": [
+          "_id_"
+        ],
+        "executionTimeMillisEstimate": 118
+      }
+    },
+    {
+      "state": "AFTER",
+      "caseId": "inside-all",
+      "page": "first",
+      "captureId": "AFTER/inside-all/first",
+      "captureCount": 1,
+      "commandIdentity": "d1a070aae366c61effa13d02463a414f861d02f81a967850139d5587f1ff2a56",
+      "primary": {
+        "stage": "LIMIT",
+        "nReturned": 21,
+        "totalKeysExamined": 21,
+        "totalDocsExamined": 21,
+        "executionTimeMillis": 67
+      },
+      "lookup": {
+        "nReturned": 21,
+        "totalKeysExamined": 40232,
+        "totalDocsExamined": 40232,
+        "collectionScans": 0,
+        "indexesUsed": [
+          "_id_"
+        ],
+        "executionTimeMillisEstimate": 67
+      }
+    },
+    {
+      "state": "AFTER",
+      "caseId": "inside-all",
+      "page": "next",
+      "captureId": "AFTER/inside-all/next",
+      "captureCount": 1,
+      "commandIdentity": "891dcb580cdcd345efde6f64b4075e95ae4fc61c3a4154700e5412ba842a18ae",
+      "primary": {
+        "stage": "LIMIT",
+        "nReturned": 21,
+        "totalKeysExamined": 41,
+        "totalDocsExamined": 41,
+        "executionTimeMillis": 82
+      },
+      "lookup": {
+        "nReturned": 21,
+        "totalKeysExamined": 45646,
+        "totalDocsExamined": 45646,
+        "collectionScans": 0,
+        "indexesUsed": [
+          "_id_"
+        ],
+        "executionTimeMillisEstimate": 83
+      }
+    },
+    {
+      "state": "AFTER",
+      "caseId": "events-all",
+      "page": "first",
+      "captureId": "AFTER/events-all/first",
+      "captureCount": 1,
+      "commandIdentity": "55663638347567c250c0179b1befafc518cf45e6d499f38b25a449b5c0bc7123",
+      "primary": {
+        "stage": "LIMIT",
+        "nReturned": 21,
+        "totalKeysExamined": 21,
+        "totalDocsExamined": 21,
+        "executionTimeMillis": 0
+      }
+    },
+    {
+      "state": "AFTER",
+      "caseId": "events-all",
+      "page": "next",
+      "captureId": "AFTER/events-all/next",
+      "captureCount": 1,
+      "commandIdentity": "bc973475a732b45c7a78bdfe7c037c342f30a72081baf782dfa793533749dd4c",
+      "primary": {
+        "stage": "SUBPLAN",
+        "nReturned": 21,
+        "totalKeysExamined": 22,
+        "totalDocsExamined": 21,
+        "executionTimeMillis": 1
+      }
+    },
+    {
+      "state": "AFTER",
+      "caseId": "events-hot",
+      "page": "first",
+      "captureId": "AFTER/events-hot/first",
+      "captureCount": 1,
+      "commandIdentity": "8a491367b370e3d042eff3571f004bb7fb99b13d67edc07e08d60eb2c8a78012",
+      "primary": {
+        "stage": "LIMIT",
+        "nReturned": 21,
+        "totalKeysExamined": 21,
+        "totalDocsExamined": 21,
+        "executionTimeMillis": 0
+      }
+    },
+    {
+      "state": "AFTER",
+      "caseId": "events-hot",
+      "page": "next",
+      "captureId": "AFTER/events-hot/next",
+      "captureCount": 1,
+      "commandIdentity": "59001e60987e65b01bf99fafdac3bb1ae03459ba3908db12d390f18f7aed7647",
+      "primary": {
+        "stage": "LIMIT",
+        "nReturned": 21,
+        "totalKeysExamined": 41,
+        "totalDocsExamined": 41,
+        "executionTimeMillis": 1
+      }
+    },
+    {
+      "state": "AFTER",
+      "caseId": "events-rejected",
+      "page": "first",
+      "captureId": "AFTER/events-rejected/first",
+      "captureCount": 1,
+      "commandIdentity": "d2abc2e680c4b83ad0d2858856867349d2c0c72b0e5e6fed31c59cc16be1ee30",
+      "primary": {
+        "stage": "LIMIT",
+        "nReturned": 21,
+        "totalKeysExamined": 30,
+        "totalDocsExamined": 30,
+        "executionTimeMillis": 0
+      }
+    },
+    {
+      "state": "AFTER",
+      "caseId": "events-rejected",
+      "page": "next",
+      "captureId": "AFTER/events-rejected/next",
+      "captureCount": 1,
+      "commandIdentity": "bc2777b3a06186a2560e9b5c535d119a9226b18fb4127c6167be2ef52cb26fd2",
+      "primary": {
+        "stage": "LIMIT",
+        "nReturned": 21,
+        "totalKeysExamined": 27,
+        "totalDocsExamined": 26,
+        "executionTimeMillis": 0
+      }
+    },
+    {
+      "state": "AFTER",
+      "caseId": "events-expired",
+      "page": "first",
+      "captureId": "AFTER/events-expired/first",
+      "captureCount": 1,
+      "commandIdentity": "50b3a6f0449bbbe7271e9db30582e0db32a7f059c9cda82756151f49dfea00b8",
+      "primary": {
+        "stage": "LIMIT",
+        "nReturned": 21,
+        "totalKeysExamined": 43,
+        "totalDocsExamined": 43,
+        "executionTimeMillis": 0
+      }
+    },
+    {
+      "state": "AFTER",
+      "caseId": "events-expired",
+      "page": "next",
+      "captureId": "AFTER/events-expired/next",
+      "captureCount": 1,
+      "commandIdentity": "e4d1e1c2d47cf5b773ba56f7fdbb6a150f6b76a3ca4fe9ae0934dcb9ef7150c8",
+      "primary": {
+        "stage": "LIMIT",
+        "nReturned": 21,
+        "totalKeysExamined": 43,
+        "totalDocsExamined": 42,
+        "executionTimeMillis": 1
+      }
+    },
+    {
+      "state": "AFTER",
+      "caseId": "events-hot-rejected",
+      "page": "first",
+      "captureId": "AFTER/events-hot-rejected/first",
+      "captureCount": 1,
+      "commandIdentity": "a60d4aba4124765e5fd920fc400e8626ecd43ce9da5b79f865aac22efaa4e66a",
+      "primary": {
+        "stage": "LIMIT",
+        "nReturned": 21,
+        "totalKeysExamined": 33,
+        "totalDocsExamined": 33,
+        "executionTimeMillis": 0
+      }
+    },
+    {
+      "state": "AFTER",
+      "caseId": "events-hot-rejected",
+      "page": "next",
+      "captureId": "AFTER/events-hot-rejected/next",
+      "captureCount": 1,
+      "commandIdentity": "76d9308df602d73975a297e152e90b69ca111af20b991d5af13042aa5d2f5613",
+      "primary": {
+        "stage": "LIMIT",
+        "nReturned": 21,
+        "totalKeysExamined": 74,
+        "totalDocsExamined": 74,
+        "executionTimeMillis": 1
+      }
+    },
+    {
+      "state": "AFTER",
+      "caseId": "events-hot-expired",
+      "page": "first",
+      "captureId": "AFTER/events-hot-expired/first",
+      "captureCount": 1,
+      "commandIdentity": "afd2d6b0a40acec10ea4b1b6e410f52c8384abdc071f447efe53158be115758a",
+      "primary": {
+        "stage": "LIMIT",
+        "nReturned": 21,
+        "totalKeysExamined": 33,
+        "totalDocsExamined": 33,
+        "executionTimeMillis": 0
+      }
+    },
+    {
+      "state": "AFTER",
+      "caseId": "events-hot-expired",
+      "page": "next",
+      "captureId": "AFTER/events-hot-expired/next",
+      "captureCount": 1,
+      "commandIdentity": "5617ec8a1418c704bec21520200774ec3081a41c6daf96667445ebf74ba7016b",
+      "primary": {
+        "stage": "LIMIT",
+        "nReturned": 21,
+        "totalKeysExamined": 74,
+        "totalDocsExamined": 74,
+        "executionTimeMillis": 1
+      }
+    },
+    {
+      "state": "AFTER",
+      "caseId": "events-rejected-expired",
+      "page": "first",
+      "captureId": "AFTER/events-rejected-expired/first",
+      "captureCount": 1,
+      "commandIdentity": "04847822a7e1b1321c80db7b943f29e645883ec40e51c075badeb6f7dbed960d",
+      "primary": {
+        "stage": "LIMIT",
+        "nReturned": 21,
+        "totalKeysExamined": 43,
+        "totalDocsExamined": 43,
+        "executionTimeMillis": 0
+      }
+    },
+    {
+      "state": "AFTER",
+      "caseId": "events-rejected-expired",
+      "page": "next",
+      "captureId": "AFTER/events-rejected-expired/next",
+      "captureCount": 1,
+      "commandIdentity": "f562768193f8c2e1ccea9a8df3c664bcb411e45bcc9b9ac52c4ba9585dcdb0eb",
+      "primary": {
+        "stage": "LIMIT",
+        "nReturned": 21,
+        "totalKeysExamined": 43,
+        "totalDocsExamined": 42,
+        "executionTimeMillis": 0
+      }
+    },
+    {
+      "state": "AFTER",
+      "caseId": "events-hot-rejected-expired",
+      "page": "first",
+      "captureId": "AFTER/events-hot-rejected-expired/first",
+      "captureCount": 1,
+      "commandIdentity": "02a325d8ea37beb91be93387d54c21b6ab4e746eaa06fd74b8afca061ea1cfc2",
+      "primary": {
+        "stage": "LIMIT",
+        "nReturned": 21,
+        "totalKeysExamined": 33,
+        "totalDocsExamined": 33,
+        "executionTimeMillis": 0
+      }
+    },
+    {
+      "state": "AFTER",
+      "caseId": "events-hot-rejected-expired",
+      "page": "next",
+      "captureId": "AFTER/events-hot-rejected-expired/next",
+      "captureCount": 1,
+      "commandIdentity": "afdc5efce9dfd28631026c1d596bb7aafe883a7a2bd9fecfe7fbc8bb42ffe24c",
+      "primary": {
+        "stage": "LIMIT",
+        "nReturned": 21,
+        "totalKeysExamined": 74,
+        "totalDocsExamined": 74,
+        "executionTimeMillis": 2
+      }
+    }
+  ]
+}

@@ -19,7 +19,7 @@ aliases:
   - "PassHub 實作入口"
   - "PassHub 逐關驗收"
 created: "2026-09-19"
-updated: "2026-09-27"
+updated: "2026-09-28"
 ---
 
 # PassHub v1 實作契約與逐關驗收方案
@@ -27,11 +27,11 @@ updated: "2026-09-27"
 ## 快速檢索卡
 
 - 核心問題：把已採用的業務與架構討論交給實作者，避免自行補架構、丟要求或用測試數量取代證據。
-- 當前結論：P01–P15規劃已收斂；G02–G09a已有各自限定證據並通過gate，依25 STOP停止於G09a。D182已使G09b開發前契約達到READY但尚未開始；矩陣維持28V／108U，完整v1仍未完成。
+- 當前結論：P01–P15規劃已收斂；G02–G09b已有各自限定證據並通過gate，依25 STOP停止於G09b。矩陣為29V／107U；G09b只新增具完整直接證據的E04，完整v1仍未完成。
 - 關鍵爭點：G04a 真 Mongo 8.0.32 已證明窄 face reverse-unique release/reuse 交易情境；G02只證工具鏈可用，不證API、模組接線或完整交易 adapter。
 - 適用於：單API／單logicalplace／單次Qualification／QR或模擬Face的公開共享sandbox；Nest預設Express、strictTS、官方Mongo driver。
 - 不適用於：真實人臉辨識／硬體門禁、多據點／多租戶、多API、跨崩潰／reset續辦、正式SLA或業務復原。
-- 待驗證：G09b效能、G10 fault／control／logs、G11維護部署，以及完整G05b確認整合、clean install、Docker、CI、OpenAPI、reset及public HTTPS。G09a安全查詢證據不等於G09b效能或完整v1工程通過。
+- 待驗證：G10 fault／control／logs、G11維護部署，以及完整G05b確認整合、clean install、Docker、CI、OpenAPI、reset及public HTTPS。G09b限定效能證據不等於SLA、容量規劃或完整v1工程通過。
 
 ## 核心問題
 
@@ -215,7 +215,7 @@ BEFORE／AFTER各`10 cases × 2 pages × 100 measured`，合計4,000 raw samples
 
 command-monitoring client須捕捉真正adapter aggregate command，再以`executionStats`重放；每個state／case／page一份，共40份。主cursor與Face lookup分開保存／摘要；完整sanitized explain留私有run，公開只留summary。兩個index states都先通過counts、fixture hash、schema／reference／Event invariants、index inventory、十case first／next exact IDs、tie gap／duplicate、before-after outputs相同、4,000 sample count、40 explains及環境／source指紋。任一正確性／證據失敗即STOP；AFTER較慢、無改善或`COLLSCAN`如實報告而不算正確性失敗，也不得宣稱改善。
 
-私有run輸出固定於`output/evidence/g09b/<runId>/`，含manifest、fixture summary、raw JSONL、summary、explains、environment、before／after index catalogs及correctness；tracked公開輸出為`docs/evidence/g09b/report.md`、`summary.json`、`fixture-manifest.json`、`explain-summary.json`。正式證據區分clean `sourceCommit`與其後只發布證據文件的revision，並hash code／lock／config／fixture。這是READY契約，不是已完成證據；G10 fault／logs／private control及G11部署均不得在G09b宣稱完成。
+正式run位於`output/evidence/g09b/g09b-b2-1669530-1790525819869/`，manifest hash為`618a074e5e58c94b90ed5d98791ca47964d77e6b74a409b561a64b5953a52ada`；raw及完整explains保持ignored。tracked公開[報告](evidence/g09b/report.md)與三份精簡JSON保存clean `sourceCommit`、code／lock／config／fixture hashes、4,000 raw與40 explains摘要。G10 fault／logs／private control及G11部署均未由G09b完成。
 
 D153 allowlist logs：request/operation UUID、epoch/run/owner/phase/round/group/budget/fixedcode，不dumpcommand/reply/drivererror/body/fullsubject/secret/hash。128records×≤2KiB，5files×10MiB/private0700/0600，best-effort drop＋LOGGING_DEGRADED非必要Event失敗；host-only logs:read按operationUUID。
 
@@ -242,7 +242,7 @@ API/Mongo SIGTERM grace30s，API無自動restart；stoprequest/graceexpiry不是
 
 ### 9. 固定25個STOP點
 
-前關通過才進表後關，每子關交差異／要求D／command exit／指紋／真情境證據及覆核即停止。失敗、不相容、無效fault、缺證立即停；不auto還原使用者檔案或fallback。G04a／G04b敗必回設計討論。**G00、G01a/G01b、G02、G03a、G03b、G03c、窄 G04a、G04b、G05a、G05b、G05c、G06a、G06b、G07a、G07b、G08a、G08b及G09a已有各自限定局部通過證據；目前停止於G09a。**
+前關通過才進表後關，每子關交差異／要求D／command exit／指紋／真情境證據及覆核即停止。失敗、不相容、無效fault、缺證立即停；不auto還原使用者檔案或fallback。G04a／G04b敗必回設計討論。**G00、G01a/G01b、G02、G03a、G03b、G03c、窄 G04a、G04b、G05a、G05b、G05c、G06a、G06b、G07a、G07b、G08a、G08b、G09a及G09b已有各自限定局部通過證據；目前停止於G09b。**
 
 | Gate | 單一交付責任 | 未來代表驗證／artifact |
 |---|---|---|
@@ -265,7 +265,7 @@ API/Mongo SIGTERM grace30s，API無自動restart；stoprequest/graceexpiry不是
 | G08a | 管理用例及完整保存 | PASS：unit 52／true HTTP e2e 12／true Mongo 8.0.32 integration 10；Operator-only、strict DTO、create／PATCH／revoke、QR一次、安全摘要、惰性逾期、Face 4096容量／重用／衝突、交易原子性及unknown-effect停寫 |
 | G08b | 完整辨識處理鏈 | PASS：unit 42／true HTTP e2e 6／true Mongo 8.0.32 integration 3；QR／Face／UNKNOWN、Source-only strict DTO、安全Event投影、正常回放／conflict、停用Source拒絕Event、Face ENTRY→EXIT原子保存及unknown-effect停寫；並行完整業務勝負與真transport-loss仍分屬後續證據 |
 | G09a | 安全查詢／keyset | PASS：unit 92／true HTTP e2e 13／true Mongo 8.0.32 integration 16；read-observation lease、五查詢、keyset／AND filters、exact投影、錯誤分類及去敏 |
-| G09b | READY，尚未開始：分case查詢效能 | `npm run test:perf -- --gate g09b`／D182固定fixture、10 cases×2 pages、索引前後4,000 raw與40 explains；正確性及證據完整才通過，不要求改善 |
+| G09b | PASS：分case查詢效能 | clean `dd0bc14`、固定10k／4k／40k fixture、10 cases×2 pages×2 states、4,000 raw、40 executionStats；correctness／inventory／hash全綠，E04升V |
 | G10a | allowlist日志／私密控制屏障 | integration private-control／有限buffer／rotation、hold release drain許可 |
 | G10b | precommit終止／abort完整清理 | 真fault termination／112 11000歸屬、最多兩送、endSession無額外送 |
 | G10c | 真傳輸未知確認 | 真fault transport-unknown／precommit未知及commit後回程loss、coherent observer |
@@ -356,8 +356,8 @@ Q1–Q13各實際細分見discuss原查證block（D105/111/116–125/127/133/135
 
 ## 交接資訊
 
-G05c evidence supplemental: exact Node image、G05c 51 tests、全 unit 189、G05a 21、G05b 80、boundary／negative compile／coverage及registry fail-closed boundary均已由 `docs/evidence/g05c/report.md` 保存；G06a evidence 另由 `docs/evidence/g06a/report.md` 保存，含 unit 88、true Mongo integration 5、full unit 277；G06b evidence 由 `docs/evidence/g06b/report.md` 保存，含 unit 78、true Mongo integration 4、full unit 355；G07a evidence由 `docs/evidence/g07a/report.md` 保存，含strict JSON unit 32、true HTTP e2e 41、combined 73、full unit 387；G07b evidence由 `docs/evidence/g07b/report.md` 保存，含unit 40、true HTTP e2e 5、combined 45、full unit 427；G08a evidence由 `docs/evidence/g08a/report.md` 保存，含unit 52、true HTTP e2e 12、true Mongo 8.0.32 integration 10、coverage combined 74及full unit 479；G08b evidence由 `docs/evidence/g08b/report.md` 保存，含unit 42、true HTTP e2e 6、true Mongo 8.0.32 integration 3、combined 51及full unit 521；G09a evidence由 `docs/evidence/g09a/report.md` 保存，含unit 92、true HTTP e2e 13、true Mongo 8.0.32 integration 16、combined 121及full unit 613。本段不把G09a安全查詢推論為G09b效能、G10真故障／控制／logs、G11部署或完整API完成。
+G05c evidence supplemental: exact Node image、G05c 51 tests、全 unit 189、G05a 21、G05b 80、boundary／negative compile／coverage及registry fail-closed boundary均已由 `docs/evidence/g05c/report.md` 保存；G06a evidence 另由 `docs/evidence/g06a/report.md` 保存，含 unit 88、true Mongo integration 5、full unit 277；G06b evidence 由 `docs/evidence/g06b/report.md` 保存，含 unit 78、true Mongo integration 4、full unit 355；G07a evidence由 `docs/evidence/g07a/report.md` 保存，含strict JSON unit 32、true HTTP e2e 41、combined 73、full unit 387；G07b evidence由 `docs/evidence/g07b/report.md` 保存，含unit 40、true HTTP e2e 5、combined 45、full unit 427；G08a evidence由 `docs/evidence/g08a/report.md` 保存，含unit 52、true HTTP e2e 12、true Mongo 8.0.32 integration 10、coverage combined 74及full unit 479；G08b evidence由 `docs/evidence/g08b/report.md` 保存，含unit 42、true HTTP e2e 6、true Mongo 8.0.32 integration 3、combined 51及full unit 521；G09a evidence由 `docs/evidence/g09a/report.md` 保存，含unit 92、true HTTP e2e 13、true Mongo 8.0.32 integration 16、combined 121及full unit 613；G09b evidence由 `docs/evidence/g09b/report.md`保存，含4,000 raw、40 cells、40 executionStats及完整correctness／inventory／hash核對。本段不把限定query benchmark推論為G10真故障／控制／logs、G11部署、SLA或完整API完成。
 
-當前停止點為**G09a安全查詢／keyset限定證據已通過；依25 STOP規則停止於G09a。矩陣共28V／108U；G09a只新增具完整直接證據的B44–B49**。本關證明五條人員安全查詢、writer-quiescent read-observation lease、單一`observedAt`、三種keyset與Event AND filters、exact去敏投影、404／400／409／503分類及真Mongo primary-majority讀取。正式gate為unit 92、true HTTP 13、true Mongo 16，共121；full unit 613。coverage aggregate為88.21% statements／86.40% branches／98.38% functions／94.01% lines；這不是repository全面高覆蓋或需求完成率。D182只使下一合法gate G09b達到READY，尚無perf程式或證據；G10真transport-loss／fault／control／logs、G11 deployment與完整release仍未解鎖。
+當前停止點為**G09b分case查詢效能限定證據已通過；依25 STOP規則停止於G09b。矩陣共29V／107U；G09b只新增具完整直接證據的E04**。clean source `dd0bc14`的正式run使用固定10k Qualification／4k Face slot／40k Event fixture，完成10 cases的first／next、BEFORE／AFTER共4,000 raw samples與40份executionStats；correctness、hash及index inventory全綠。單次固定順序觀察到20／20 p50及19／20 p95較低，`inside-all / first` p95約增加3.6%；不作因果、SLA或容量宣稱。G10真transport-loss／fault／control／logs、G11 deployment與完整release仍未解鎖；下一合法gate為G10a，尚未開始。
 
-安全採用P01–P15契約、25STOP與136矩陣，另受D166正式Jest runner決策約束。G02–G09a各自限定evidence已保存；G04a/G04b另記錄真Mongo 8.0.32、9／57 integration。`ManageQualifications` 已於G08a收斂為公開discriminated result；G08b辨識回覆只由已保存Event映射；G09a查詢維持exact去敏投影。不得由此推論G09b效能、G10真transport-loss／confirmation／control／logs、maintenance、deployment或公開runtime成立。D156 formal clean `sourceCommit` 屬G12 release規則，本關只記source commit與docs working revision，不冒稱clean release commit。
+安全採用P01–P15契約、25STOP與136矩陣，另受D166正式Jest runner決策約束。G02–G09b各自限定evidence已保存；G04a/G04b另記錄真Mongo 8.0.32、9／57 integration。`ManageQualifications` 已於G08a收斂為公開discriminated result；G08b辨識回覆只由已保存Event映射；G09a查詢維持exact去敏投影；G09b只量測同一Mongo adapter。不得由此推論G10真transport-loss／confirmation／control／logs、maintenance、deployment、公開runtime或SLA成立。G09b的clean source commit只證本gate provenance，不冒稱G12完整release evidence。
