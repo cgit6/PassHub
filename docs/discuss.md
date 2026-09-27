@@ -31,7 +31,7 @@ updated: "2026-09-27"
 ## 快速檢索卡
 
 - 核心問題：在小型訪客資格／模擬辨識決策業務上，形成合理、模組化、可驗證的Node.js/TypeScript架構與逐關方案；不以兩天時限取代品質論證。
-- 當前結論：D160完成規劃封口；D161完成舊碼清除；D163–D178保存G02–G08a各自限定證據；D179完成G08b辨識處理鏈限定gate（unit 42、true HTTP e2e 6、true Mongo 3）並停止於G08b。矩陣為22V／114U，完整v1未完成。
+- 當前結論：D160完成規劃封口；D161完成舊碼清除；D163–D178保存G02–G08a各自限定證據；D179完成G08b辨識處理鏈限定gate（unit 42、true HTTP e2e 6、true Mongo 3）並停止於G08b。D180封閉G09a安全查詢開發前契約，使其由NOT_READY轉為READY，但尚未開始且沒有工程證據。矩陣仍為22V／114U，完整v1未完成。
 - 關鍵爭點：D129原生中止兩送有界組預扣不退、跨窗口局部例外；D130較早確認起點／D131七格；D143 Face反向unique同txn替換必须G04a先真測。D149同epoch普通restart關寫是明示可用性代價，不能依memory空接管。
 - 適用於：D01–D165有效採用／修正、獨立角色公開論點、官方查證及剩餘gate風險。採Nest預設Express/strictTS/官方driver/單API/單Mongo member replica set，非無框架或HA；25STOP見D157及實作方案。
 - 不適用於：把歷史候選／官方語法／manifest／獨立唯讀實驗當PassHub已完成成果。D117 JSON v2已取代binary v1，D130永久終局候選未採，D89安全條件續辦仍有效；D161只有A01為V。
@@ -40,9 +40,9 @@ updated: "2026-09-27"
 
 ## 閱讀狀態與階段界線
 
-- 最新狀態：D179記錄G08b完整辨識處理鏈限定gate已通過並停止於G08b；下一合法gate為G09a，尚未開始。G09 query、G10 fault／control、G11 deployment及完整v1仍未完成。A01、A05–A09、A11–A16、B04、B08、B09、B13、B19、B27、B35、B41、B42、B52共22項為V，其餘114項仍U。
+- 最新狀態：D179記錄G08b完整辨識處理鏈限定gate已通過並停止於G08b；D180已使下一合法gate G09a達到開發前READY，但尚未開始。G09 query、G10 fault／control、G11 deployment及完整v1仍未完成。A01、A05–A09、A11–A16、B04、B08、B09、B13、B19、B27、B35、B41、B42、B52共22項為V，其餘114項仍U。
 - D01–D35 及所有較早摘要／交接保留歷史；其中「K1尚未同步」「尚未開始第二階段」「API/schema未定」不代表當前狀態。最新有效版本由D117/119/122/125/129–139/140–157及後續明確覆核修正判定，歷史block不回寫。下方回溯狀態描述只對當時有效，不能用來覆蓋新版。
-- 文件整體settled代表有效規劃已採用；D161留下舊碼處理證據，D163–D178留下G02–G08a各自限定證據，D179留下G08b辨識／真Mongo保存限定證據。partially-sourced仍含專案取捨、官方查證與未實測組合；上述限定gates不代表G09查詢、G10 fault／control、G11部署或其餘114要求通過。
+- 文件整體settled代表有效規劃已採用；D161留下舊碼處理證據，D163–D178留下G02–G08a各自限定證據，D179留下G08b辨識／真Mongo保存限定證據，D180只留下G09a開發前契約。partially-sourced仍含專案取捨、官方查證與未實測組合；上述限定gates及READY決策不代表G09查詢、G10 fault／control、G11部署或其餘114要求通過。
 - 「使用者已接受」與「辯論暫定」逐 block 區分。授權保存辯論不等於確認候選架構，也不等於授權重寫程式。
 - D36–D41 為 2026-09-16 回溯追加；統一使用建檔時間，不捏造各輪原始時間。
 - D42–D46 為 2026-09-17 回溯追加；統一記錄保存時間，不捏造各輪原始時間。公開程式查核另保留查詢日期及固定 commit。
@@ -3324,3 +3324,14 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - coverage：aggregate 82.81% statements／82.01% branches／93.47% functions／85.09% lines。這不是repository全面高覆蓋、完整136要求覆蓋率或完整v1完成度。
 - 需求裁定：矩陣136個unique IDs無重複；只把完整直接支持的A05–A09、B08、B27、B35、B52由U升V，總數成為22V／114U。跨媒介完整矩陣、全reason API／Event一致性、不同事件並行勝負、管理與ENTRY競爭、生命期及真正transport-loss仍只具局部或尚無證據，維持U。
 - 限制與停止：G09 query／perf、G10 transport-loss／fault／control、G11 maintenance／deployment、OpenAPI／CI／Docker／公開Demo及G12完整release未完成。正式證據見`docs/evidence/g08b/report.md`；停止於G08b，不開始G09a，PM本輪只修改docs。
+
+
+### D180｜G09a 安全查詢開發前契約封口
+
+- 日期：2026-09-27；狀態：使用者接受六項開發前裁決，G09a由`NOT_READY`轉為`READY`。這只代表契約已足以開始下一gate，不代表程式、測試或Mongo查詢已完成；正式工程STOP仍為G08b，G09a尚未開始。
+- writer quiescence：Human Auth、角色、strict path/query及既有準入後，查詢才可嘗試取得read-observation lease。只要存在`provisional`、`queued`、`running`、`blocked`或`unknown` writer，立即回503 `TECHNICAL_BUSY`，不等待、不插入完整writer FIFO。只有quiescent可取得短lease；lease期間新writer可同步登記但不得開始，查詢不寫DB、不cleanup，完成或失敗必釋放。
+- 一致觀察：取得lease時固定唯一`observedAt`，整個list／detail及每筆`expired`、`faceBound`共用同一觀察時間；不得逐列取現在時間。`INSIDE`逾期仍保留Face mapping，唯讀不得以cleanup方式改變終結或映射事實。
+- response：三list業務payload exact `{items,nextCursor}`，空頁／末頁`nextCursor=null`；detail直接回單item。Qualification item exact keys為`qualificationId/displayName/validFrom/validUntil/presence/expired/revokedAt/revocationReason/expiredTerminalAt/faceBound/createdAt/updatedAt`，日期均UTC毫秒ISO，可空欄位保留`null`。共用`currentDatasetEpoch`仍依既有HTTP契約傳遞；Event投影沿B49。
+- 錯誤與大小：格式合法的小寫UUID查無qualification／event detail均回404 `RESOURCE_NOT_FOUND`，格式錯誤400；已認證Mongo read失敗回503 `PERSISTENCE_UNAVAILABLE`，不得偽裝空頁、null或partial。成功response固定最多256KiB，超限fail closed；request仍16KiB、list limit最大100。
+- cursor：`lastTime`固定UTC毫秒ISO；整體為canonical unpadded base64url；limit不綁cursor，可在續頁變更；舊dataset epoch回409，route／filter mismatch回400；空頁與末頁cursor為null。cursor仍不是授權，也不提供跨頁snapshot。
+- 邊界與裁定：G09a只做安全查詢、read lease、keyset、去敏投影與真HTTP／真Mongo正確性；效能量測屬G09b，日志／私密控制／真正transport-loss及fault屬G10，維護部署屬G11。D180沒有工程證據，不升格任何要求；矩陣維持136個unique IDs、22V／114U。下一合法gate為G09a，開始前仍須遵守25 STOP；本輪只修改docs。

@@ -1,6 +1,6 @@
 # PassHub 有效要求與實作追蹤矩陣
 
-規劃狀態：**D160封口；D161完成舊碼清除；D166改定正式Jest runner；G02–G08b已發行各自限定 evidence，目前停止於G08b**。工程狀態：**A01、A05–A09、A11–A16、B04、B08、B09、B13、B19、B27、B35、B41、B42、B52共22條為V（G08b新增A05–A09、B08、B27、B35、B52），其餘114條仍U**。整理日期：2026-09-27。
+規劃狀態：**D160封口；D161完成舊碼清除；D166改定正式Jest runner；G02–G08b已發行各自限定 evidence，目前停止於G08b；D180使G09a開發前契約READY但尚未開始**。工程狀態：**A01、A05–A09、A11–A16、B04、B08、B09、B13、B19、B27、B35、B41、B42、B52共22條為V（G08b新增A05–A09、B08、B27、B35、B52），其餘114條仍U；D180不升格任何要求**。整理日期：2026-09-27。
 
 這份文件回答：「討論過的要求，實作時如何避免漏掉？」它不是已完成成果，也不授權開始重寫程式。
 
@@ -8,7 +8,7 @@
 
 ## 1. 來源、用法與完成定義
 
-- 來源：[業務範圍](business-scope.md)、[討論紀錄](discuss.md) D01–D179 及實作方案。衝突依明確採用的新版；D114預設接受是本輪授權，不捏造逐題答覆。候選／背景不當採用，官方來源不當工程證據。
+- 來源：[業務範圍](business-scope.md)、[討論紀錄](discuss.md) D01–D180 及實作方案。衝突依明確採用的新版；D114預設接受是本輪授權，不捏造逐題答覆。候選／背景不當採用，官方來源不當工程證據。
 - 本稿整理前的來源 SHA-256：`discuss.md = 96a222bde5938d5aa9a5d250ea61b79a7916fd4b494d3f63f4ec49e833d87da7`；`business-scope.md = 4c8969d698c1e5f315d6ada2a7312482b5b6b01e6098f38004314874a280ca09`。後續更新須記錄基線變動，不以舊摘要覆蓋新決策。
 - 以下「責任」是行為邊界，實際接線／目錄規劃見D140–D141；G02–G08b只具各gate限定程式／測試符號與局部 evidence，其餘不能由規劃欄推定已建立。
 - 每列的 `T-要求ID` 是**預定驗收情境編號**，不是已存在的測試。欄內分號分開的情境都要覆蓋；必要時拆成多個實際測試。
@@ -82,11 +82,11 @@
 
 | ID | 有效要求 | 來源 | 責任 | 預定驗收情境 | 證據 |
 |---|---|---|---|---|---|
-| B44 | 資格 list／detail、INSIDE list、Event list／detail 為三類最小查詢。 | D23 | 唯讀用例 | T-B44：兩人員角色可讀；INSIDE 清單排除 NOT_ENTERED、撤銷、EXITED，仍包含逾期 INSIDE。 | U |
+| B44 | 資格 list／detail、INSIDE list、Event list／detail 為三類最小查詢；list業務payload exact `{items,nextCursor}`，detail直接為單item；合法UUID查無detail為404 `RESOURCE_NOT_FOUND`。 | D23、D180 | 唯讀用例 | T-B44：兩人員角色可讀；INSIDE 清單排除 NOT_ENTERED、撤銷、EXITED，仍包含逾期 INSIDE；兩detail格式錯誤400／查無404；空／末頁cursor為null。 | U |
 | B45 | 資格清單不篩選／搜尋／自訂排序；createdAt 降序加 ID 穩定排序。 | D29 | 資格查詢 | T-B45：相同時間跨頁無排序漂移；不新增額外篩選能力。 | U |
 | B46 | Event只支援qualificationId、outcome、reasonCode三篩選AND；receivedAt及ID降序。 | D28、D152 | 事件查詢 | T-B46：八filter組合、enum／UUID／重複未知query拒絕及同時刻分頁；不加全文搜尋。 | U |
-| B47 | 三類list keyset，limit預設20／1–100；INSIDE enteredAt及ID降序；cursor綁route／filters／epoch。 | D23、D27–D29、D152 | 查詢契約 | T-B47：canonical cursor≤512ASCII、格式／route／ANDfilters錯誤、舊epoch409；無跨頁snapshot承諾。 | U |
-| B48 | 資格摘要含 ID、顯示名稱、有效區間、撤銷／逾期／Presence、有效 faceBound、建立／修改／撤銷時間及撤銷原因，不顯示完整 subject 或 QR。 | D24、D69、D72、D76 | 資格讀取投影 | T-B48：兩角色／list／detail 欄位齊全；INSIDE 逾期仍綁定；準時前序 ENTRY 未決不能只憑時鐘視為可釋放；普通已可終結的殘留引用不冒充有效綁定。 | U |
+| B47 | 三類list keyset，limit預設20／1–100且不綁cursor；INSIDE enteredAt及ID降序；cursor綁route／filters／epoch，lastTime為UTC毫秒ISO、canonical unpadded base64url。 | D23、D27–D29、D152、D180 | 查詢契約 | T-B47：canonical cursor≤512ASCII、格式／route／ANDfilters錯誤、舊epoch409；limit可改；空／末頁null；無跨頁snapshot承諾。 | U |
+| B48 | 資格摘要exact keys為qualificationId、displayName、validFrom、validUntil、presence、expired、revokedAt、revocationReason、expiredTerminalAt、faceBound、createdAt、updatedAt；日期UTC毫秒ISO，不顯示完整 subject 或 QR。 | D24、D69、D72、D76、D180 | 資格讀取投影 | T-B48：兩角色／list／detail exact欄位；單一lease `observedAt`形成expired／faceBound；INSIDE逾期仍綁定；唯讀不cleanup；準時前序ENTRY未決時writer非quiescent直接busy。 | U |
 | B49 | Event投影含eventId、sourceId、direction、kind、outcome、reasonCode、receivedAt、recordedAt、可空qualificationId、presenceTransition。 | D21、D24、D145、D150 | 事件投影 | T-B49：list／detail／辨識同投影；DBreason映為reasonCode；recordedAt非commit時間；無秘密／比較資料。 | U：G08b辨識200回覆已驗exact安全Event keyset並只由persisted Event映射；G09 list／detail同投影尚未驗。 |
 | B50 | 成功／錯誤回覆、查詢、Event、安全／技術日誌都不洩漏 token、機器憑證或完整 subject。 | D05、D21、D24、D165 | 全介面秘密處理 | T-B50：逐個表面掃描已知秘密；建立成功的一次 QR 是唯一業務例外。 | U：G08a管理與G08b辨識HTTP／Event回覆已驗不洩漏token、credential、subject或artifact；G09查詢與G10日誌全表面仍未驗。 |
 | B51 | 固定 Demo：建立 → QR ENTRY → INSIDE → Face EXIT → 兩筆 Event 與 EXITED；裝置傳輸以獨立 ENTRY／EXIT client 模組展示。 | D30、D35、D162 | 可重跑展示 | T-B51：兩個 client 各自固定 Source 身分／方向且有結果斷言；可共用純傳輸工具但不複製後端裁決；反向跨媒介、拒絕、重送、競爭另有範例／測試。 | U |
@@ -112,8 +112,8 @@
 | A14 | 目前 Face Mapping 為獨立單一權威，不在多處保存可衝突的有效綁定。 | D66–D67 | 映射模型 | T-A14：所有有效映射走同一來源；資格摘要不能形成第二套真實綁定。 | V：G04b schema／adapter及G04a9驗 faceSlots sole mapping authority、reverse reference／incarnation、orphan／slotCount startup integrity；完整管理HTTP仍U。 |
 | A15 | 同 Face 鍵的綁定／釋放／辨識須有真實共用寫入競爭；釋放清綁定引用但保留空協調位，首次缺鍵的綁定與未映射決策也受保護。 | D66–D67 | 空鍵競爭 | T-A15：首次綁定與 MATCHED 但未映射的辨識競爭；僅負查／no-op 不算保護；釋放後協調位仍可用。 | V：G04b 57-case 真Mongo驗首次 bind／unmapped recognition race、release保留空slot、mapping／qualification共同保存與分類；G05協調仍U。 |
 | A16 | 區分各種 duplicate key／已中止交易；不能全部當可重跑或吞錯續用。 | D66–D67 | 保存錯誤分類 | T-A16：映射、事件、其他唯一鍵衝突；只有確認可安全重跑才重跑。 | V：G04b 57-case 分辨 duplicate、112 write conflict、251 abort、schema validation、unknown commit；不以 retry loop 偽造確定性。 |
-| A17 | 逾期映射採相關操作惰性整理；唯讀不整理，無 TTL／背景終結業務。 | D68–D69、D72、D76、D164 | 映射整理 | T-A17：有效 faceBound、過期釋放、在場保留、準時排隊保護分開測。 | U：G03a生命週期effect已驗；相關操作、FIFO及DB整理未驗。 |
-| A18 | v1 只一個 API 實例；相關完整業務寫入單執行，登入／唯讀不全排入 FIFO。 | D73–D74、D76 | 執行協調 | T-A18：部署及程式無第二 writer；不以唯讀可用宣稱故障下必定可查。 | U |
+| A17 | 逾期映射採相關操作惰性整理；唯讀不整理，無 TTL／背景終結業務；query只依單一lease `observedAt`投影。 | D68–D69、D72、D76、D164、D180 | 映射整理 | T-A17：有效 faceBound、過期釋放、在場保留、準時排隊保護分開測；query不寫DB、不cleanup。 | U：G03a生命週期effect已驗；相關操作、FIFO、DB整理及G09a唯讀投影未驗。 |
+| A18 | v1 只一個 API 實例；相關完整業務寫入單執行，登入／唯讀不全排入 FIFO；query只在writer quiescent取得短read-observation lease。 | D73–D74、D76、D180 | 執行協調 | T-A18：部署及程式無第二 writer；writer五種非靜止狀態均立即busy；lease期間writer可登記但不開始，query結束必釋放；不以唯讀可用宣稱故障下必定可查。 | U |
 
 ### 2.6 接收、等待、故障與續辦
 
@@ -173,7 +173,7 @@
 | M01 | 公開 API runtime 供體驗，GitHub 提供碼／文件；共用資料及帳號，不做個人隔離。 | D25、D30 | 展示部署／文件 | T-M01：外部可呼叫 API；明示共享互相影響，不宣稱 GitHub Pages 執行後端。 | U |
 | M02 | 警告只填假資料、Demo 可清除、不保證正式營運／隱私／可用性；不自動辨識真實個資。 | D25–D27、D34 | Demo 警語 | T-M02：入口文件與操作說明可見，沒有正式 SLA／個資治理承諾。 | U |
 | M03 | 預置公開體驗憑證不能混用部署、DB 或維護者秘密。 | D25 | 環境隔離 | T-M03：公開 seed credentials 是刻意值；其他秘密無 tracked／輸出洩漏。 | U |
-| M04 | D148固定分鐘rate／IP表256、body16KiB及D152頁量；D155只信固定proxyIP/32；超限無Event。 | D27、D148、D152、D155 | 防濫用 | T-M04：各rate、IP表滿、slowbody／深度／重複headers、proxy偽造、專用重送也計rate但不取消原項；不加風控後臺。 | U：G07a已驗本地body／reader／server limits；G07b已驗fixed-minute 5/20、60/120、30/60、10/20、IP map 256及clock fail-closed。trusted proxy、page size、正式Auth/Event與公開部署未驗。 |
+| M04 | D148固定分鐘rate／IP表256、request body16KiB、response 256KiB及D152頁量最大100；D155只信固定proxyIP/32；超限無Event且不回partial。 | D27、D148、D152、D155、D180 | 防濫用 | T-M04：各rate、IP表滿、slowbody／深度／重複headers、response序列化超限、proxy偽造、專用重送也計rate但不取消原項；不加風控後臺。 | U：G07a已驗本地body／reader／server limits；G07b已驗fixed-minute 5/20、60/120、30/60、10/20、IP map 256及clock fail-closed。trusted proxy、page／response size、正式Auth/Event與公開部署未驗。 |
 | M05 | 維護命令獨立於 API、可重用必要模型設定；任何公開角色無 reset API。 | D47、D52 | 維護入口 | T-M05：停止 API 後外部命令仍可維護 DB；Operator／Viewer／Source 無重置權。 | U |
 | M06 | 每日 Asia/Taipei 凌晨 03:00 由 API 外排程自動執行，不依賴人工或 API 自己計時。 | D26、D52 | 外部排程 | T-M06：排程時區／觸發驗證；API 不健康仍能啟動維護。 | U |
 | M07 | 先拒新業務、有限等待既有操作，再停止 API；API 已停且確保舊 DB 工作不能干擾重置後資料才清除。 | D48–D52、D83 | 停機／隔離 | T-M07：清除前確認 API 已停；未知／未完成 DB 指令不能因停程序就假定消失；隔離須有證據。 | U |
@@ -299,7 +299,7 @@
 | P14 | D154–D155單API/單成員replset/NGINX；systemd03臺北Persistent=false、host lock/marker、API與Mongo確停及恢復、六collection精確清理／runTicket分bootstrap-ready／failclosed。 | A18、M01、M05–M10；G11 |
 | P15 | D156未被D166取代的命令／期限／clean sourceCommit規則；D166正式Jest runner與其證據失效／重驗範圍；D157固定25STOP及maintenance600/1800。文件封口G00，完整release136證據G12；本輪只討論。 | E01–E09；G00/G01a–G12 |
 
-實作方案記錄25個STOP、命令dictionary與證據位置。G01a/G01b已依D161完成，G02/G03a/G03b/G03c、窄 G04a、G04b、G05a、G05b、G05c、G06a、G06b、G07a、G07b、G08a及G08b已依D166及各自證據完成限定驗收並停止於G08b；後續G09 query、G10 fault／control、G11 deployment、完整G05b execution／confirmation ledger整合、Mongo writeRunClaim state machine、driver wire、transport-loss及完整v1仍未驗證。
+實作方案記錄25個STOP、命令dictionary與證據位置。G01a/G01b已依D161完成，G02/G03a/G03b/G03c、窄 G04a、G04b、G05a、G05b、G05c、G06a、G06b、G07a、G07b、G08a及G08b已依D166及各自證據完成限定驗收並停止於G08b；D180只使G09a開發前契約READY，尚未開始。後續G09 query、G10 fault／control、G11 deployment、完整G05b execution／confirmation ledger整合、Mongo writeRunClaim state machine、driver wire、transport-loss及完整v1仍未驗證。
 
 ## 7. 實作時的證據帳本與反向覆核
 
@@ -317,7 +317,7 @@
 4. 獨立覆核者直接讀原始 D 段與測試，反查矩陣是否漏要求或誤採舊提案；不只閱讀實作者摘要。
 5. 交付差異與證據後停止。未達條件不進下一關，不因時間壓力靜默縮減要求；必要變更先與使用者確認。
 
-**當前停止點：G08b完整辨識處理鏈 evidence 已通過；G08b unit 42、true HTTP e2e 6、true Mongo 8.0.32 integration 3、combined 51、full unit 521。boundary `files=7 edges=36 publicLeaks=0 forbidden=0`，negative compile、build及diff check通過。coverage aggregate為82.81% statements／82.01% branches／93.47% functions／85.09% lines；明確不是全面高覆蓋。矩陣為22V／114U；本關僅將具完整直接證據的A05–A09、B08、B27、B35、B52升為V。G09 query、G10真transport-loss／fault／control、G11 deployment及完整release未完成。依25 STOP停止於G08b；下一合法gate為G09a，尚未開始。**
+**當前停止點：G08b完整辨識處理鏈 evidence 已通過；G08b unit 42、true HTTP e2e 6、true Mongo 8.0.32 integration 3、combined 51、full unit 521。boundary `files=7 edges=36 publicLeaks=0 forbidden=0`，negative compile、build及diff check通過。coverage aggregate為82.81% statements／82.01% branches／93.47% functions／85.09% lines；明確不是全面高覆蓋。矩陣為22V／114U；本關僅將具完整直接證據的A05–A09、B08、B27、B35、B52升為V。D180只使下一合法gate G09a達到開發前READY，尚未開始、沒有新增工程證據。G09 query、G10真transport-loss／fault／control、G11 deployment及完整release未完成；依25 STOP仍停止於G08b。**
 
 ## 8. 追蹤矩陣建立時的文件覆核紀錄（歷史）
 
@@ -337,7 +337,7 @@
 - 僅更新業務文件及本矩陣的同步狀態／驗收前提；136 條要求的工程證據仍 U，15 項 P 清單不變。沒有開始重寫、執行測試、清除資料或重啟服務。
 
 
-## 10. D100–D157 細化要求與固定關卡（當前）
+## 10. D100–D180 細化要求與固定關卡（當前）
 
 下列不是另加產品功能；是既有要求的新契約／反例／驗收細化。原136 ID保留，T-ID可拆多個測試，**本節的子情境也必須映射到實際測試與結果**，不能只讓第2節同名test存在便宣稱覆蓋。
 
@@ -358,6 +358,7 @@
 | D149 | registry4096全類原ID無白天淘汰、四資源同步預留／join返；epoch前置／舊epoch拒絕、readonly查無不證不存在；persistent writeRunClaim正常停止不清，sameEpoch restart關寫、private fullreset新epoch重開。 | B33–B36、L06–L13、L20–L21、L28–L35、A18、M07–M10、E06、E09 |
 | D150–D151 | 十business routes含Eventdetail/null資格；嚴格DTO/dates/headers/query，management無idem/QR lost不可重取；200保存replayed/202stage-confirm-control/503unconfirmed vs safe terminal；epoch/existingonly；16KiB fatalUTFBOM/深度先filter原生語法後scan cookedduplicate/all arrays拒。 | B04、B22–B52、L24–L36、M04、E01、E03、E06 |
 | D152 | keyset fixed3sort/AND3filters、p1cursorroute-filter-epoch/512chars/limit1–100；不跨頁snapshot；四queryindexes／10k-40kfixture／八filter各別warmup10measure100raw p50p95explain／只改nonunique索引。 | B44–B49、E04、E06、E09 |
+| D180 | G09a writer-quiescent read-observation lease；非靜止writer立即503 busy、不等待，lease期間新writer可登記但不開始；單一observedAt；list/detail exact response、404／400、cursor canonical／epoch／filter分類、Mongo read 503、response 256KiB。只封閉開發前契約，不是工程證據。 | B44–B49、A17–A18、M04、E01、E06 |
 | D153 | allowlist request/operation/epoch/run/fixedcode、有限log/drop非必要Event；socket私密權限；hold同步屏障ACK/不撤issued；manual與maintenance獨立；current-last control replay有界/stale拒絕；late callback歸屬不凍permission。 | B40、B50、L07–L12、E05–E06、M05、M07 |
 | D154–D155 | LinuxCompose單API/單member非HA、NGINXpins/HTTPS前提/固定proxy/禁止upstreamretry；systemd03TaipeiPersistentfalse/hostlockmarker/drain30/API+Mongo確認stop/恢復PRIMARY/僅passhub_demo六collection deleteMany保indexes；seed不整庫原子/任何fail off；受控ticketbootstrap與ready分開/普通boot不接claim；proxy/Mongo/容器全表面去敏及秘密scan。 | A18、L11–L13、M01–M10、B50、E05–E09 |
 | D156–D157、D166 | Jest runner先編TS/真HTTPMongo/固定fault工具digestgate；期限fail非rollback/cleanup不蓋錯；正式clean sourceCommit/指紋及報告revision區分/變更失效/普通CI非完整證據；25STOP／每關報驗證再停。D166取代D156的Node unit runner選擇，其他證據規則保留。 | E01–E09、A01–A02、L07–L23、M05–M10 |

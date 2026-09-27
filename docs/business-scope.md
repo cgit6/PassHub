@@ -1,9 +1,9 @@
 # PassHub v1 業務邊界規格
 
-- 文件狀態：業務與實作規劃已收斂；G02–G03c、窄 G04a、G04b、G05a–G05c、G06a–G06b、G07a–G07b、G08a管理鏈及G08b辨識鏈已有各自限定工程證據，依25 STOP停止於G08b；完整v1工程驗證仍未完成
+- 文件狀態：業務與實作規劃已收斂；G02–G03c、窄 G04a、G04b、G05a–G05c、G06a–G06b、G07a–G07b、G08a管理鏈及G08b辨識鏈已有各自限定工程證據，依25 STOP停止於G08b；D180已使G09a開發前契約READY但尚未開始，完整v1工程驗證仍未完成
 - 更新日期：2026-09-27
 - 適用版本：PassHub v1
-- 文件目的：以 D01–D35 為業務底稿，同步至 D179 的有效修正；實作細節及逐關驗收集中在 implementation-plan.md，不把官方查證、歷史候選或待做測試當成工程成果
+- 文件目的：以 D01–D35 為業務底稿，同步至 D180 的有效修正；實作細節及逐關驗收集中在 implementation-plan.md，不把官方查證、歷史候選或待做測試當成工程成果
 
 原始依據見[討論紀錄](./discuss.md)，逐項實作及驗收對應見[要求追蹤矩陣](./requirements-traceability.md)。本文件的「已確認」是規格採用狀態，不代表程式／測試已完成。
 
@@ -426,11 +426,17 @@ Source＋external event ID 使用資料庫唯一約束。相同內容採 D117 �
 - 不淘汰已登記準時項騰槽；HTTP 逾時、斷線、結果未知不釋放原項／仍在工作驗證。競爭下取得、轉交、歸還各只能按實際生命期正確執行。
 - 原項 32 不是並行寫入數，仍單 writer FIFO。其他資源初值依 D148–D149：connection 64、raw reader 16、body 16KiB／上傳絕對五秒、scrypt 1無queue、queryDB 1、canonical回放 2、原確認 1；所有工作真收束才返自己的額度。
 
-G07b已對內部技術composition驗證同步準入、同鍵join／replay／conflict、existing-only不升新、分池與部分滿載／釋放邊界；G08a另驗Operator-only管理入口、嚴格管理DTO、create／PATCH／revoke、QR只在建立回覆、Face綁定／釋放／容量與真Mongo原子保存，以及管理寫入沿用FIFO receivedAt。G08a沒有完成辨識鏈、查詢、真transport fault、維護或部署，不得把限定gate寫成完整業務API或v1成果。
+G07b已對內部技術composition驗證同步準入、同鍵join／replay／conflict、existing-only不升新、分池與部分滿載／釋放邊界；G08a另驗Operator-only管理入口、嚴格管理DTO、create／PATCH／revoke、QR只在建立回覆、Face綁定／釋放／容量與真Mongo原子保存，以及管理寫入沿用FIFO receivedAt；G08b再完成限定的QR／Face／UNKNOWN辨識鏈與真Mongo共同保存證據。D180只封閉G09a開發前查詢契約，尚未產生任何查詢工程證據；真transport fault、維護及部署亦未完成，不得把限定gate或READY決策寫成完整業務API或v1成果。
 
 ## 8. 最小營運查詢
 
 Operator 與 Viewer 使用相同的讀取範圍與去敏欄位；Recognition Source 不得使用任何營運查詢。
+
+查詢在完成Human Auth、角色確認、strict query／path驗證及既有準入後，必須取得短暫的 **read-observation lease**，以避免把進行中的完整寫入讀成業務事實。若當下存在任何 `provisional`、`queued`、`running`、`blocked` 或 `unknown` writer，查詢立即回 `503 TECHNICAL_BUSY`，不等待、不插入完整writer FIFO。只有writer quiescent時才能取得lease；lease有效期間新writer可以完成同步登記，但不得開始執行，查詢完成或失敗都必須釋放lease。查詢本身永遠不寫資料庫、不做惰性cleanup，也不取得writer owner。
+
+每次list或detail在取得lease時固定唯一 `observedAt`，整個回應中的 `expired` 與 `faceBound` 都使用該時間及同一一致讀取觀察形成，不能逐列另取現在時間。唯讀不得為了更新投影而終結資格或釋放mapping；`INSIDE`即使越過有效期仍保持face binding，其他可終結狀態則依已保存事實與該次觀察投影，具體測試留在G09a。
+
+三種list的業務payload固定為 `{items, nextCursor}`，空頁及末頁的`nextCursor`都為`null`；detail直接回傳單一item，不包成`{item: ...}`。共用HTTP response仍可按既有契約帶`currentDatasetEpoch`，不得擴充業務payload欄位。所有日期欄位均為UTC毫秒ISO字串。任何成功response序列化後上限固定256KiB；超過時fail closed，不截斷、不回部分items。Request body上限仍為16KiB，三類list的`limit`最大仍為100。
 
 ### 8.1 Qualification 清單與詳情
 
@@ -441,13 +447,11 @@ Qualification 清單：
 - 不提供名稱、有效時間、撤銷、逾期或 Presence 篩選。
 - 不提供全文搜尋或自訂排序。
 
-已知 Qualification ID 時可查單筆詳情。清單及詳情可顯示：
+已知 Qualification ID 時可查單筆詳情。Qualification list與detail item的exact keys固定為：
 
-- Qualification ID 與訪客顯示名稱。
-- `validFrom`、`validUntil`。
-- 撤銷、逾期與 Presence 狀態。
-- `faceBound`，只表示是否有有效綁定，不照搬待惰性整理的物理引用；`INSIDE` 逾期仍保留綁定，受前序準時 ENTRY 保護時不能僅憑時鐘判可釋放。
-- 建立、修改、撤銷時間及撤銷原因。
+`qualificationId`、`displayName`、`validFrom`、`validUntil`、`presence`、`expired`、`revokedAt`、`revocationReason`、`expiredTerminalAt`、`faceBound`、`createdAt`、`updatedAt`。
+
+`faceBound`只表示在該次`observedAt`下的有效綁定，不照搬待惰性整理的物理引用；`INSIDE`逾期仍保留綁定，受前序準時ENTRY保護時不能僅憑時鐘判可釋放。可空欄位以`null`回覆，不省略，也不得顯示額外持久化欄位。
 
 不得顯示 QR token 或完整 external subject。
 
@@ -468,6 +472,8 @@ Access Event 清單只支援三種固定篩選：
 - `reasonCode`
 
 Source、方向及媒介只顯示、不篩選。三篩選 AND，receivedAt／Event ID 降序；三類 list 共同 limit 預設20／最大100、固定 keyset cursor（D152），無跨頁 snapshot 保證。不提供全文或自訂排序。
+
+cursor內的`lastTime`固定為UTC毫秒ISO字串，整個cursor必須是canonical、unpadded base64url；`limit`不綁入cursor，使用者可於續頁改變limit。cursor的dataset epoch過舊回409；route或filter不符回400。格式合法的小寫UUID查無Qualification或Event detail時統一回`404 RESOURCE_NOT_FOUND`；path ID格式錯誤回400。已認證查詢若Mongo read失敗，統一回`503 PERSISTENCE_UNAVAILABLE`，不得回空清單、`null`、partial item或部分頁面。
 
 清單及詳情可顯示：
 
@@ -656,6 +662,9 @@ Qualification 時間錯誤、Face重複、越權與公開限制均拒絕，使�
 | Event 清單 | 只支援 `qualificationId`、`outcome`、`reasonCode`，receivedAt 由新到舊並以 Event ID 穩定排序。 |
 | 查詢欄位 | Operator／Viewer 相同；faceBound 表示有效綁定，過期 INSIDE 仍綁定；前序準時項保護與可終結殘留引用分開，不顯示完整 subject。 |
 | Event／查詢／日誌敏感資料 | 不得包含原始 QR、Source credential 或完整 `provider + externalSubjectId`。 |
+| 查詢與writer競爭 | writer非quiescent立即`503 TECHNICAL_BUSY`；取得read-observation lease後固定單一`observedAt`，新writer可登記但須待lease釋放才開始；查詢不進完整FIFO、不寫DB、不cleanup。 |
+| list／detail response | list業務payload exact `{items,nextCursor}`，末頁／空頁cursor為`null`；detail為單item。成功response最多256KiB，超限不得回partial。 |
+| 查無與持久化錯誤 | 合法UUID查無Qualification／Event均為`404 RESOURCE_NOT_FOUND`，格式錯誤400；已認證Mongo read失敗為`503 PERSISTENCE_UNAVAILABLE`。 |
 
 ### 11.5 公開 sandbox
 
@@ -749,10 +758,10 @@ Qualification 時間錯誤、Face重複、越權與公開限制均拒絕，使�
 
 P01–P15採用決策與逐關驗收見[實作方案](implementation-plan.md)及追蹤矩陣。剩餘不是讓實作者自由選架構：Face唯一索引替換微型真測、固定工具相容性及fault映像digest是明確前置gate；未過便停止回討論，不靜默換策。外部主機／domain／TLS需環境提供。D161已取代舊碼私密備份要求，不再建立legacy備份。
 
-目前矩陣為 A01、A05–A09、A11–A16、B04、B08、B09、B13、B19、B27、B35、B41、B42、B52 共22項V，其餘114項仍U；G08b只把本關完整直接支持的A05–A09、B08、B27、B35、B52升為V。這不代表完整v1、全部辨識情境、查詢、fault protocol或部署完成；跨媒介完整矩陣、各reason的HTTP／Event一致性、不同事件並行勝負、管理與ENTRY競爭，以及G10真正transport-loss確認仍只具局部或尚無證據。依25 STOP停止於G08b；下一合法gate為G09a，尚未開始。
+目前矩陣為 A01、A05–A09、A11–A16、B04、B08、B09、B13、B19、B27、B35、B41、B42、B52 共22項V，其餘114項仍U；G08b只把本關完整直接支持的A05–A09、B08、B27、B35、B52升為V。D180已使G09a開發前契約達到READY，但尚未開始實作、沒有新增工程證據，故不升任何V／U。這不代表完整v1、全部辨識情境、查詢、fault protocol或部署完成；跨媒介完整矩陣、各reason的HTTP／Event一致性、不同事件並行勝負、管理與ENTRY競爭，以及G10真正transport-loss確認仍只具局部或尚無證據。依25 STOP仍停止於G08b；下一合法gate為G09a。
 
 ## 決策來源
 
-本文件以[討論紀錄](./discuss.md) D01–D35為業務底稿，同步至D179；D114明確授權持續逐題討論、預設接受及必要文件同步，非逐題個別回答。D69依D72、D17依D76修正；D89安全續辦保留，D130永久終局候選未採；D117取代binaryv1、D131七格取代三次、D129原生兩送局部例外、D149同epoch普通重啟寫入關閉，D174–D179的逐關限定證據皆有效。其餘歷史候選及背景不新增產品要求。
+本文件以[討論紀錄](./discuss.md) D01–D35為業務底稿，同步至D180；D114明確授權持續逐題討論、預設接受及必要文件同步，非逐題個別回答。D69依D72、D17依D76修正；D89安全續辦保留，D130永久終局候選未採；D117取代binaryv1、D131七格取代三次、D129原生兩送局部例外、D149同epoch普通重啟寫入關閉，D174–D179的逐關限定證據及D180的G09a開發前契約皆有效。其餘歷史候選及背景不新增產品要求。
 
 本次同步不是新業務決策，也不改寫原始討論。未來若變更已確認結論，須先新增討論決策 block，再同步本文件、驗收及追蹤矩陣。實作／測試／公開證據未完成前，不把文件採用視為履歷成果。

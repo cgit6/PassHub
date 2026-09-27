@@ -27,7 +27,7 @@ updated: "2026-09-27"
 ## 快速檢索卡
 
 - 核心問題：把已採用的業務與架構討論交給實作者，避免自行補架構、丟要求或用測試數量取代證據。
-- 當前結論：P01–P15規劃已收斂；G02–G08a及G08b完整辨識處理鏈已有各自限定證據並通過gate，依25 STOP停止於G08b。A01、A05–A09、A11–A16、B04、B08、B09、B13、B19、B27、B35、B41、B42、B52共22項為V（G08b新增A05–A09、B08、B27、B35、B52），其餘114要求仍U，完整v1仍未完成。
+- 當前結論：P01–P15規劃已收斂；G02–G08a及G08b完整辨識處理鏈已有各自限定證據並通過gate，依25 STOP停止於G08b。D180已把G09a開發前查詢契約封閉為READY，但尚未開始實作、沒有新增工程證據。A01、A05–A09、A11–A16、B04、B08、B09、B13、B19、B27、B35、B41、B42、B52共22項為V（G08b新增A05–A09、B08、B27、B35、B52），其餘114要求仍U，完整v1仍未完成。
 - 關鍵爭點：G04a 真 Mongo 8.0.32 已證明窄 face reverse-unique release/reuse 交易情境；G02只證工具鏈可用，不證API、模組接線或完整交易 adapter。
 - 適用於：單API／單logicalplace／單次Qualification／QR或模擬Face的公開共享sandbox；Nest預設Express、strictTS、官方Mongo driver。
 - 不適用於：真實人臉辨識／硬體門禁、多據點／多租戶、多API、跨崩潰／reset續辦、正式SLA或業務復原。
@@ -183,21 +183,27 @@ create face必有null或provider/externalSubjectId物件；patch omitted keep/nu
 - trusted202：原externalEventId/receivedAt；stage QUEUED/RUNNING/CONFIRMING/PAUSED_UNKNOWN，confirmationState NOT_STARTED/ACTIVE/EXHAUSTED，control NONE/MANUAL/MAINTENANCE，不帶outcome。
 - unverified/unconfirmed503 REQUEST_STATUS_UNCONFIRMED；readonlyrestart查無503 CANONICAL_RESULT_UNCONFIRMED，無不存在/失敗主張。
 - safe exec耗盡terminal503 OPERATION_EXECUTION_EXHAUSTED/terminal:true，不是AccessEvent reason或業務REJECTED。
-- 技術400/401/403/409/429/503；Face新槽滿507；create201含唯一qrToken、update/revoke200安全摘要。
+- 技術400/401/403/404/409/429/503；detail的合法UUID查無統一404 `RESOURCE_NOT_FOUND`，格式錯誤400；Face新槽滿507；create201含唯一qrToken、update/revoke200安全摘要。已認證query的Mongo read失敗503 `PERSISTENCE_UNAVAILABLE`，不回partial／null。
 - management**無冪等或progress API**；lostcreate response不能取回QR，盲retry可能新增資格，不能教自動retrycreate。
 - 共用安全Event投影：eventId/sourceId/direction/kind/outcome/reasonCode/receivedAt/recordedAt/nullable qualificationId/presenceTransition；DBreason映reasonCode。qual投影保留矩陣B48完整摘要／有效faceBound，不刪撤銷原因／時間。
 
-Nest bodyParser:false，composition app.use raw receiver在init/listen之前；不把rawBody:true和停parser混搭。自有functional入口非自動DI/filter。16KiB／絕對upload5s；fatal UTF8且BOM保留後明拒。depthfilter（非完整parser）先於native JSON.parse，再cookedduplicate keyscan；rootobject最多2objectlayers，business body任何array拒。Content-Type application/json僅optional charset UTF8，Encoding absent/identity，其餘415。Owned headers及decodedquery重復拒、不merge。req.close不當abort，res.close僅自身HTTP owner，finish非clientreceipt。（D147／D151）
+Nest bodyParser:false，composition app.use raw receiver在init/listen之前；不把rawBody:true和停parser混搭。自有functional入口非自動DI/filter。request body 16KiB／絕對upload5s；成功response最多256KiB，超限fail closed、不截斷或回partial。fatal UTF8且BOM保留後明拒。depthfilter（非完整parser）先於native JSON.parse，再cookedduplicate keyscan；rootobject最多2objectlayers，business body任何array拒。Content-Type application/json僅optional charset UTF8，Encoding absent/identity，其餘415。Owned headers及decodedquery重復拒、不merge。req.close不當abort，res.close僅自身HTTP owner，finish非clientreceipt。（D147／D151／D180）
 
 待測限制（D146／D148／D149）：connections64/rawreaders16；origin32；validation普通write4/login1/query1＋retry2；HTTP普通28＋retry4不借；scrypt1無queue、queryDB1、canonical replay2、originalconfirm1獨立串行；真工作未收束不因HTTP終結還額。registry4096／faceSlots4096獨立。fixed-minute login IP5/global20、query account60/global120、recognition Source30/global60、management account10/global20；IPmap256去過期不evictlive。既有原項不因retry限速取消。Header/keepalive候選5s在G07a核API/ranges/coverage，不冒稱已全部硬保證。
 
 ### 7. 查詢、效能、日志與私密控制
+
+G09a先採writer-quiescence read-observation lease：Human Auth、角色及strict path/query驗證與既有準入後，若存在`provisional`／`queued`／`running`／`blocked`／`unknown` writer，立即503 `TECHNICAL_BUSY`且不等待。只有quiescent可取得短lease；lease期間新writer可同步登記但不得開始，query在finally釋放。query不進完整writer FIFO、不寫DB、不做惰性cleanup。取得lease時固定一個`observedAt`，整個list／detail及其`expired`／`faceBound`衍生值共用；資料庫讀取失敗回503 `PERSISTENCE_UNAVAILABLE`，不得回partial／null。（D180）
+
+三個list的業務payload exact `{items,nextCursor}`，空頁／末頁`nextCursor=null`；兩個detail直接回單item，不用`{item}`wrapper。共用HTTP層仍按既有契約帶`currentDatasetEpoch`。Qualification list/detail item exact keys為`qualificationId/displayName/validFrom/validUntil/presence/expired/revokedAt/revocationReason/expiredTerminalAt/faceBound/createdAt/updatedAt`，可空值保留`null`，所有日期為UTC毫秒ISO。Event list/detail沿既有B49 exact安全投影。合法小寫UUID查無qualification／event均404 `RESOURCE_NOT_FOUND`；UUID格式錯誤400。（D180）
 
 D152三list keyset：quals createdAt/_id DESC；inside enteredAt/_id DESC；events receivedAt/_id DESC，3filtersAND。limit預設20/decimal1–100無leadingzero。cursor canonical unpaddedbase64url≤512ASCII：
 ```text
 ["p1",epoch,endpoint,qualificationFilter|null,outcome|null,reasonCode|null,lastTime,lastId]
 ```
 endpoint限qualifications/inside/events，前兩filtersnull；綁route/filters/epoch、嚴格格式/roundtrip，old epoch409。這是內部cursorarray，不開business array；不跨頁snapshot，資料改變或晚Event可能需刷新第一頁。query四非unique索引：qual createdAt/_id、qual presence/enteredAt/_id、event receivedAt/_id、event qualificationId/receivedAt/_id；保留唯一約束。
+
+`lastTime`必為UTC毫秒ISO字串；cursor必為canonical unpadded base64url，末頁與空頁均回`null`。`limit`不綁入cursor，可在續頁改變且仍為decimal 1–100；舊epoch回409，route／filter mismatch回400。成功response序列化上限256KiB，request仍16KiB；超限不回部分page。（D180）
 
 isolated performance10000qual/40000Event合法fixture，八種filter組合每種各固定matched/selectivity/params、first+fixednext，每個10warmup100measure，raw/p50/p95與獨立explain keys/docs/execution/env/hardware/fixture/code hash；before-after只變query非uniqueindexes，不預設改善，負結果照報。
 
@@ -248,7 +254,7 @@ API/Mongo SIGTERM grace30s，API無自動restart；stoprequest/graceexpiry不是
 | G07b | 同步準入與HTTP等待生命期 | PASS：exact Node、unit 40／true HTTP e2e 5；技術admission composition、分池／rate、existing-only、provisional FIFO、registry reservation／join／replay／conflict、五秒一次回覆owner及unknown handoff |
 | G08a | 管理用例及完整保存 | PASS：unit 52／true HTTP e2e 12／true Mongo 8.0.32 integration 10；Operator-only、strict DTO、create／PATCH／revoke、QR一次、安全摘要、惰性逾期、Face 4096容量／重用／衝突、交易原子性及unknown-effect停寫 |
 | G08b | 完整辨識處理鏈 | PASS：unit 42／true HTTP e2e 6／true Mongo 8.0.32 integration 3；QR／Face／UNKNOWN、Source-only strict DTO、安全Event投影、正常回放／conflict、停用Source拒絕Event、Face ENTRY→EXIT原子保存及unknown-effect停寫；並行完整業務勝負與真transport-loss仍分屬後續證據 |
-| G09a | 安全查詢／keyset | e2e query／detail、無資格Event、AND篩選及epoch cursor |
+| G09a | 安全查詢／keyset | READY（D180契約封口，尚未開始）：e2e query／detail、read-observation lease、無資格Event、AND篩選及epoch cursor |
 | G09b | 分case查詢效能 | test:perf／固定fixture／八filters、索引前後raw與explain |
 | G10a | allowlist日志／私密控制屏障 | integration private-control／有限buffer／rotation、hold release drain許可 |
 | G10b | precommit終止／abort完整清理 | 真fault termination／112 11000歸屬、最多兩送、endSession無額外送 |
@@ -342,6 +348,6 @@ Q1–Q13各實際細分見discuss原查證block（D105/111/116–125/127/133/135
 
 G05c evidence supplemental: exact Node image、G05c 51 tests、全 unit 189、G05a 21、G05b 80、boundary／negative compile／coverage及registry fail-closed boundary均已由 `docs/evidence/g05c/report.md` 保存；G06a evidence 另由 `docs/evidence/g06a/report.md` 保存，含 unit 88、true Mongo integration 5、full unit 277；G06b evidence 由 `docs/evidence/g06b/report.md` 保存，含 unit 78、true Mongo integration 4、full unit 355；G07a evidence由 `docs/evidence/g07a/report.md` 保存，含strict JSON unit 32、true HTTP e2e 41、combined 73、full unit 387；G07b evidence由 `docs/evidence/g07b/report.md` 保存，含unit 40、true HTTP e2e 5、combined 45、full unit 427；G08a evidence由 `docs/evidence/g08a/report.md` 保存，含unit 52、true HTTP e2e 12、true Mongo 8.0.32 integration 10、coverage combined 74及full unit 479；G08b evidence由 `docs/evidence/g08b/report.md` 保存，含unit 42、true HTTP e2e 6、true Mongo 8.0.32 integration 3、combined 51及full unit 521。本段不把G08b正常處理鏈推論為G09查詢、G10真故障／控制、G11部署或完整API完成。
 
-當前停止點為**G08b完整辨識處理鏈限定證據已通過；依25 STOP規則停止於G08b。矩陣共22V／114U；G08b只新增具完整直接證據的A05–A09、B08、B27、B35、B52**。本關證明Source-only strict QR／Face／UNKNOWN入口、安全Event投影、正常提交／回放／conflict、停用Source拒絕Event、Face ENTRY→EXIT的Event／Presence／映射原子保存，以及unknown effect交接後停寫。coverage aggregate為82.81% statements／82.01% branches／93.47% functions／85.09% lines；這不是全面高覆蓋或需求完成率。G09 query、G10真transport-loss／fault／control、G11 deployment與完整G05b execution／confirmation整合仍未解鎖；下一合法gate為G09a，尚未開始。
+當前停止點為**G08b完整辨識處理鏈限定證據已通過；依25 STOP規則停止於G08b。矩陣共22V／114U；G08b只新增具完整直接證據的A05–A09、B08、B27、B35、B52**。本關證明Source-only strict QR／Face／UNKNOWN入口、安全Event投影、正常提交／回放／conflict、停用Source拒絕Event、Face ENTRY→EXIT的Event／Presence／映射原子保存，以及unknown effect交接後停寫。coverage aggregate為82.81% statements／82.01% branches／93.47% functions／85.09% lines；這不是全面高覆蓋或需求完成率。D180只使下一合法gate G09a達到開發前READY，尚未開始且沒有工程證據；G09 query、G10真transport-loss／fault／control、G11 deployment與完整G05b execution／confirmation整合仍未解鎖。
 
 安全採用P01–P15契約、25STOP與136矩陣，另受D166正式Jest runner決策約束。G02–G08b各自限定evidence已保存；G04a/G04b另記錄真Mongo 8.0.32、9／57 integration。`ManageQualifications` 已於G08a收斂為公開discriminated result；G08b辨識回覆只由已保存Event映射，不回token、完整subject或comparison材料。不得由此推論G09查詢、G10真transport-loss／confirmation／control、maintenance、deployment或公開runtime成立。D156 formal clean `sourceCommit` 屬G12 release規則，本關只記working-tree SHA，不冒稱clean commit。
