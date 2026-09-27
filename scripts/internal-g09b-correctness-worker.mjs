@@ -1,4 +1,6 @@
 import process from 'node:process';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { MongoClient } from 'mongodb';
 import g04bSchema from '../dist/src/infrastructure/mongo/g04b-schema.js';
 import faceSchema from '../dist/src/infrastructure/mongo/g04a-face-index-schema.js';
@@ -98,6 +100,19 @@ try {
   const after = await runOracleCases(adapter, manifest);
   phaseDurationsMs.afterCorrectness = performance.now() - afterStarted;
   if (stableJson(before) !== stableJson(after)) throw new Error('G09b BEFORE/AFTER query results differ');
+
+  await writeCorrectnessResult({
+    fixture,
+    fixtureHash: manifest.fixtureHash,
+    readbackHash,
+    counts: manifest.counts,
+    manifest,
+    baselineInventory,
+    beforeInventory,
+    afterInventory,
+    before,
+    after,
+  });
 
   console.log(JSON.stringify({
     databaseName,
@@ -238,6 +253,58 @@ async function queryCase(queryAdapter, item, after) {
   if (item.collection === 'inside') return queryAdapter.listInside(input);
   return queryAdapter.listEvents({ ...input, filters: item.filters });
 }
+
+async function writeCorrectnessResult(result) {
+  const target = process.env.G09B_CORRECTNESS_RESULT;
+  if (typeof target !== 'string' || target.length === 0) return;
+  const cases = result.manifest.cases.map((item) => {
+    const beforeCase = result.before[item.id];
+    const afterCase = result.after[item.id];
+    const rowId = (row) => item.collection === 'events' ? row.eventId : row.qualificationId;
+    const firstFetch21Ids = beforeCase.first.map(rowId);
+    const nextFetch21Ids = beforeCase.next.map(rowId);
+    const first20Ids = firstFetch21Ids.slice(0, 20);
+    const next20Ids = nextFetch21Ids.slice(0, 20);
+    const combined = [...first20Ids, ...next20Ids];
+    const fixtureRows = item.collection === 'inside'
+      ? result.fixture.qualifications.filter((row) => row.presence === 'INSIDE')
+      : item.collection === 'qualifications'
+        ? result.fixture.qualifications
+        : result.fixture.events.filter((row) => (item.filters.qualificationId === null || row.qualificationId === item.filters.qualificationId) && (item.filters.outcome === null || row.outcome === item.filters.outcome) && (item.filters.reasonCode === null || row.reasonCode === item.filters.reasonCode));
+    const timeCounts = new Map(fixtureRows.map((row) => [timeForCorrectness(item.collection, row), 0]));
+    for (const row of fixtureRows) { const time = timeForCorrectness(item.collection, row); timeCounts.set(time, (timeCounts.get(time) ?? 0) + 1); }
+    return {
+      id: item.id,
+      expectedMatchCount: item.expectedMatchCount,
+      first20Ids,
+      firstFetch21Ids,
+      after: item.after,
+      next20Ids,
+      nextFetch21Ids,
+      nextPage: item.nextPage,
+      beforeAfterEqual: stableJson(beforeCase) === stableJson(afterCase),
+      tieBucketAtLeast64: Math.max(...timeCounts.values()) >= 64,
+      noGap: stableJson(first20Ids) === stableJson(item.first20Ids) && stableJson(next20Ids) === stableJson(item.next20Ids),
+      noDuplicate: new Set(combined).size === combined.length,
+    };
+  });
+  const output = {
+    status: 'PASS',
+    fixtureHash: result.fixtureHash,
+    readbackHash: result.readbackHash,
+    counts: result.counts,
+    cases,
+    beforeAfterEqual: cases.every((item) => item.beforeAfterEqual),
+    tieBucketsAtLeast64: cases.every((item) => item.tieBucketAtLeast64),
+    noPageGaps: cases.every((item) => item.noGap),
+    noPageDuplicates: cases.every((item) => item.noDuplicate),
+    indexInventories: { baseline: result.baselineInventory, before: result.beforeInventory, after: result.afterInventory },
+  };
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.writeFile(target, `${JSON.stringify(output, null, 2)}\n`, 'utf8');
+}
+
+function timeForCorrectness(collection, row) { return (collection === 'events' ? row.receivedAt : collection === 'inside' ? row.enteredAt : row.createdAt).getTime(); }
 
 function stableJson(value) { return JSON.stringify(stableValue(value)); }
 function stableValue(value) {

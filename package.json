@@ -71,6 +71,8 @@
     "test:g09a": "npm run test:g09a:unit && npm run test:g09a:e2e && npm run test:g09a:integration && npm run test:g09a:boundary && npm run test:g09a:negative-compile",
     "test:g09b:correctness": "node scripts/test-g09b-correctness.mjs",
     "test:g09b:orchestration": "node scripts/internal-g09b-orchestration-smoke.mjs",
+    "test:perf": "node scripts/test-perf.mjs",
+    "test:g09b:perf:smoke": "node scripts/test-perf.mjs --gate g09b --smoke",
     "test:g09b:fixture": "npm run build && NODE_OPTIONS=--experimental-vm-modules jest --config jest.g09b.fixture.config.cjs",
     "test:integration": "npm run build && NODE_OPTIONS=--experimental-vm-modules jest --config jest.integration.config.cjs",
     "test:g04a": "node scripts/test-g04a-integration.mjs",

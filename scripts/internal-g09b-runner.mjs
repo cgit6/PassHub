@@ -10,7 +10,7 @@ import {
   stopRunner,
 } from './internal-g09b-orchestration.mjs';
 
-const DEFAULT_NODE_IMAGE = 'node:24.21.0-bookworm-slim@sha256:2fe369e969550cde8e867afc3fe370b260140cab4a23d467074295b42163d553';
+export const DEFAULT_NODE_IMAGE = 'node:24.21.0-bookworm-slim@sha256:2fe369e969550cde8e867afc3fe370b260140cab4a23d467074295b42163d553';
 
 export async function runG09bCorrectness(options = {}) {
   const clock = options.clock ?? { now: () => Date.now() };
@@ -52,8 +52,9 @@ export async function runG09bCorrectness(options = {}) {
     await runPhase('docker', [
       'run', '--name', workerName, '--label', workerLabel, '--network', 'host', '-v', `${workspace}:/workspace`, '-w', '/workspace',
       '-e', `G09B_MONGO_URI=${mongoUri}`, '-e', `G09B_MONGO_DATABASE=${databaseName}`,
+      ...Object.entries(options.workerEnv ?? {}).flatMap(([key, value]) => ['-e', `${key}=${value}`]),
       nodeImage, 'sh', '-lc',
-      'node --version && npm --version && npm run build && node scripts/internal-g09b-correctness-worker.mjs',
+      `node --version && npm --version && npm run build && node ${options.workerScript ?? 'scripts/internal-g09b-correctness-worker.mjs'}`,
     ]);
   } catch (error) {
     failure = error;
