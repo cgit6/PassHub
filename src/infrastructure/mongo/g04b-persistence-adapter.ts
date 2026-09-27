@@ -24,15 +24,19 @@ import type {
   ResolvedIdentitySnapshot,
   SourceFacts,
   SourceFactsPort,
+  QueryDataPort,
+  QuerySnapshotQualification,
+  QuerySnapshotEvent,
 } from '../../access/ports/index.js';
 import { toRedactedAccessEventProjection } from '../../access/application/recognition-result-mapper.js';
 import { isAccessScopeContextRetired, readAccessScopeContextClaims } from '../../shared/access-scope-context.js';
 import { isComparisonArtifact, type ComparisonArtifact } from '../../access/ports/comparison-artifact.js';
 import { assertExternalEventId, assertExternalSubjectId, assertProvider } from '../../access/application/comparison/recognition-input.js';
-import { assertQualificationState, type QualificationState } from '../../access/domain/index.js';
+import { assertQualificationState, REASON_CODES, type QualificationState, type ReasonCode } from '../../access/domain/index.js';
 import { compareComparisonArtifacts } from '../../access/application/comparison/comparison-capability.js';
 import {
   ensureG04bSchema,
+  G04B_FACE_SLOTS_COLLECTION,
   assertG04bMetadataBootstrap,
   type G04bCollections,
   type G04bEventDocument,
@@ -54,6 +58,10 @@ export const G04B_TRANSACTION_OPTIONS = Object.freeze({
   writeConcern: { w: 'majority' as const, j: true },
 });
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const QUERY_READ_OPTIONS = Object.freeze({
+  readPreference: 'primary' as const,
+  readConcern: { level: 'majority' as const },
+});
 
 export interface G04bClock {
   nowMs(): number;
@@ -142,8 +150,45 @@ interface TransactionState {
   stage: G04bTransactionStage;
 }
 
+interface QueryQualificationAggregate {
+  readonly _id: unknown;
+  readonly incarnation: unknown;
+  readonly displayName: unknown;
+  readonly validFrom: unknown;
+  readonly validUntil: unknown;
+  readonly presence: unknown;
+  readonly enteredAt: unknown;
+  readonly exitedAt: unknown;
+  readonly revokedAt: unknown;
+  readonly revocationReason: unknown;
+  readonly expiredTerminalAt: unknown;
+  readonly createdAt: unknown;
+  readonly updatedAt: unknown;
+  readonly faceMapping: unknown;
+}
+
+interface QueryFaceMappingAggregate {
+  readonly qualificationId: unknown;
+  readonly qualificationIncarnation: unknown;
+  readonly mappingIncarnation: unknown;
+  readonly version: unknown;
+}
+
+interface QueryEventAggregate {
+  readonly _id: unknown;
+  readonly sourceId: unknown;
+  readonly direction: unknown;
+  readonly kind: unknown;
+  readonly outcome: unknown;
+  readonly reasonCode: unknown;
+  readonly receivedAt: unknown;
+  readonly recordedAt: unknown;
+  readonly qualificationId: unknown;
+  readonly presenceTransition: unknown;
+}
+
 export class G04bMongoPersistenceAdapter
-  implements ManagementDataPort, RecognitionDataPort, SourceFactsPort, AccessQueryPort {
+  implements ManagementDataPort, RecognitionDataPort, SourceFactsPort, AccessQueryPort, QueryDataPort {
   private readonly database: Db;
   private collections: G04bCollections | null = null;
   private readonly transactions = new WeakMap<object, TransactionState>();
@@ -240,7 +285,19 @@ export class G04bMongoPersistenceAdapter
     return this.readSourceFacts(context, sourceId);
   }
 
-  public async readQualification(context: AccessScopeContext, qualificationId: string): Promise<ManagementQualificationSnapshot | null> {
+  public async readQualification(context: AccessScopeContext, qualificationId: string): Promise<ManagementQualificationSnapshot | null>;
+  public async readQualification(qualificationId: string, observedAtMs: number): Promise<QuerySnapshotQualification | null>;
+  public async readQualification(
+    contextOrQualificationId: AccessScopeContext | string,
+    qualificationIdOrObservedAtMs: string | number,
+  ): Promise<ManagementQualificationSnapshot | QuerySnapshotQualification | null> {
+    if (typeof contextOrQualificationId === 'string') {
+      if (typeof qualificationIdOrObservedAtMs !== 'number') throw new TypeError('query qualification observation time is invalid');
+      return this.readQueryQualification(contextOrQualificationId, qualificationIdOrObservedAtMs);
+    }
+    if (typeof qualificationIdOrObservedAtMs !== 'string') throw new TypeError('management qualification ID is invalid');
+    const context = contextOrQualificationId;
+    const qualificationId = qualificationIdOrObservedAtMs;
     const state = await this.begin(context);
     try {
       const document = await this.requireCollections().qualifications.findOne({ _id: qualificationId }, { session: state.session });
@@ -404,6 +461,74 @@ export class G04bMongoPersistenceAdapter
       receivedAtMs: event.receivedAt.getTime(), recordedAtMs: event.recordedAt.getTime(),
       qualificationId: event.qualificationId, presenceTransition: event.presenceTransition,
     }));
+  }
+
+  public async listQualifications(input: Parameters<QueryDataPort['listQualifications']>[0]): Promise<readonly QuerySnapshotQualification[]> {
+    assertQueryListInput(input, false);
+    const documents = await this.requireCollections().qualifications.aggregate<QueryQualificationAggregate>([
+      { $match: qualificationQueryMatch(input.after, null) },
+      { $sort: { createdAt: -1, _id: -1 } },
+      { $limit: input.fetchLimit },
+      queryFaceMappingLookup(),
+      queryQualificationProjection(),
+    ], QUERY_READ_OPTIONS).toArray();
+    return documents.map(toQueryQualification);
+  }
+
+  public async listInside(input: Parameters<QueryDataPort['listInside']>[0]): Promise<readonly QuerySnapshotQualification[]> {
+    assertQueryListInput(input, false);
+    const documents = await this.requireCollections().qualifications.aggregate<QueryQualificationAggregate>([
+      { $match: qualificationQueryMatch(input.after, 'INSIDE') },
+      { $sort: { enteredAt: -1, _id: -1 } },
+      { $limit: input.fetchLimit },
+      queryFaceMappingLookup(),
+      queryQualificationProjection(),
+    ], QUERY_READ_OPTIONS).toArray();
+    return documents.map(toQueryQualification);
+  }
+
+  public async listEvents(input: Parameters<QueryDataPort['listEvents']>[0]): Promise<readonly QuerySnapshotEvent[]> {
+    assertQueryListInput(input, true);
+    assertQueryEventFilters(input.filters);
+    const match: Record<string, unknown>[] = [];
+    const keyset = eventQueryKeyset(input.after);
+    if (keyset !== null) match.push(keyset);
+    if (input.filters.qualificationId !== null) match.push({ qualificationId: input.filters.qualificationId });
+    if (input.filters.outcome !== null) match.push({ outcome: input.filters.outcome });
+    if (input.filters.reasonCode !== null) match.push({ reasonCode: input.filters.reasonCode });
+    const filter = match.length === 0 ? {} : match.length === 1 ? match[0] : { $and: match };
+    const documents = await this.requireCollections().events.aggregate<QueryEventAggregate>([
+      { $match: filter },
+      { $sort: { receivedAt: -1, _id: -1 } },
+      { $limit: input.fetchLimit },
+      queryEventProjection(),
+    ], QUERY_READ_OPTIONS).toArray();
+    return documents.map(toQueryEvent);
+  }
+
+  private async readQueryQualification(qualificationId: string, observedAtMs: number): Promise<QuerySnapshotQualification | null> {
+    assertQueryUuid(qualificationId);
+    assertQueryObservedAt(observedAtMs);
+    const documents = await this.requireCollections().qualifications.aggregate<QueryQualificationAggregate>([
+      { $match: { _id: qualificationId } },
+      { $limit: 1 },
+      queryFaceMappingLookup(),
+      queryQualificationProjection(),
+    ], QUERY_READ_OPTIONS).toArray();
+    const document = documents[0];
+    return document === undefined ? null : toQueryQualification(document);
+  }
+
+  public async readEvent(eventId: string, observedAtMs: number): Promise<QuerySnapshotEvent | null> {
+    assertQueryUuid(eventId);
+    assertQueryObservedAt(observedAtMs);
+    const documents = await this.requireCollections().events.aggregate<QueryEventAggregate>([
+      { $match: { _id: eventId } },
+      { $limit: 1 },
+      queryEventProjection(),
+    ], QUERY_READ_OPTIONS).toArray();
+    const document = documents[0];
+    return document === undefined ? null : toQueryEvent(document);
   }
 
   private async redactQualifications(documents: readonly G04bQualificationDocument[]): Promise<readonly import('../../access/ports/index.js').RedactedQualificationProjection[]> {
@@ -837,6 +962,160 @@ export class G04bMongoPersistenceAdapter
     return new Date(value);
   }
 }
+
+function queryFaceMappingLookup(): Record<string, unknown> {
+  return {
+    $lookup: {
+      from: G04B_FACE_SLOTS_COLLECTION,
+      let: { qualificationId: '$_id', qualificationIncarnation: '$incarnation' },
+      pipeline: [
+        { $match: { $expr: { $and: [
+          { $eq: ['$qualificationId', '$$qualificationId'] },
+          { $eq: ['$qualificationIncarnation', '$$qualificationIncarnation'] },
+        ] } } },
+        { $sort: { _id: 1 } },
+        { $limit: 1 },
+        { $project: { _id: 0, qualificationId: 1, qualificationIncarnation: 1, mappingIncarnation: '$slotIncarnation', version: 1 } },
+      ],
+      as: 'faceMapping',
+    },
+  };
+}
+
+function queryQualificationProjection(): Record<string, unknown> {
+  return { $project: {
+    _id: 1, incarnation: 1, displayName: 1, validFrom: 1, validUntil: 1,
+    presence: 1, enteredAt: 1, exitedAt: 1, revokedAt: 1, revocationReason: 1,
+    expiredTerminalAt: 1, createdAt: 1, updatedAt: 1, faceMapping: 1,
+  } };
+}
+
+function queryEventProjection(): Record<string, unknown> {
+  return { $project: {
+    _id: 1, sourceId: 1, direction: 1, kind: 1, outcome: 1, reasonCode: 1,
+    receivedAt: 1, recordedAt: 1, qualificationId: 1, presenceTransition: 1,
+  } };
+}
+
+function qualificationQueryMatch(after: { readonly lastTimeMs: number; readonly lastId: string } | null, presence: 'INSIDE' | null): Record<string, unknown> {
+  const keyset = after === null ? null : queryKeyset(after, presence === 'INSIDE' ? 'enteredAt' : 'createdAt');
+  if (presence === null && keyset === null) return {};
+  if (presence !== null && keyset === null) return { presence };
+  if (presence === null) return keyset as Record<string, unknown>;
+  return { $and: [{ presence }, keyset] };
+}
+
+function eventQueryKeyset(after: { readonly lastTimeMs: number; readonly lastId: string } | null): Record<string, unknown> | null {
+  return after === null ? null : queryKeyset(after, 'receivedAt');
+}
+
+function queryKeyset(after: { readonly lastTimeMs: number; readonly lastId: string }, field: 'createdAt' | 'enteredAt' | 'receivedAt'): Record<string, unknown> {
+  const time = new Date(after.lastTimeMs);
+  return { $or: [
+    { [field]: { $lt: time } },
+    { [field]: time, _id: { $lt: after.lastId } },
+  ] };
+}
+
+function assertQueryListInput(value: unknown, withFilters: boolean): asserts value is { readonly fetchLimit: number; readonly after: { readonly lastTimeMs: number; readonly lastId: string } | null; readonly observedAtMs: number; readonly filters?: unknown } {
+  assertExactPlainRecord(value, withFilters ? ['after', 'fetchLimit', 'filters', 'observedAtMs'] : ['after', 'fetchLimit', 'observedAtMs']);
+  const record = value as Record<string, unknown>;
+  assertQueryFetchLimit(record.fetchLimit);
+  assertQueryObservedAt(record.observedAtMs);
+  assertQueryAfter(record.after);
+}
+
+function assertQueryEventFilters(value: unknown): asserts value is { readonly qualificationId: string | null; readonly outcome: 'ACCEPTED' | 'REJECTED' | null; readonly reasonCode: ReasonCode | null } {
+  assertExactPlainRecord(value, ['qualificationId', 'outcome', 'reasonCode']);
+  const record = value as Record<string, unknown>;
+  if (record.qualificationId !== null && !isQueryUuid(record.qualificationId)) throw new TypeError('query qualification filter is invalid');
+  if (record.outcome !== null && record.outcome !== 'ACCEPTED' && record.outcome !== 'REJECTED') throw new TypeError('query outcome filter is invalid');
+  if (record.reasonCode !== null && (typeof record.reasonCode !== 'string' || !REASON_CODES.includes(record.reasonCode as ReasonCode))) throw new TypeError('query reason filter is invalid');
+}
+
+function assertQueryFetchLimit(value: unknown): asserts value is number {
+  if (!Number.isSafeInteger(value) || (value as number) < 2 || (value as number) > 101) throw new TypeError('query fetch limit is invalid');
+}
+
+function assertQueryObservedAt(value: unknown): asserts value is number {
+  if (!Number.isSafeInteger(value)) throw new TypeError('query observed time is invalid');
+}
+
+function assertQueryUuid(value: unknown): asserts value is string {
+  if (!isQueryUuid(value)) throw new TypeError('query UUID is invalid');
+}
+
+function assertQueryAfter(value: unknown): asserts value is { readonly lastTimeMs: number; readonly lastId: string } | null {
+  if (value === null) return;
+  assertExactPlainRecord(value, ['lastId', 'lastTimeMs']);
+  const record = value as Record<string, unknown>;
+  if (!Number.isSafeInteger(record.lastTimeMs) || !isQueryUuid(record.lastId)) throw new TypeError('query after key is invalid');
+}
+
+function assertExactPlainRecord(value: unknown, expectedKeys: readonly string[]): void {
+  if (typeof value !== 'object' || value === null) throw new TypeError('query record is invalid');
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw new TypeError('query record prototype is invalid');
+  const keys = Reflect.ownKeys(value);
+  if (keys.length !== expectedKeys.length || keys.some((key) => typeof key !== 'string') || expectedKeys.some((key) => !keys.includes(key))) throw new TypeError('query record keys are invalid');
+  for (const key of expectedKeys) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || !Object.hasOwn(descriptor, 'value')) throw new TypeError('query record property is invalid');
+  }
+}
+
+function toQueryQualification(value: QueryQualificationAggregate): QuerySnapshotQualification {
+  assertExactPlainRecord(value, ['_id', 'incarnation', 'displayName', 'validFrom', 'validUntil', 'presence', 'enteredAt', 'exitedAt', 'revokedAt', 'revocationReason', 'expiredTerminalAt', 'createdAt', 'updatedAt', 'faceMapping']);
+  if (!isQueryUuid(value._id) || !isQueryUuid(value.incarnation) || typeof value.displayName !== 'string'
+    || !isDate(value.validFrom) || !isDate(value.validUntil) || !isDateOrNull(value.enteredAt)
+    || !isDateOrNull(value.exitedAt) || !isDateOrNull(value.revokedAt) || !isDateOrNull(value.expiredTerminalAt)
+    || (value.revocationReason !== null && typeof value.revocationReason !== 'string')
+    || !isDate(value.createdAt) || !isDate(value.updatedAt)
+    || (value.presence !== 'NOT_ENTERED' && value.presence !== 'INSIDE' && value.presence !== 'EXITED')
+    || !Array.isArray(value.faceMapping) || value.faceMapping.length > 1) throw new TypeError('qualification query document is invalid');
+  const mappingDocument = value.faceMapping[0];
+  let faceMapping: QuerySnapshotQualification['faceMapping'] = null;
+  if (mappingDocument !== undefined) {
+    assertExactPlainRecord(mappingDocument, ['qualificationId', 'qualificationIncarnation', 'mappingIncarnation', 'version']);
+    const mapping = mappingDocument as QueryFaceMappingAggregate;
+    if (!isQueryUuid(mapping.qualificationId) || mapping.qualificationId !== value._id
+      || !isQueryUuid(mapping.qualificationIncarnation) || mapping.qualificationIncarnation !== value.incarnation
+      || !isQueryUuid(mapping.mappingIncarnation) || !Number.isSafeInteger(mapping.version) || (mapping.version as number) < 0) throw new TypeError('qualification mapping is invalid');
+    faceMapping = Object.freeze({ qualificationId: mapping.qualificationId, qualificationIncarnation: mapping.qualificationIncarnation, mappingIncarnation: mapping.mappingIncarnation, version: mapping.version as number });
+  }
+  return Object.freeze({
+    qualificationId: value._id, displayName: value.displayName,
+    validFromMs: dateMs(value.validFrom), validUntilMs: dateMs(value.validUntil),
+    presence: value.presence, enteredAtMs: nullableDateMs(value.enteredAt), exitedAtMs: nullableDateMs(value.exitedAt),
+    revokedAtMs: nullableDateMs(value.revokedAt), revocationReason: value.revocationReason,
+    expiredTerminalAtMs: nullableDateMs(value.expiredTerminalAt), createdAtMs: dateMs(value.createdAt), updatedAtMs: dateMs(value.updatedAt),
+    qualificationIncarnation: value.incarnation, faceMapping,
+  });
+}
+
+function toQueryEvent(value: QueryEventAggregate): QuerySnapshotEvent {
+  assertExactPlainRecord(value, ['_id', 'sourceId', 'direction', 'kind', 'outcome', 'reasonCode', 'receivedAt', 'recordedAt', 'qualificationId', 'presenceTransition']);
+  if (!isQueryUuid(value._id) || !isQueryUuid(value.sourceId) || !isDate(value.receivedAt) || !isDate(value.recordedAt)
+    || (value.direction !== 'ENTRY' && value.direction !== 'EXIT')
+    || (value.kind !== 'QR_SCANNED' && value.kind !== 'FACE_MATCHED' && value.kind !== 'FACE_UNKNOWN')
+    || (value.outcome !== 'ACCEPTED' && value.outcome !== 'REJECTED')
+    || typeof value.reasonCode !== 'string' || !REASON_CODES.includes(value.reasonCode as ReasonCode)
+    || (value.qualificationId !== null && !isQueryUuid(value.qualificationId))) throw new TypeError('event query document is invalid');
+  let presenceTransition: QuerySnapshotEvent['presenceTransition'] = null;
+  if (value.presenceTransition !== null) {
+    assertExactPlainRecord(value.presenceTransition, ['from', 'to']);
+    const transition = value.presenceTransition as { readonly from: unknown; readonly to: unknown };
+    if (!['NOT_ENTERED', 'INSIDE', 'EXITED'].includes(transition.from as string) || !['NOT_ENTERED', 'INSIDE', 'EXITED'].includes(transition.to as string)) throw new TypeError('event transition is invalid');
+    presenceTransition = Object.freeze({ from: transition.from as 'NOT_ENTERED' | 'INSIDE' | 'EXITED', to: transition.to as 'NOT_ENTERED' | 'INSIDE' | 'EXITED' });
+  }
+  return Object.freeze({ eventId: value._id, sourceId: value.sourceId, direction: value.direction, kind: value.kind, outcome: value.outcome, reasonCode: value.reasonCode as ReasonCode, receivedAtMs: dateMs(value.receivedAt), recordedAtMs: dateMs(value.recordedAt), qualificationId: value.qualificationId, presenceTransition });
+}
+
+function isDate(value: unknown): value is Date { return value instanceof Date && Number.isSafeInteger(value.getTime()); }
+function isDateOrNull(value: unknown): value is Date | null { return value === null || isDate(value); }
+function dateMs(value: Date): number { if (!isDate(value)) throw new TypeError('query date is invalid'); return value.getTime(); }
+function nullableDateMs(value: Date | null): number | null { return value === null ? null : dateMs(value); }
+function isQueryUuid(value: unknown): value is string { return typeof value === 'string' && UUID_V4.test(value); }
 
 export function classifyG04bTransactionError(error: unknown, stage: G04bTransactionStage): G04bErrorFacts {
   const candidate = error as Partial<MongoError> & { code?: unknown; errorLabels?: unknown; index?: unknown; keyPattern?: unknown };
