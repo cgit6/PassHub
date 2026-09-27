@@ -34,6 +34,10 @@ export interface WriteOperationLifecycleEvent {
 }
 
 export interface WriteOperationLifecycleObserver {
+  registered?(receipt: WriteOperationRegistrationReceipt): void;
+  queued?(receipt: WriteOperationRegistrationReceipt): void;
+  started?(receipt: WriteOperationRegistrationReceipt): void;
+  blocked?(receipt: WriteOperationRegistrationReceipt): void;
   settled(event: WriteOperationLifecycleEvent): void;
 }
 
@@ -91,6 +95,7 @@ export interface WriteOperationCoordinatorOptions<
   readonly clock: TrustedWriteClock;
   readonly monotonicClock?: TrustedWriteMonotonicClock;
   readonly lifecycleObserver?: WriteOperationLifecycleObserver;
+  readonly startGate?: () => boolean;
   readonly executors: WriteOperationExecutorChannels<
     TManagementCreateInput,
     TManagementCreateResult,
@@ -129,6 +134,8 @@ export interface WriteOperationCoordinatorBundle<
   readonly managementUpdate: WriteOperationEnqueuePort<TManagementUpdateInput, TManagementUpdateResult>;
   readonly managementRevoke: WriteOperationEnqueuePort<TManagementRevokeInput, TManagementRevokeResult>;
   readonly recognition: WriteOperationEnqueuePort<TRecognitionInput, TRecognitionResult>;
+  /** Wake a drain deferred by the optional start gate. */
+  wake(): void;
 }
 
 type Candidate =
@@ -201,6 +208,11 @@ export function createWriteOperationCoordinatorBundle<
     ? performance.now.bind(performance)
     : options.monotonicClock.nowMs.bind(options.monotonicClock);
   const lifecycleSettled = options.lifecycleObserver?.settled.bind(options.lifecycleObserver);
+  const lifecycleRegistered = options.lifecycleObserver?.registered?.bind(options.lifecycleObserver);
+  const lifecycleQueued = options.lifecycleObserver?.queued?.bind(options.lifecycleObserver);
+  const lifecycleStarted = options.lifecycleObserver?.started?.bind(options.lifecycleObserver);
+  const lifecycleBlocked = options.lifecycleObserver?.blocked?.bind(options.lifecycleObserver);
+  const startGate = options.startGate;
   const capturedExecutors = Object.freeze({
     managementCreate: options.executors.managementCreate,
     managementUpdate: options.executors.managementUpdate,
@@ -238,9 +250,58 @@ export function createWriteOperationCoordinatorBundle<
     if (operation.candidate === null) operation.candidate = candidate;
   };
 
+  const invokeLifecycleHook = (
+    hook: ((receipt: WriteOperationRegistrationReceipt) => void) | undefined,
+    receipt: WriteOperationRegistrationReceipt,
+  ): void => {
+    if (hook === undefined) return;
+    const result = hook(receipt);
+    rejectAsyncLifecycleResult(result);
+    if (result !== undefined) throw new TypeError('write operation lifecycle hook must return undefined');
+  };
+
+  const notifyBlocked = (operation: Operation): void => {
+    try {
+      invokeLifecycleHook(lifecycleBlocked, operation.receipt);
+    } catch {
+      // There is no safer observer to notify. The coordinator remains blocked.
+    }
+  };
+
+  const rejectQueued = (error: unknown): void => {
+    const queued = queue.splice(0, queue.length);
+    for (const operation of queued) {
+      if (operation.finalized) continue;
+      operation.finalized = true;
+      operation.active = false;
+      notifyBlocked(operation);
+      operation.reject(error);
+    }
+  };
+
+  const failClosed = (operation: Operation | null, error: unknown): void => {
+    blocked = true;
+    if (operation !== null && !operation.finalized) {
+      const position = queue.indexOf(operation);
+      if (position >= 0) queue.splice(position, 1);
+      operation.finalized = true;
+      operation.active = false;
+      if (current === operation) current = null;
+      notifyBlocked(operation);
+      operation.reject(error);
+    }
+    rejectQueued(error);
+  };
+
   const runOperation = async (operation: Operation): Promise<void> => {
     current = operation;
     operation.active = true;
+    try {
+      invokeLifecycleHook(lifecycleStarted, operation.receipt);
+    } catch (error: unknown) {
+      failClosed(operation, error);
+      return;
+    }
     const owner: WriteOperationOwner = Object.freeze({
       assertCurrent: () => assertCurrent(operation),
     });
@@ -289,7 +350,9 @@ export function createWriteOperationCoordinatorBundle<
       return true;
     } catch {
       blocked = true;
+      notifyBlocked(operation);
       operation.reject(new Error('write operation lifecycle observer failed'));
+      rejectQueued(new Error('write operation lifecycle observer failed'));
       return false;
     }
   };
@@ -300,8 +363,13 @@ export function createWriteOperationCoordinatorBundle<
     operation.active = false;
     blocked = true;
     if (current === operation) current = null;
-    if (!notifyLifecycle(operation, 'UNKNOWN_EFFECT')) return;
-    operation.reject(error ?? new Error('write operation has unknown effect'));
+    const rejection = error ?? new Error('write operation has unknown effect');
+    if (!notifyLifecycle(operation, 'UNKNOWN_EFFECT')) {
+      rejectQueued(rejection);
+      return;
+    }
+    operation.reject(rejection);
+    rejectQueued(rejection);
   };
 
   const finalize = (operation: Operation, candidate: Candidate): void => {
@@ -310,13 +378,17 @@ export function createWriteOperationCoordinatorBundle<
     operation.active = false;
     if (candidate.kind === 'UNKNOWN_EFFECT') blocked = true;
     if (current === operation) current = null;
-    if (!notifyLifecycle(operation, candidate.kind)) return;
+    if (!notifyLifecycle(operation, candidate.kind)) {
+      rejectQueued(candidateError(candidate) ?? new Error('write operation lifecycle observer failed'));
+      return;
+    }
     switch (candidate.kind) {
       case 'BUSINESS_RESULT_PERSISTED':
         operation.resolve(candidate.result);
         return;
       case 'UNKNOWN_EFFECT':
         operation.reject(candidate.error);
+        rejectQueued(candidate.error);
         return;
       case 'PRESTART_REJECTED':
       case 'KNOWN_NO_EFFECT':
@@ -332,6 +404,19 @@ export function createWriteOperationCoordinatorBundle<
         const operation = queue[0];
         if (operation === undefined) return;
         if (operation.validationState === 'WAITING_VALIDATION') return;
+        if (startGate !== undefined) {
+          let allowed: boolean;
+          try {
+            const result = startGate();
+            rejectAsyncLifecycleResult(result);
+            if (typeof result !== 'boolean') throw new TypeError('write operation start gate must return boolean');
+            allowed = result;
+          } catch (error: unknown) {
+            failClosed(operation, error);
+            return;
+          }
+          if (!allowed) return;
+        }
         queue.shift();
         if (operation.validationState === 'REJECTED') {
           finalize(operation, { kind: 'PRESTART_REJECTED', error: operation.prestartError });
@@ -372,6 +457,10 @@ export function createWriteOperationCoordinatorBundle<
       resolvePromise = resolve;
       rejectPromise = reject;
     });
+    // A lifecycle failure can reject this completion before a provisional
+    // handle is returned; attach a sink so that fail-closed never creates an
+    // unhandled rejection for an inaccessible handle.
+    void promise.catch(() => undefined);
     const operation: Operation = {
       kind,
       operationId,
@@ -392,6 +481,12 @@ export function createWriteOperationCoordinatorBundle<
     };
     queue.push(operation);
     issuedOperationIds.add(operationId);
+    try {
+      invokeLifecycleHook(lifecycleRegistered, receipt);
+    } catch (error: unknown) {
+      failClosed(operation, error);
+      throw new LifecycleHookFailure(error);
+    }
     nextSequence += 1n;
     scheduleDrain();
     let decided = false;
@@ -403,6 +498,12 @@ export function createWriteOperationCoordinatorBundle<
         decided = true;
         operation.input = validatedInput;
         operation.validationState = 'READY';
+        try {
+          invokeLifecycleHook(lifecycleQueued, operation.receipt);
+        } catch (error: unknown) {
+          failClosed(operation, error);
+          throw error;
+        }
         scheduleDrain();
       },
       rejectBeforeStart(error: unknown): void {
@@ -432,8 +533,18 @@ export function createWriteOperationCoordinatorBundle<
     executor: TrustedWriteExecutor<TInput, TResult>,
   ): Promise<TResult> => {
     if (blocked) return Promise.reject(new Error('write operation coordinator is blocked by unknown effect'));
-    const provisional = registerProvisional(kind, executor);
-    provisional.activate(input);
+    let provisional: WriteOperationProvisional<TInput, TResult>;
+    try {
+      provisional = registerProvisional(kind, executor);
+    } catch (error: unknown) {
+      if (!(error instanceof LifecycleHookFailure)) throw error;
+      return Promise.reject(error.cause);
+    }
+    try {
+      provisional.activate(input);
+    } catch {
+      return provisional.completion;
+    }
     return provisional.completion;
   };
 
@@ -453,7 +564,19 @@ export function createWriteOperationCoordinatorBundle<
     return Object.freeze(port);
   };
 
-  const bundle: WriteOperationCoordinatorBundle<
+  const bundleChannels = {
+    managementCreate: createPort('MANAGEMENT_CREATE', capturedExecutors.managementCreate),
+    managementUpdate: createPort('MANAGEMENT_UPDATE', capturedExecutors.managementUpdate),
+    managementRevoke: createPort('MANAGEMENT_REVOKE', capturedExecutors.managementRevoke),
+    recognition: createPort('RECOGNITION', capturedExecutors.recognition),
+  };
+  Object.defineProperty(bundleChannels, 'wake', {
+    value: scheduleDrain,
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
+  const bundle = bundleChannels as WriteOperationCoordinatorBundle<
     TManagementCreateInput,
     TManagementCreateResult,
     TManagementUpdateInput,
@@ -462,12 +585,7 @@ export function createWriteOperationCoordinatorBundle<
     TManagementRevokeResult,
     TRecognitionInput,
     TRecognitionResult
-  > = {
-    managementCreate: createPort('MANAGEMENT_CREATE', capturedExecutors.managementCreate),
-    managementUpdate: createPort('MANAGEMENT_UPDATE', capturedExecutors.managementUpdate),
-    managementRevoke: createPort('MANAGEMENT_REVOKE', capturedExecutors.managementRevoke),
-    recognition: createPort('RECOGNITION', capturedExecutors.recognition),
-  };
+  >;
   return Object.freeze(bundle);
 }
 
@@ -487,6 +605,16 @@ function isLegalCandidate(candidate: Candidate): boolean {
     case 'KNOWN_NO_EFFECT':
     case 'UNKNOWN_EFFECT':
       return candidate.error !== undefined && candidate.error !== null;
+  }
+}
+
+function candidateError(candidate: Candidate): unknown {
+  return candidate.kind === 'BUSINESS_RESULT_PERSISTED' ? undefined : candidate.error;
+}
+
+class LifecycleHookFailure extends Error {
+  public constructor(public override readonly cause: unknown) {
+    super('write operation lifecycle hook failed');
   }
 }
 
@@ -536,6 +664,9 @@ function assertOptions<
   }
   if (options.lifecycleObserver !== undefined && typeof options.lifecycleObserver.settled !== 'function') {
     throw new TypeError('write operation lifecycle observer is invalid');
+  }
+  if (options.startGate !== undefined && typeof options.startGate !== 'function') {
+    throw new TypeError('write operation start gate is invalid');
   }
   if (typeof options.executors !== 'object' || options.executors === null) {
     throw new TypeError('trusted write executors are required');

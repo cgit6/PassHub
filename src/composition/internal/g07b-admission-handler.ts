@@ -51,6 +51,11 @@ import {
   type FixedMinuteRateLedger,
 } from './fixed-minute-rate-ledger.js';
 import {
+  createWriterQuiescence,
+  isWriterQuiescencePort,
+  type WriterQuiescencePort,
+} from './writer-quiescence.js';
+import {
   createHttpResponseOwner,
   type HttpResponseOwner,
   type NarrowHttpResponse,
@@ -172,6 +177,8 @@ export interface G07bAdmissionHandlerOptions {
   readonly monotonicClock?: G07bMonotonicClock;
   readonly resources?: AdmissionResourceLedger;
   readonly rates?: FixedMinuteRateLedger;
+  /** Shared with the G09a query composition when supplied. */
+  readonly writerQuiescence?: WriterQuiescencePort;
 }
 
 interface WriterInput {
@@ -289,6 +296,7 @@ export function createG07bAdmissionHandler(
   const rates = options.rates ?? createFixedMinuteRateLedger({
     clock: wallClock,
   });
+  const writerQuiescence = options.writerQuiescence ?? createWriterQuiescence({ clock: wallClock });
 
   const acquireBundle = resources.tryAcquire.bind(resources);
   const releaseHttp = resources.releaseHttp.bind(resources);
@@ -365,13 +373,29 @@ export function createG07bAdmissionHandler(
     }
   };
 
+  let wakeCoordinator = (): void => undefined;
   const lifecycleObserver = Object.freeze({
+    registered: writerQuiescence.lifecycle.registered.bind(writerQuiescence.lifecycle),
+    queued: writerQuiescence.lifecycle.queued.bind(writerQuiescence.lifecycle),
+    started: writerQuiescence.lifecycle.started.bind(writerQuiescence.lifecycle),
+    blocked: writerQuiescence.lifecycle.blocked.bind(writerQuiescence.lifecycle),
     settled(event: WriteOperationLifecycleEvent): void {
-      if (event.disposition === 'UNKNOWN_EFFECT') return;
+      if (event.disposition === 'UNKNOWN_EFFECT') {
+        writerQuiescence.lifecycle.settled(event.receipt, event.disposition);
+        return;
+      }
       const lease = originByOperation.get(event.receipt.operationId);
-      if (lease === undefined) return;
-      releaseOrigin(lease);
-      originByOperation.delete(event.receipt.operationId);
+      if (lease !== undefined) {
+        try {
+          releaseOrigin(lease);
+        } catch (error: unknown) {
+          writerQuiescence.lifecycle.blocked(event.receipt);
+          throw error;
+        }
+        originByOperation.delete(event.receipt.operationId);
+      }
+      // State is removed only after every external cleanup step succeeds.
+      writerQuiescence.lifecycle.settled(event.receipt, event.disposition);
     },
   });
 
@@ -388,6 +412,7 @@ export function createG07bAdmissionHandler(
     clock: wallClock,
     monotonicClock,
     lifecycleObserver,
+    startGate: writerQuiescence.canStartWriter,
     executors: Object.freeze({
       managementCreate: executeManagement,
       managementUpdate: executeManagement,
@@ -395,6 +420,8 @@ export function createG07bAdmissionHandler(
       recognition: executeRecognition,
     }),
   });
+  writerQuiescence.bindCoordinatorWake(() => wakeCoordinator());
+  wakeCoordinator = coordinator.wake;
 
   async function executeManagement(
     input: WriterInput,
@@ -1476,7 +1503,8 @@ function assertOptions(options: G07bAdmissionHandlerOptions): void {
     || typeof options.unknownRecognition.offer !== 'function'
     || typeof options.unknownRecognition.accept !== 'function'
     || (options.wallClock !== undefined && typeof options.wallClock.nowMs !== 'function')
-    || (options.monotonicClock !== undefined && typeof options.monotonicClock.nowMs !== 'function')) {
+    || (options.monotonicClock !== undefined && typeof options.monotonicClock.nowMs !== 'function')
+    || (options.writerQuiescence !== undefined && !isWriterQuiescencePort(options.writerQuiescence))) {
     throw new TypeError('invalid G07b admission handler options');
   }
 }

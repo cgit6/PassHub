@@ -58,6 +58,42 @@ export {
   type G07bRouteCompositionOptions,
 } from './g07b-route-composition.js';
 export {
+  createWriterQuiescence,
+  isWriterQuiescencePort,
+  type ReadObservationLease,
+  type ReadObservationLeaseResult,
+  type WriterQuiescenceClock,
+  type WriterQuiescenceLifecycle,
+  type WriterQuiescencePort,
+  type WriterQuiescenceState,
+} from './writer-quiescence.js';
+export {
+  createQueryApplication,
+  type QueryApplication,
+} from '../../access/application/query-application.js';
+export {
+  type EventQueryFilters,
+  type EventQueryItem,
+  type EventQueryInput,
+  type QueryDataPort,
+  type QueryDetailResult,
+  type QueryPage,
+  type QualificationQueryInput,
+  type QualificationQueryItem,
+  type QuerySnapshotEvent,
+  type QuerySnapshotQualification,
+  type QueryAfterKey,
+} from '../../access/ports/query-ports.js';
+export { QueryApplicationError } from '../../access/application/query-errors.js';
+export {
+  createQueryCursorCodec,
+  isQueryCursorCodec,
+  type QueryCursorCodec,
+  type QueryCursorDecodeResult,
+  type QueryCursorFilters,
+  type QueryEndpoint,
+} from '../../access/application/internal/query-cursor.js';
+export {
   HTTP_RESPONSE_DEADLINE_MS,
   HttpResponseOwnerError,
   createHttpResponseOwner,

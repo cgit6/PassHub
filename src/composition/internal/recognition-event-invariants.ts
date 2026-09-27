@@ -1,5 +1,6 @@
 import type { RecognitionComparisonInput } from '../../access/application/comparison/comparison-port.js';
 import type { RedactedAccessEventProjection } from '../../access/ports/index.js';
+import { assertPersistedEventInvariant } from '../../access/application/internal/persisted-event-invariants.js';
 
 /**
  * Facts which must still be true when a persisted Event is rendered.  These
@@ -24,6 +25,7 @@ export function assertRecognitionEventInvariant(
   event: RedactedAccessEventProjection,
   expected: RecognitionEventExpectations,
 ): void {
+  assertPersistedEventInvariant(event);
   if (event.sourceId !== expected.sourceId) {
     throw new TypeError('persisted event source does not match request source');
   }

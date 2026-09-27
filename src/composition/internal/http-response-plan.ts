@@ -8,6 +8,7 @@ export const SAFE_HTTP_RESPONSE_CODES = Object.freeze([
   'AUTHENTICATION_FAILED',
   'AUTH_UNAVAILABLE',
   'FORBIDDEN',
+  'RESOURCE_NOT_FOUND',
   'MANAGEMENT_CONFLICT',
   'PERSISTENCE_UNAVAILABLE',
   'IDEMPOTENCY_CONFLICT',
@@ -33,6 +34,7 @@ const STATUS_BY_CODE: Readonly<Record<SafeHttpResponseCode, number>> = Object.fr
   AUTHENTICATION_FAILED: 401,
   AUTH_UNAVAILABLE: 503,
   FORBIDDEN: 403,
+  RESOURCE_NOT_FOUND: 404,
   MANAGEMENT_CONFLICT: 409,
   PERSISTENCE_UNAVAILABLE: 503,
   IDEMPOTENCY_CONFLICT: 409,
@@ -48,7 +50,7 @@ const STATUS_BY_CODE: Readonly<Record<SafeHttpResponseCode, number>> = Object.fr
 });
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
-const DEFAULT_MAX_BODY_BYTES = 64 * 1024;
+const DEFAULT_MAX_BODY_BYTES = 262_144;
 const MAX_JSON_DEPTH = 32;
 const FORBIDDEN_RAW_KEYS: ReadonlySet<string> = new Set([
   'cause',
@@ -117,7 +119,9 @@ export function createHttpResponsePlanBundle(
     || typeof options.currentDatasetEpoch !== 'string'
     || !UUID_V4.test(options.currentDatasetEpoch)
     || (options.maxBodyBytes !== undefined
-      && (!Number.isSafeInteger(options.maxBodyBytes) || options.maxBodyBytes <= 0))) {
+      && (!Number.isSafeInteger(options.maxBodyBytes)
+        || options.maxBodyBytes <= 0
+        || options.maxBodyBytes > DEFAULT_MAX_BODY_BYTES))) {
     throw new TypeError('invalid HTTP response plan options');
   }
 

@@ -35,3 +35,16 @@ export {
   type ManagementPersistenceEnvelope,
   type RecognitionPersistenceEnvelope,
 } from './trusted-operation.js';
+export {
+  type QueryAfterKey,
+  type EventQueryFilters,
+  type EventQueryItem,
+  type EventQueryInput,
+  type QueryDataPort,
+  type QueryDetailResult,
+  type QueryPage,
+  type QualificationQueryInput,
+  type QualificationQueryItem,
+  type QuerySnapshotEvent,
+  type QuerySnapshotQualification,
+} from './query-ports.js';
