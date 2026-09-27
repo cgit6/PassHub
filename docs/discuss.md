@@ -31,18 +31,18 @@ updated: "2026-09-27"
 ## 快速檢索卡
 
 - 核心問題：在小型訪客資格／模擬辨識決策業務上，形成合理、模組化、可驗證的Node.js/TypeScript架構與逐關方案；不以兩天時限取代品質論證。
-- 當前結論：D160完成規劃封口；D161完成舊碼清除；D163–D178保存G02–G08a各自限定證據；D179完成G08b辨識處理鏈限定gate（unit 42、true HTTP e2e 6、true Mongo 3）並停止於G08b。D180封閉G09a安全查詢開發前契約，使其由NOT_READY轉為READY，但尚未開始且沒有工程證據。矩陣仍為22V／114U，完整v1未完成。
+- 當前結論：D160完成規劃封口；D161完成舊碼清除；D163–D179保存G02–G08b各自限定證據；D180封閉G09a開發前契約；D181完成G09a安全查詢／keyset限定gate（unit 92、true HTTP 13、true Mongo 16）並停止於G09a。矩陣為28V／108U，完整v1未完成。
 - 關鍵爭點：D129原生中止兩送有界組預扣不退、跨窗口局部例外；D130較早確認起點／D131七格；D143 Face反向unique同txn替換必须G04a先真測。D149同epoch普通restart關寫是明示可用性代價，不能依memory空接管。
 - 適用於：D01–D165有效採用／修正、獨立角色公開論點、官方查證及剩餘gate風險。採Nest預設Express/strictTS/官方driver/單API/單Mongo member replica set，非無框架或HA；25STOP見D157及實作方案。
 - 不適用於：把歷史候選／官方語法／manifest／獨立唯讀實驗當PassHub已完成成果。D117 JSON v2已取代binary v1，D130永久終局候選未採，D89安全條件續辦仍有效；D161只有A01為V。
-- 待驗證：G09及其後gate。G08b已證Source-only strict QR／Face／UNKNOWN辨識、正常Event／Presence／映射保存、回放／conflict及unknown-effect停寫；仍未驗G09查詢、G10 driver wire／native清理／真回程loss／logs／hold、G11部署及完整release。
+- 待驗證：G09b及其後gate。G09a已證五條安全查詢、read-observation lease、keyset、AND filters、去敏投影與真Mongo讀取；仍未驗G09b效能、G10 driver wire／native清理／真回程loss／logs／hold、G11部署及完整release。
 - 實作者入口：[實作方案](implementation-plan.md)，再讀[136要求矩陣](requirements-traceability.md)及[業務規格](business-scope.md)，並回查對應D原文。未來每子關報實際證據後STOP，D114不授權未來不停實作。
 
 ## 閱讀狀態與階段界線
 
-- 最新狀態：D179記錄G08b完整辨識處理鏈限定gate已通過並停止於G08b；D180已使下一合法gate G09a達到開發前READY，但尚未開始。G09 query、G10 fault／control、G11 deployment及完整v1仍未完成。A01、A05–A09、A11–A16、B04、B08、B09、B13、B19、B27、B35、B41、B42、B52共22項為V，其餘114項仍U。
+- 最新狀態：D181記錄G09a安全查詢／keyset限定gate已通過並停止於G09a；下一合法gate為G09b，尚未開始。G09b perf、G10 fault／control／logs、G11 deployment及完整v1仍未完成。矩陣為28V／108U。
 - D01–D35 及所有較早摘要／交接保留歷史；其中「K1尚未同步」「尚未開始第二階段」「API/schema未定」不代表當前狀態。最新有效版本由D117/119/122/125/129–139/140–157及後續明確覆核修正判定，歷史block不回寫。下方回溯狀態描述只對當時有效，不能用來覆蓋新版。
-- 文件整體settled代表有效規劃已採用；D161留下舊碼處理證據，D163–D178留下G02–G08a各自限定證據，D179留下G08b辨識／真Mongo保存限定證據，D180只留下G09a開發前契約。partially-sourced仍含專案取捨、官方查證與未實測組合；上述限定gates及READY決策不代表G09查詢、G10 fault／control、G11部署或其餘114要求通過。
+- 文件整體settled代表有效規劃已採用；D161留下舊碼處理證據，D163–D179留下G02–G08b各自限定證據，D180留下G09a開發前契約，D181留下G09a安全查詢／真Mongo讀取限定證據。partially-sourced仍含專案取捨、官方查證與未實測組合；上述限定gates不代表G09b效能、G10 fault／control／logs、G11部署或其餘108要求通過。
 - 「使用者已接受」與「辯論暫定」逐 block 區分。授權保存辯論不等於確認候選架構，也不等於授權重寫程式。
 - D36–D41 為 2026-09-16 回溯追加；統一使用建檔時間，不捏造各輪原始時間。
 - D42–D46 為 2026-09-17 回溯追加；統一記錄保存時間，不捏造各輪原始時間。公開程式查核另保留查詢日期及固定 commit。
@@ -3335,3 +3335,14 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - 錯誤與大小：格式合法的小寫UUID查無qualification／event detail均回404 `RESOURCE_NOT_FOUND`，格式錯誤400；已認證Mongo read失敗回503 `PERSISTENCE_UNAVAILABLE`，不得偽裝空頁、null或partial。成功response固定最多256KiB，超限fail closed；request仍16KiB、list limit最大100。
 - cursor：`lastTime`固定UTC毫秒ISO；整體為canonical unpadded base64url；limit不綁cursor，可在續頁變更；舊dataset epoch回409，route／filter mismatch回400；空頁與末頁cursor為null。cursor仍不是授權，也不提供跨頁snapshot。
 - 邊界與裁定：G09a只做安全查詢、read lease、keyset、去敏投影與真HTTP／真Mongo正確性；效能量測屬G09b，日志／私密控制／真正transport-loss及fault屬G10，維護部署屬G11。D180沒有工程證據，不升格任何要求；矩陣維持136個unique IDs、22V／114U。下一合法gate為G09a，開始前仍須遵守25 STOP；本輪只修改docs。
+
+
+### D181｜G09a 安全查詢／keyset限定 gate 通過並停止
+
+- 日期：2026-09-27；狀態：PM逐讀D180、業務§8、實作方案、136要求矩陣、四個基線commit及current production／tests，並重跑正式gate與指定回歸，未發現production blocker。G09a限定gate PASS，依25 STOP停止於G09a；下一合法gate為G09b，尚未開始。
+- 交付契約：Operator／Viewer共用Qualification list／detail、INSIDE list、Event list／detail；Source不可查。五種非quiescent writer立即503 `TECHNICAL_BUSY`且DB0；quiescent read-observation lease固定單一`observedAt`，後到writer可登記但等lease釋放才依FIFO開始，query不寫DB、不cleanup。
+- 查詢契約：三list keyset、limit預設20／最大100且不綁cursor；canonical unpadded base64url、UTC毫秒`lastTime`、route／filter／epoch binding；Event三篩選八種組合AND。Qualification／Event投影exact且去敏；合法UUID查無404、格式／scope 400、舊epoch409、Mongo read／投影異常及256KiB response超限503且無partial。
+- 正式驗證：`test:g09a`為unit 3 suites／92、true HTTP 1／13、true MongoDB 8.0.32 rs0 2／16，合計121；full unit 19 suites／613。G04b 57、G07a/G07b HTTP 41/5、G08a HTTP/Mongo 12/10、G08b HTTP/Mongo 6/3全綠。boundary `files=10 edges=35 publicLeaks=0 forbidden=0`，negative compile、build、probable-secret scan及最終diff check通過；runner結束無相關Mongo容器／volume殘留。
+- coverage：G09a四個選定suites／105 tests為88.21% statements／86.40% branches／98.38% functions／94.01% lines。這不是repository全面高覆蓋、136要求完成率或真Mongo instrumentation coverage。
+- 需求裁定：136個unique IDs無重複；只把完整直接支持的B44–B49由U升V，矩陣由22V／114U成為28V／108U。B50因G10 logs未完成，A17/A18/M04/E項因仍含跨gate責任維持U。
+- 限制與停止：G09b 10k／40k固定fixture、八case索引前後效能與explain，G10 transport-loss／fault／control／logs，G11 maintenance／deployment，OpenAPI／CI／Docker／公開Demo及G12完整release都未完成。正式證據見`docs/evidence/g09a/report.md`；停止於G09a，不開始G09b，本輪只修改docs。

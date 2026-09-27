@@ -1,6 +1,6 @@
 # PassHub v1 業務邊界規格
 
-- 文件狀態：業務與實作規劃已收斂；G02–G03c、窄 G04a、G04b、G05a–G05c、G06a–G06b、G07a–G07b、G08a管理鏈及G08b辨識鏈已有各自限定工程證據，依25 STOP停止於G08b；D180已使G09a開發前契約READY但尚未開始，完整v1工程驗證仍未完成
+- 文件狀態：業務與實作規劃已收斂；G02–G03c、窄 G04a、G04b、G05a–G05c、G06a–G06b、G07a–G07b、G08a管理鏈、G08b辨識鏈及G09a安全查詢已有各自限定工程證據，依25 STOP停止於G09a；G09b尚未開始，完整v1工程驗證仍未完成
 - 更新日期：2026-09-27
 - 適用版本：PassHub v1
 - 文件目的：以 D01–D35 為業務底稿，同步至 D180 的有效修正；實作細節及逐關驗收集中在 implementation-plan.md，不把官方查證、歷史候選或待做測試當成工程成果
@@ -426,7 +426,7 @@ Source＋external event ID 使用資料庫唯一約束。相同內容採 D117 �
 - 不淘汰已登記準時項騰槽；HTTP 逾時、斷線、結果未知不釋放原項／仍在工作驗證。競爭下取得、轉交、歸還各只能按實際生命期正確執行。
 - 原項 32 不是並行寫入數，仍單 writer FIFO。其他資源初值依 D148–D149：connection 64、raw reader 16、body 16KiB／上傳絕對五秒、scrypt 1無queue、queryDB 1、canonical回放 2、原確認 1；所有工作真收束才返自己的額度。
 
-G07b已對內部技術composition驗證同步準入、同鍵join／replay／conflict、existing-only不升新、分池與部分滿載／釋放邊界；G08a另驗Operator-only管理入口、嚴格管理DTO、create／PATCH／revoke、QR只在建立回覆、Face綁定／釋放／容量與真Mongo原子保存，以及管理寫入沿用FIFO receivedAt；G08b再完成限定的QR／Face／UNKNOWN辨識鏈與真Mongo共同保存證據。D180只封閉G09a開發前查詢契約，尚未產生任何查詢工程證據；真transport fault、維護及部署亦未完成，不得把限定gate或READY決策寫成完整業務API或v1成果。
+G07b已對內部技術composition驗證同步準入、同鍵join／replay／conflict、existing-only不升新、分池與部分滿載／釋放邊界；G08a另驗Operator-only管理入口、嚴格管理DTO、create／PATCH／revoke、QR只在建立回覆、Face綁定／釋放／容量與真Mongo原子保存，以及管理寫入沿用FIFO receivedAt；G08b再完成限定的QR／Face／UNKNOWN辨識鏈與真Mongo共同保存證據。G09a已驗五條安全查詢、read-observation lease、keyset、去敏投影及真HTTP／真Mongo查詢；尚未包含G09b效能、G10 transport fault／logs／control、G11維護部署或完整v1。
 
 ## 8. 最小營運查詢
 
@@ -758,10 +758,10 @@ Qualification 時間錯誤、Face重複、越權與公開限制均拒絕，使�
 
 P01–P15採用決策與逐關驗收見[實作方案](implementation-plan.md)及追蹤矩陣。剩餘不是讓實作者自由選架構：Face唯一索引替換微型真測、固定工具相容性及fault映像digest是明確前置gate；未過便停止回討論，不靜默換策。外部主機／domain／TLS需環境提供。D161已取代舊碼私密備份要求，不再建立legacy備份。
 
-目前矩陣為 A01、A05–A09、A11–A16、B04、B08、B09、B13、B19、B27、B35、B41、B42、B52 共22項V，其餘114項仍U；G08b只把本關完整直接支持的A05–A09、B08、B27、B35、B52升為V。D180已使G09a開發前契約達到READY，但尚未開始實作、沒有新增工程證據，故不升任何V／U。這不代表完整v1、全部辨識情境、查詢、fault protocol或部署完成；跨媒介完整矩陣、各reason的HTTP／Event一致性、不同事件並行勝負、管理與ENTRY競爭，以及G10真正transport-loss確認仍只具局部或尚無證據。依25 STOP仍停止於G08b；下一合法gate為G09a。
+目前矩陣為 A01、A05–A09、A11–A16、B04、B08、B09、B13、B19、B27、B35、B41、B42、B44–B49、B52 共28項V，其餘108項仍U；G09a只把本關完整直接支持的B44–B49升為V。這不代表完整v1、效能、所有秘密輸出表面、fault protocol或部署完成；B50、A17、A18、M04及E項仍因跨gate責任維持U。依25 STOP停止於G09a；下一合法gate為G09b，尚未開始。
 
 ## 決策來源
 
-本文件以[討論紀錄](./discuss.md) D01–D35為業務底稿，同步至D180；D114明確授權持續逐題討論、預設接受及必要文件同步，非逐題個別回答。D69依D72、D17依D76修正；D89安全續辦保留，D130永久終局候選未採；D117取代binaryv1、D131七格取代三次、D129原生兩送局部例外、D149同epoch普通重啟寫入關閉，D174–D179的逐關限定證據及D180的G09a開發前契約皆有效。其餘歷史候選及背景不新增產品要求。
+本文件以[討論紀錄](./discuss.md) D01–D35為業務底稿，同步至D181；D114明確授權持續逐題討論、預設接受及必要文件同步，非逐題個別回答。D69依D72、D17依D76修正；D89安全續辦保留，D130永久終局候選未採；D117取代binaryv1、D131七格取代三次、D129原生兩送局部例外、D149同epoch普通重啟寫入關閉，D174–D179的逐關限定證據、D180的G09a開發前契約及D181的G09a限定驗收皆有效。其餘歷史候選及背景不新增產品要求。
 
 本次同步不是新業務決策，也不改寫原始討論。未來若變更已確認結論，須先新增討論決策 block，再同步本文件、驗收及追蹤矩陣。實作／測試／公開證據未完成前，不把文件採用視為履歷成果。
