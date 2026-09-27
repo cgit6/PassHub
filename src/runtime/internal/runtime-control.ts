@@ -83,25 +83,34 @@ export interface RuntimeControlMutationBase {
 }
 export type HoldRequest = RuntimeControlMutationBase;
 export type ReleaseRequest = RuntimeControlMutationBase & { readonly controlId: string };
-export type DrainRequest = RuntimeControlMutationBase;
+export interface DrainRequest extends RuntimeControlMutationBase {
+  readonly timeoutMs: number;
+  readonly signal?: AbortSignal;
+}
 export interface RuntimeControlResult {
   readonly outcome: RuntimeControlOutcome;
   readonly revision: string;
   readonly controlId: string | null;
   readonly snapshot: RuntimeControlSnapshot;
 }
+export interface IssuedPersistenceLease { release(): void; }
+export interface ActiveQueryReadLease { release(): void; }
 export interface RuntimeControlOptions {
   readonly epoch: string;
   readonly run: string;
   readonly identityIssuer: RuntimeIdentityIssuer;
+  readonly clock: RuntimeClock;
+  readonly awaitObservation: (remainingMs: number) => PromiseLike<void> | void;
   readonly controlIdFactory?: () => string;
 }
+export interface RuntimeClock { nowMs(): number; }
 export interface RuntimeControl {
   readonly snapshot: () => RuntimeControlSnapshot;
+  readonly acquireIssuedPersistence: () => IssuedPersistenceLease;
+  readonly acquireActiveQueryRead: () => ActiveQueryReadLease;
   readonly hold: (request: HoldRequest) => RuntimeControlResult;
   readonly release: (request: ReleaseRequest) => RuntimeControlResult;
-  /** A1 is immediate terminal; observation/accounting is a later unit. */
-  readonly drain: (request: DrainRequest) => RuntimeControlResult;
+  readonly drain: (request: DrainRequest) => Promise<RuntimeControlResult>;
 }
 
 export class RuntimeControlError extends Error {
@@ -129,11 +138,22 @@ interface CapturedMutation {
   readonly expectedRevision: string;
   readonly controlId?: string;
 }
+interface CapturedDrain {
+  readonly request: CapturedMutation;
+  readonly timeoutMs: number;
+  readonly signal?: CapturedAbortSignal;
+}
+interface CapturedAbortSignal {
+  readonly initiallyAborted: boolean;
+  readonly addEventListener: (listener: () => void) => void;
+  readonly removeEventListener: (listener: () => void) => void;
+}
 interface MutationRecord {
   readonly command: 'HOLD' | 'RELEASE' | 'DRAIN';
   readonly requestControlId: string;
   readonly fingerprint: string;
   readonly result?: RuntimeControlResult;
+  readonly promise?: Promise<RuntimeControlResult>;
 }
 interface SnapshotProjection {
   readonly revision: bigint;
@@ -149,11 +169,13 @@ interface PendingResultCell {
   snapshot?: RuntimeControlSnapshot;
   error?: unknown;
 }
+interface LeaseState { readonly control: ControlState; readonly kind: 'PERSISTENCE' | 'QUERY'; active: boolean; }
 
 const identityIssuers = new WeakMap<object, IssuerState>();
 const identities = new WeakMap<object, IdentityState>();
 const operationTokens = new WeakMap<object, OperationTokenState>();
 const controls = new WeakMap<object, ControlState>();
+const leases = new WeakMap<object, LeaseState>();
 const issuedControlIds = new Set<string>();
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const revisionPattern = /^(?:0|[1-9][0-9]*)$/;
@@ -217,11 +239,13 @@ export function assertRuntimeIdentityIssuer(value: unknown): asserts value is Ru
 }
 
 export function createRuntimeControl(options: RuntimeControlOptions): RuntimeControl {
-  const rawOptions = captureRecord(options, ['epoch', 'run', 'identityIssuer'], ['controlIdFactory'], 'runtime control options');
+  const rawOptions = captureRecord(options, ['epoch', 'run', 'identityIssuer', 'clock', 'awaitObservation'], ['controlIdFactory'], 'runtime control options');
   const capturedOptions = Object.freeze({
     epoch: rawOptions.epoch,
     run: rawOptions.run,
     identityIssuer: rawOptions.identityIssuer,
+    clock: rawOptions.clock,
+    awaitObservation: rawOptions.awaitObservation,
     controlIdFactory: rawOptions.controlIdFactory,
   });
   assertUuid(capturedOptions.epoch, 'epoch');
@@ -233,6 +257,10 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
   }
   const factory = capturedOptions.controlIdFactory === undefined ? randomUUID : capturedOptions.controlIdFactory;
   if (nodeTypes.isProxy(factory) || typeof factory !== 'function') throw new TypeError('control id factory is invalid');
+  if (nodeTypes.isProxy(capturedOptions.clock) || typeof capturedOptions.clock !== 'object' || capturedOptions.clock === null) throw new TypeError('runtime clock is invalid');
+  if (nodeTypes.isProxy(capturedOptions.awaitObservation) || typeof capturedOptions.awaitObservation !== 'function') throw new TypeError('runtime observation awaiter is invalid');
+  const clockNowMs = captureDataMethod(capturedOptions.clock, 'nowMs', 'runtime clock');
+  const awaitObservation = capturedOptions.awaitObservation;
   const state: ControlState = Object.freeze({ epoch: capturedOptions.epoch, run: capturedOptions.run, issuer: issuerState });
   let nextControlId = reserveControlId(factory);
   let factoryFailure: TypeError | null = null;
@@ -240,8 +268,12 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
   let manualControlId: string | null = null;
   let maintenanceControlId: string | null = null;
   let maintenanceOutcome: RuntimeControlSnapshot['maintenance']['outcome'] = null;
+  let issuedPersistence = 0;
+  let activeQueryReads = 0;
   let current: MutationRecord | null = null;
   let last: MutationRecord | null = null;
+  interface CounterWaiter { readonly wake: () => void; active: boolean; }
+  const counterWaiters = new Set<CounterWaiter>();
 
   const makeSnapshot = (projection: SnapshotProjection): RuntimeControlSnapshot => {
     const manual = Object.freeze({ active: projection.manualControlId !== null, controlId: projection.manualControlId });
@@ -256,13 +288,32 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
       manual,
       maintenance,
       writers,
-      issuedPersistence: 0,
-      activeQueryReads: 0,
+      issuedPersistence,
+      activeQueryReads,
       registryUnknown: 0,
       logging,
     });
   };
   const snapshot = (): RuntimeControlSnapshot => makeSnapshot({ revision, manualControlId, maintenanceControlId, maintenanceOutcome });
+  const notifyCounterWaiters = (): void => {
+    const waiters = [...counterWaiters];
+    counterWaiters.clear();
+    waiters.forEach((waiter) => { waiter.active = false; waiter.wake(); });
+  };
+  const waitForCounterChange = (): { readonly promise: Promise<void>; readonly cancel: () => void } => {
+    let resolveWaiter!: () => void;
+    const waiter: CounterWaiter = { wake: () => resolveWaiter(), active: true };
+    const promise = new Promise<void>((resolve) => { resolveWaiter = resolve; });
+    counterWaiters.add(waiter);
+    return Object.freeze({
+      promise,
+      cancel: (): void => {
+        if (!waiter.active) return;
+        waiter.active = false;
+        counterWaiters.delete(waiter);
+      },
+    });
+  };
 
   const validateMutation = (command: MutationRecord['command'], request: CapturedMutation, extra: string): RuntimeControlResult | undefined => {
     const fingerprint = fingerprintFor(command, request, extra);
@@ -281,6 +332,23 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
     if (!revisionMatches(request.expectedRevision, revision)) throw new RuntimeControlError('STALE_REVISION');
     return undefined;
   };
+  const validateDrainMutation = (request: CapturedMutation, timeoutMs: number): Promise<RuntimeControlResult> | undefined => {
+    const fingerprint = fingerprintFor('DRAIN', request, String(timeoutMs));
+    if (request.epoch !== state.epoch) throw new RuntimeControlError('STALE_EPOCH');
+    if (request.run !== state.run) throw new RuntimeControlError('STALE_RUN');
+    if (current !== null) {
+      if (current.requestControlId === request.requestControlId && current.fingerprint !== fingerprint) throw new RuntimeControlError('REQUEST_CONTROL_CONFLICT');
+      if (current.promise !== undefined && current.fingerprint === fingerprint) return current.promise;
+      throw new RuntimeControlError('CONTROL_BUSY');
+    }
+    if (last !== null && last.requestControlId === request.requestControlId) {
+      if (last.fingerprint !== fingerprint) throw new RuntimeControlError('REQUEST_CONTROL_CONFLICT');
+      if (last.result === undefined) throw new RuntimeControlError('CONTROL_BUSY');
+      return Promise.resolve(last.result);
+    }
+    if (!revisionMatches(request.expectedRevision, revision)) throw new RuntimeControlError('STALE_REVISION');
+    return undefined;
+  };
 
   const takeControlId = (): string => {
     if (factoryFailure !== null) throw factoryFailure;
@@ -292,6 +360,36 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
       factoryFailure = new TypeError('control id factory failed or returned a duplicate');
       throw factoryFailure;
     }
+  };
+
+  const acquireIssuedPersistence = (): IssuedPersistenceLease => {
+    if (manualControlId !== null || maintenanceControlId !== null) throw new RuntimeControlError('CONTROL_BUSY');
+    issuedPersistence += 1;
+    const lease = Object.freeze({ release(this: unknown): void {
+      const receiver = (typeof this === 'object' && this !== null) || typeof this === 'function' ? this : undefined;
+      const leaseState = receiver === undefined ? undefined : leases.get(receiver);
+      if (leaseState === undefined || leaseState.control !== state || leaseState.kind !== 'PERSISTENCE' || !leaseState.active) throw new TypeError('issued persistence lease is invalid or already released');
+      leaseState.active = false;
+      issuedPersistence -= 1;
+      notifyCounterWaiters();
+    } });
+    leases.set(lease, { control: state, kind: 'PERSISTENCE', active: true });
+    return lease;
+  };
+
+  const acquireActiveQueryRead = (): ActiveQueryReadLease => {
+    if (maintenanceControlId !== null) throw new RuntimeControlError('CONTROL_BUSY');
+    activeQueryReads += 1;
+    const lease = Object.freeze({ release(this: unknown): void {
+      const receiver = (typeof this === 'object' && this !== null) || typeof this === 'function' ? this : undefined;
+      const leaseState = receiver === undefined ? undefined : leases.get(receiver);
+      if (leaseState === undefined || leaseState.control !== state || leaseState.kind !== 'QUERY' || !leaseState.active) throw new TypeError('active query read lease is invalid or already released');
+      leaseState.active = false;
+      activeQueryReads -= 1;
+      notifyCounterWaiters();
+    } });
+    leases.set(lease, { control: state, kind: 'QUERY', active: true });
+    return lease;
   };
 
   const hold = (input: HoldRequest): RuntimeControlResult => {
@@ -340,35 +438,96 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
     } catch (error) { current = null; throw error; }
   };
 
-  const drain = (input: DrainRequest): RuntimeControlResult => {
-    const request = captureBase(input);
-    const replay = validateMutation('DRAIN', request, '');
+  const drain = (input: DrainRequest): Promise<RuntimeControlResult> => {
+    const captured = captureDrain(input);
+    const replay = validateDrainMutation(captured.request, captured.timeoutMs);
     if (replay !== undefined) return replay;
     if (maintenanceControlId !== null) throw new RuntimeControlError('MAINTENANCE_HOLD_EXISTS');
-    const fingerprint = fingerprintFor('DRAIN', request, '');
-    const controlId = takeControlId();
-    const terminalCell: PendingResultCell = { state: 'PENDING' };
-    const terminal = createPendingResult(terminalCell);
-    current = { command: 'DRAIN', requestControlId: request.requestControlId, fingerprint, result: terminal };
+    const fingerprint = fingerprintFor('DRAIN', captured.request, String(captured.timeoutMs));
+    let resolveResult!: (result: RuntimeControlResult) => void;
+    let rejectResult!: (error: unknown) => void;
+    const promise = new Promise<RuntimeControlResult>((resolve, reject) => { resolveResult = resolve; rejectResult = reject; });
+    current = { command: 'DRAIN', requestControlId: captured.request.requestControlId, fingerprint, promise };
+    let controlId: string;
     try {
+      controlId = takeControlId();
       const followingControlId = reserveFollowingControlId();
       revision += 1n;
       maintenanceControlId = controlId;
-      maintenanceOutcome = 'DRAINED';
+      maintenanceOutcome = 'WAITING';
       nextControlId = followingControlId;
-      commitPendingResult(terminalCell, 'DRAINED', controlId, snapshot());
-      last = { command: 'DRAIN', requestControlId: request.requestControlId, fingerprint, result: terminal };
-      current = null;
-      return terminal;
     } catch (error) {
-      terminalCell.state = 'FAILED';
-      terminalCell.error = error;
       current = null;
-      throw error;
+      rejectResult(error);
+      return promise;
     }
+
+    let settled = false;
+    let removeAbortListener: (() => void) | undefined;
+    let cancelWaiter: (() => void) | undefined;
+    const finish = (outcome: 'DRAINED' | 'NOT_DRAINED' | 'INTERNAL_UNAVAILABLE'): void => {
+      if (settled) return;
+      settled = true;
+      const cleanupAbort = removeAbortListener;
+      removeAbortListener = undefined;
+      cancelWaiter?.();
+      cancelWaiter = undefined;
+      maintenanceOutcome = outcome;
+      const result = makeResult(outcome, controlId);
+      last = { command: 'DRAIN', requestControlId: captured.request.requestControlId, fingerprint, result };
+      current = null;
+      resolveResult(result);
+      try { cleanupAbort?.(); } catch { /* cleanup cannot change the terminal */ }
+    };
+    const observe = async (): Promise<void> => {
+      try {
+        const started = readClock(clockNowMs);
+        if (started > Number.MAX_SAFE_INTEGER - captured.timeoutMs) throw new TypeError('runtime drain deadline overflow');
+        const deadline = started + captured.timeoutMs;
+        let previousClock = started;
+        const readMonotonicClock = (): number => {
+          const now = readClock(clockNowMs);
+          if (now < previousClock) throw new TypeError('runtime clock moved backwards');
+          previousClock = now;
+          return now;
+        };
+        let abortPromise: Promise<void> | undefined;
+        let aborted = captured.signal?.initiallyAborted ?? false;
+        if (captured.signal !== undefined) {
+          let abortResolve!: () => void;
+          abortPromise = new Promise<void>((resolve) => { abortResolve = resolve; });
+          const onAbort = (): void => { aborted = true; abortResolve(); };
+          if (aborted) abortResolve();
+          else {
+            captured.signal.addEventListener(onAbort);
+            removeAbortListener = (): void => captured.signal?.removeEventListener(onAbort);
+          }
+        }
+        while (true) {
+          if (aborted) { finish('NOT_DRAINED'); return; }
+          if (issuedPersistence === 0 && activeQueryReads === 0) { finish('DRAINED'); return; }
+          const now = readMonotonicClock();
+          if (now >= deadline) { finish('NOT_DRAINED'); return; }
+          const waiter = waitForCounterChange();
+          cancelWaiter = waiter.cancel;
+          const observation = Promise.resolve().then(() => awaitObservation(deadline - now));
+          try {
+            await Promise.race([waiter.promise, observation, ...(abortPromise === undefined ? [] : [abortPromise])]);
+          } finally {
+            cancelWaiter?.();
+            cancelWaiter = undefined;
+          }
+        }
+      } catch {
+        finish('INTERNAL_UNAVAILABLE');
+      }
+    };
+    if (issuedPersistence === 0 && activeQueryReads === 0 && !(captured.signal?.initiallyAborted ?? false)) finish('DRAINED');
+    else void observe();
+    return promise;
   };
 
-  const control: RuntimeControl = Object.freeze({ snapshot, hold, release, drain });
+  const control: RuntimeControl = Object.freeze({ snapshot, acquireIssuedPersistence, acquireActiveQueryRead, hold, release, drain });
   controls.set(control as object, state);
   return control;
 
@@ -453,6 +612,42 @@ function captureBase(input: RuntimeControlMutationBase): CapturedMutation {
   return Object.freeze({ requestControlId: record.requestControlId, epoch: record.epoch, run: record.run, expectedRevision: record.expectedRevision });
 }
 
+function captureDrain(input: DrainRequest): CapturedDrain {
+  const record = captureRecord(input, ['requestControlId', 'epoch', 'run', 'expectedRevision', 'timeoutMs'], ['signal'], 'drain request');
+  assertUuid(record.requestControlId, 'requestControlId', true);
+  assertUuid(record.epoch, 'epoch', true);
+  assertUuid(record.run, 'run', true);
+  if (typeof record.expectedRevision !== 'string' || !revisionPattern.test(record.expectedRevision)) throw new RuntimeControlError('INVALID_REQUEST');
+  if (!Number.isSafeInteger(record.timeoutMs) || record.timeoutMs < 1 || record.timeoutMs > 30_000) throw new RuntimeControlError('INVALID_REQUEST');
+  return Object.freeze({
+    request: Object.freeze({ requestControlId: record.requestControlId, epoch: record.epoch, run: record.run, expectedRevision: record.expectedRevision }),
+    timeoutMs: record.timeoutMs,
+    ...(record.signal === undefined ? {} : { signal: captureAbortSignal(record.signal) }),
+  });
+}
+
+function captureAbortSignal(value: unknown): CapturedAbortSignal {
+  try {
+    if (nodeTypes.isProxy(value) || typeof AbortSignal === 'undefined' || !(value instanceof AbortSignal)) throw new Error();
+    const signal = value as AbortSignal;
+    const prototype = AbortSignal.prototype;
+    const abortedDescriptor = Object.getOwnPropertyDescriptor(prototype, 'aborted');
+    if (typeof EventTarget === 'undefined') throw new Error();
+    const eventPrototype = EventTarget.prototype;
+    const addDescriptor = Object.getOwnPropertyDescriptor(eventPrototype, 'addEventListener');
+    const removeDescriptor = Object.getOwnPropertyDescriptor(eventPrototype, 'removeEventListener');
+    if (abortedDescriptor?.get === undefined || addDescriptor === undefined || !('value' in addDescriptor) || typeof addDescriptor.value !== 'function' || removeDescriptor === undefined || !('value' in removeDescriptor) || typeof removeDescriptor.value !== 'function') throw new Error();
+    if (nodeTypes.isProxy(abortedDescriptor.get) || nodeTypes.isProxy(addDescriptor.value) || nodeTypes.isProxy(removeDescriptor.value)) throw new Error();
+    const initiallyAborted = Reflect.apply(abortedDescriptor.get, signal, []);
+    if (typeof initiallyAborted !== 'boolean') throw new Error();
+    return Object.freeze({
+      initiallyAborted,
+      addEventListener: (listener: () => void): void => { Reflect.apply(addDescriptor.value, signal, ['abort', listener, { once: true }]); },
+      removeEventListener: (listener: () => void): void => { Reflect.apply(removeDescriptor.value, signal, ['abort', listener]); },
+    });
+  } catch { throw new RuntimeControlError('INVALID_REQUEST'); }
+}
+
 function captureRelease(input: ReleaseRequest): CapturedMutation {
   const record = captureRecord(input, ['requestControlId', 'epoch', 'run', 'expectedRevision', 'controlId'], [], 'release request');
   assertUuid(record.controlId, 'controlId', true);
@@ -503,6 +698,22 @@ function reserveControlId(factory: () => string): string {
   return value;
 }
 
+function captureDataMethod(target: object, key: string, label: string): (...args: any[]) => any {
+  try {
+    let cursor: object | null = target;
+    while (cursor !== null) {
+      if (nodeTypes.isProxy(cursor)) throw new Error();
+      const descriptor = Object.getOwnPropertyDescriptor(cursor, key);
+      if (descriptor !== undefined) {
+        if (!('value' in descriptor) || typeof descriptor.value !== 'function' || nodeTypes.isProxy(descriptor.value)) throw new Error();
+        return descriptor.value.bind(target);
+      }
+      cursor = Object.getPrototypeOf(cursor) as object | null;
+    }
+  } catch { throw new TypeError(`${label} is invalid`); }
+  throw new TypeError(`${label} is invalid`);
+}
+
 function assertUuid(value: unknown, label: string, request = false): asserts value is string {
   if (typeof value !== 'string' || !uuidPattern.test(value)) {
     if (request) throw new RuntimeControlError('INVALID_REQUEST');
@@ -515,6 +726,11 @@ function asObject(value: unknown): object {
 }
 function revisionMatches(value: string, revision: bigint): boolean {
   try { return BigInt(value) === revision; } catch { return false; }
+}
+function readClock(clock: () => number): number {
+  const value = clock();
+  if (!Number.isFinite(value) || value < 0 || value > Number.MAX_SAFE_INTEGER) throw new TypeError('runtime clock returned an invalid value');
+  return value;
 }
 function derivePhase(manual: boolean, maintenance: boolean, draining: boolean): RuntimeControlPhase {
   if (!maintenance) return manual ? 'MANUAL_HOLD' : 'RUNNING';

@@ -4,6 +4,7 @@ import {
   createRuntimeIdentityIssuer,
   RuntimeControlError,
   type RuntimeControl,
+  type RuntimeControlResult,
 } from '../../src/runtime/internal/runtime-control.js';
 import * as publicApi from '../../src/index.js';
 import * as publicCompositionApi from '../../src/composition/index.js';
@@ -15,6 +16,7 @@ const request = '33333333-3333-4333-8333-333333333333';
 const operation = '44444444-4444-4444-8444-444444444444';
 const owner = '55555555-5555-4555-8555-555555555555';
 let controlIdOrdinal = 6;
+const runtimeObservation = Object.freeze({ clock: Object.freeze({ nowMs: () => 0 }), awaitObservation: () => undefined });
 
 function nextControlId(): string {
   const value = `${String(controlIdOrdinal).padStart(8, '0')}-6666-4666-8666-666666666666`;
@@ -30,6 +32,7 @@ function makeControl(): { control: RuntimeControl; issuer: ReturnType<typeof cre
       epoch,
       run,
       identityIssuer: issuer,
+      ...runtimeObservation,
       controlIdFactory: nextControlId,
     }),
   };
@@ -37,6 +40,9 @@ function makeControl(): { control: RuntimeControl; issuer: ReturnType<typeof cre
 
 function base(requestControlId = request, expectedRevision = '0') {
   return { requestControlId, epoch, run, expectedRevision } as const;
+}
+function drainBase(requestControlId = request, expectedRevision = '0', timeoutMs = 30, signal?: AbortSignal) {
+  return { ...base(requestControlId, expectedRevision), timeoutMs, ...(signal === undefined ? {} : { signal }) } as const;
 }
 
 describe('G10a A1 runtime identity/control core', () => {
@@ -81,7 +87,7 @@ describe('G10a A1 runtime identity/control core', () => {
     expect(() => first.control.hold({ ...base(), epoch: run })).toThrow(new RuntimeControlError('STALE_EPOCH'));
     expect(() => first.issuer.read(foreignIdentity)).toThrow(TypeError);
     expect(() => assertRuntimeControl(Object.freeze({ snapshot: first.control.snapshot }))).toThrow(TypeError);
-    expect(() => createRuntimeControl({ epoch, run, identityIssuer: Object.freeze({}) as never })).toThrow(TypeError);
+    expect(() => createRuntimeControl({ epoch, run, identityIssuer: Object.freeze({}) as never, ...runtimeObservation })).toThrow(TypeError);
   });
 
   test('rejects forged, foreign, reused, and cross-route operation tokens and identities', () => {
@@ -181,14 +187,14 @@ describe('G10a A1 runtime identity/control core', () => {
   test('captures construction dependencies and exposes frozen methods that cannot be swapped', () => {
     const issuer = createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run });
     const ids = ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'];
-    const options = { epoch, run, identityIssuer: issuer, controlIdFactory: () => ids.shift() as string };
+    const options = { epoch, run, identityIssuer: issuer, ...runtimeObservation, controlIdFactory: () => ids.shift() as string };
     const control = createRuntimeControl(options);
     options.epoch = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
     options.run = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
     options.controlIdFactory = () => 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
     expect(Object.isFrozen(control)).toBe(true);
     expect(Object.isFrozen(issuer)).toBe(true);
-    expect(Reflect.ownKeys(control)).toEqual(['snapshot', 'hold', 'release', 'drain']);
+    expect(Reflect.ownKeys(control)).toEqual(['snapshot', 'acquireIssuedPersistence', 'acquireActiveQueryRead', 'hold', 'release', 'drain']);
     expect(control.hold(base()).controlId).toBe('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
     expect(control.snapshot()).toMatchObject({ epoch, run });
   });
@@ -220,14 +226,14 @@ describe('G10a A1 runtime identity/control core', () => {
     expect(control.snapshot()).toMatchObject({ revision: '1', phase: 'MANUAL_HOLD', manual: { active: true, controlId: held.controlId } });
   });
 
-  test('hold/release transition increments revision and supports manual+maintenance phases', () => {
+  test('hold/release transition increments revision and supports manual+maintenance phases', async () => {
     const { control } = makeControl();
     const held = control.hold(base());
     expect(held).toMatchObject({ outcome: 'HELD', revision: '1' });
     const heldControlId = held.controlId as string;
     expect(held.snapshot.phase).toBe('MANUAL_HOLD');
     expect(() => control.hold({ ...base('77777777-7777-4777-8777-777777777777', '1') })).toThrow(new RuntimeControlError('MANUAL_HOLD_EXISTS'));
-    const drained = control.drain({ ...base('88888888-8888-4888-8888-888888888888', '1') });
+    const drained = await control.drain(drainBase('88888888-8888-4888-8888-888888888888', '1'));
     expect(drained).toMatchObject({ outcome: 'DRAINED', revision: '2' });
     const drainedControlId = drained.controlId as string;
     expect(drainedControlId).not.toBe(heldControlId);
@@ -237,11 +243,11 @@ describe('G10a A1 runtime identity/control core', () => {
     expect(released.snapshot.phase).toBe('MAINTENANCE_HELD');
   });
 
-  test('enforces stale/control-id precedence and does not cache pre-mutation failures', () => {
+  test('enforces stale/control-id precedence and does not cache pre-mutation failures', async () => {
     const { control } = makeControl();
     expect(() => control.hold({ ...base(), run: epoch })).toThrow(new RuntimeControlError('STALE_RUN'));
     expect(() => control.release({ ...base(), controlId: nextControlId() })).toThrow(new RuntimeControlError('NO_MANUAL_HOLD'));
-    expect(() => control.drain({ ...base(), expectedRevision: '1' })).toThrow(new RuntimeControlError('STALE_REVISION'));
+    expect(() => control.drain(drainBase(request, '1'))).toThrow(new RuntimeControlError('STALE_REVISION'));
     const held = control.hold(base());
     expect(() => control.release({ ...base('77777777-7777-4777-8777-777777777777', held.revision), controlId: epoch })).toThrow(new RuntimeControlError('CONTROL_ID_MISMATCH'));
     expect(() => control.release({ ...base(), epoch: run, controlId: 'not-a-uuid' })).toThrow(new RuntimeControlError('INVALID_REQUEST'));
@@ -279,7 +285,7 @@ describe('G10a A1 runtime identity/control core', () => {
     let reentered: ReturnType<RuntimeControl['hold']> | undefined;
     let reentrySnapshot: ReturnType<RuntimeControl['snapshot']> | undefined;
     let reentryReadError: unknown;
-    control = createRuntimeControl({ epoch, run, identityIssuer: issuer, controlIdFactory: () => {
+    control = createRuntimeControl({ epoch, run, identityIssuer: issuer, ...runtimeObservation, controlIdFactory: () => {
       const value = ids[factoryCalls];
       factoryCalls += 1;
       if (factoryCalls === 2) {
@@ -297,7 +303,7 @@ describe('G10a A1 runtime identity/control core', () => {
     expect(factoryCalls).toBe(2);
   });
 
-  test('drain exact reentry joins the same projected terminal while reservation is active', () => {
+  test('drain exact reentry joins the same projected terminal while reservation is active', async () => {
     const issuer = createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run });
     const ids = [nextControlId(), nextControlId()];
     let factoryCalls = 0;
@@ -305,22 +311,21 @@ describe('G10a A1 runtime identity/control core', () => {
     let reentered: ReturnType<RuntimeControl['drain']> | undefined;
     let reentrySnapshot: ReturnType<RuntimeControl['snapshot']> | undefined;
     let reentryReadError: unknown;
-    control = createRuntimeControl({ epoch, run, identityIssuer: issuer, controlIdFactory: () => {
+    control = createRuntimeControl({ epoch, run, identityIssuer: issuer, ...runtimeObservation, controlIdFactory: () => {
       const value = ids[factoryCalls];
       factoryCalls += 1;
       if (factoryCalls === 2) {
-        reentered = control.drain(base());
+        reentered = control.drain(drainBase());
         reentrySnapshot = control.snapshot();
-        try { void reentered.outcome; } catch (error) { reentryReadError = error; }
       }
       if (value === undefined) throw new Error('test factory exhausted');
       return value;
     } });
-    const terminal = control.drain(base());
+    const terminal = control.drain(drainBase());
     expect(reentered).toBe(terminal);
-    expect(reentryReadError).toEqual(new RuntimeControlError('CONTROL_BUSY'));
+    expect(reentryReadError).toBeUndefined();
     expect(reentrySnapshot).toMatchObject({ revision: '0', phase: 'RUNNING' });
-    expect(terminal.snapshot.revision).toBe('1');
+    expect((await terminal).snapshot.revision).toBe('1');
   });
 
   test.each([
@@ -329,7 +334,7 @@ describe('G10a A1 runtime identity/control core', () => {
   ])('factory %s leaves hold state/cache/revision untouched', (_label, factory) => {
     const issuer = createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run });
     let calls = 0;
-    const control = createRuntimeControl({ epoch, run, identityIssuer: issuer, controlIdFactory: () => {
+    const control = createRuntimeControl({ epoch, run, identityIssuer: issuer, ...runtimeObservation, controlIdFactory: () => {
       calls += 1;
       if (calls === 1) return nextControlId();
       return factory();
@@ -354,12 +359,12 @@ describe('G10a A1 runtime identity/control core', () => {
     let factoryCalls = 0;
     let control!: RuntimeControl;
     let reentryError: unknown;
-    control = createRuntimeControl({ epoch, run, identityIssuer: issuer, controlIdFactory: () => {
+    control = createRuntimeControl({ epoch, run, identityIssuer: issuer, ...runtimeObservation, controlIdFactory: () => {
       const value = ids[factoryCalls];
       factoryCalls += 1;
       if (factoryCalls === 2) {
         try {
-          control.drain({ ...base('77777777-7777-4777-8777-777777777777', '1') });
+          void control.drain(drainBase('77777777-7777-4777-8777-777777777777', '1')).catch((error) => { reentryError = error; });
         } catch (error) {
           reentryError = error;
         }
@@ -386,14 +391,15 @@ describe('G10a A1 runtime identity/control core', () => {
       epoch,
       run,
       identityIssuer: issuer,
+      ...runtimeObservation,
       controlIdFactory: nextControlId,
     });
     expect(control.hold(base()).outcome).toBe('HELD');
   });
 
-  test('drain is an immediate terminal mutation and remains a maintenance veto', () => {
+  test('drain is an immediate terminal mutation and remains a maintenance veto', async () => {
     const { control } = makeControl();
-    const drained = control.drain(base());
+    const drained = await control.drain(drainBase());
     expect(drained.snapshot).toEqual({
       epoch, run, revision: '1', phase: 'MAINTENANCE_HELD',
       manual: { active: false, controlId: null },
@@ -402,8 +408,8 @@ describe('G10a A1 runtime identity/control core', () => {
       issuedPersistence: 0, activeQueryReads: 0, registryUnknown: 0,
       logging: { status: 'HEALTHY', droppedCount: 0 },
     });
-    expect(control.drain(base())).toBe(drained);
-    expect(() => control.drain({ ...base('77777777-7777-4777-8777-777777777777', drained.revision) })).toThrow(new RuntimeControlError('MAINTENANCE_HOLD_EXISTS'));
+    await expect(control.drain(drainBase())).resolves.toEqual(drained);
+    expect(() => control.drain(drainBase('77777777-7777-4777-8777-777777777777', drained.revision))).toThrow(new RuntimeControlError('MAINTENANCE_HOLD_EXISTS'));
   });
 
   test.each([
@@ -413,43 +419,48 @@ describe('G10a A1 runtime identity/control core', () => {
     ['DRAIN', 'throws', (candidate: string) => { throw new Error(`factory failure ${candidate}`); }],
     ['DRAIN', 'invalid', () => 'INVALID'],
     ['DRAIN', 'duplicate', (candidate: string) => candidate],
-  ] as const)('%s exact reentry cannot observe success when following factory %s fails', (command, _label, failure) => {
+  ] as const)('%s exact reentry cannot observe success when following factory %s fails', async (command, _label, failure) => {
     const issuer = createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run });
     const candidate = nextControlId();
     let calls = 0;
     let control!: RuntimeControl;
-    let inner: ReturnType<RuntimeControl['hold']> | undefined;
+    let inner: ReturnType<RuntimeControl['hold']> | ReturnType<RuntimeControl['drain']> | undefined;
     let callbackSnapshot: ReturnType<RuntimeControl['snapshot']> | undefined;
-    control = createRuntimeControl({ epoch, run, identityIssuer: issuer, controlIdFactory: () => {
+    control = createRuntimeControl({ epoch, run, identityIssuer: issuer, ...runtimeObservation, controlIdFactory: () => {
       calls += 1;
       if (calls === 1) return candidate;
-      inner = command === 'HOLD' ? control.hold(base()) : control.drain(base());
+      inner = command === 'HOLD' ? control.hold(base()) : control.drain(drainBase());
       callbackSnapshot = control.snapshot();
       return failure(candidate);
     } });
-    const invoke = (): ReturnType<RuntimeControl['hold']> => command === 'HOLD' ? control.hold(base()) : control.drain(base());
-    expect(invoke).toThrow(TypeError);
+    const invoke = (): ReturnType<RuntimeControl['hold']> | ReturnType<RuntimeControl['drain']> => command === 'HOLD' ? control.hold(base()) : control.drain(drainBase());
+    if (command === 'HOLD') expect(invoke).toThrow(TypeError);
+    else await expect(invoke() as Promise<unknown>).rejects.toThrow(TypeError);
     expect(inner).toBeDefined();
-    for (const read of [
-      () => inner?.outcome,
-      () => inner?.revision,
-      () => inner?.controlId,
-      () => inner?.snapshot,
-    ]) expect(read).toThrow(TypeError);
+    if (command === 'HOLD') {
+      for (const read of [
+        () => (inner as RuntimeControlResult | undefined)?.outcome,
+        () => (inner as RuntimeControlResult | undefined)?.revision,
+        () => (inner as RuntimeControlResult | undefined)?.controlId,
+        () => (inner as RuntimeControlResult | undefined)?.snapshot,
+      ]) expect(read).toThrow(TypeError);
+    } else await expect(inner as Promise<unknown>).rejects.toThrow(TypeError);
     expect(callbackSnapshot).toMatchObject({ revision: '0', phase: 'RUNNING', manual: { active: false }, maintenance: { active: false } });
     expect(control.snapshot()).toMatchObject({ revision: '0', phase: 'RUNNING', manual: { active: false, controlId: null }, maintenance: { active: false, controlId: null, outcome: null } });
-    expect(invoke).toThrow(TypeError);
-    const invokeDifferent = (): ReturnType<RuntimeControl['hold']> => command === 'HOLD'
+    if (command === 'HOLD') expect(invoke).toThrow(TypeError);
+    else await expect(invoke() as Promise<unknown>).rejects.toThrow(TypeError);
+    const invokeDifferent = (): ReturnType<RuntimeControl['hold']> | ReturnType<RuntimeControl['drain']> => command === 'HOLD'
       ? control.hold({ ...base('77777777-7777-4777-8777-777777777777', '0') })
-      : control.drain({ ...base('77777777-7777-4777-8777-777777777777', '0') });
-    expect(invokeDifferent).toThrow(TypeError);
+      : control.drain(drainBase('77777777-7777-4777-8777-777777777777', '0'));
+    if (command === 'HOLD') expect(invokeDifferent).toThrow(TypeError);
+    else await expect(invokeDifferent() as unknown as Promise<unknown>).rejects.toThrow(TypeError);
     expect(calls).toBe(2);
   });
 
-  test('returns deeply frozen exact results for each reachable phase and preserves maintenance after release', () => {
+  test('returns deeply frozen exact results for each reachable phase and preserves maintenance after release', async () => {
     const { control } = makeControl();
     const held = control.hold(base());
-    const drained = control.drain({ ...base('77777777-7777-4777-8777-777777777777', held.revision) });
+    const drained = await control.drain(drainBase('77777777-7777-4777-8777-777777777777', held.revision));
     const released = control.release({ ...base('88888888-8888-4888-8888-888888888888', drained.revision), controlId: held.controlId as string });
     for (const result of [held, drained, released]) {
       expect(Object.isFrozen(result)).toBe(true);
@@ -470,11 +481,11 @@ describe('G10a A1 runtime identity/control core', () => {
     expect(released.snapshot.maintenance).toEqual({ active: true, controlId: drained.controlId, outcome: 'DRAINED' });
   });
 
-  test('fails closed when a captured control-id factory repeats an issued value', () => {
+  test('fails closed when a captured control-id factory repeats an issued value', async () => {
     const issuer = createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run });
     const duplicate = nextControlId();
     let calls = 0;
-    const control = createRuntimeControl({ epoch, run, identityIssuer: issuer, controlIdFactory: () => { calls += 1; return duplicate; } });
+    const control = createRuntimeControl({ epoch, run, identityIssuer: issuer, ...runtimeObservation, controlIdFactory: () => { calls += 1; return duplicate; } });
     expect(() => control.hold(base())).toThrow(TypeError);
     expect(control.snapshot()).toMatchObject({
       revision: '0', phase: 'RUNNING',
@@ -482,7 +493,338 @@ describe('G10a A1 runtime identity/control core', () => {
       maintenance: { active: false, controlId: null, outcome: null },
     });
     expect(() => control.hold(base())).toThrow(TypeError);
-    expect(() => control.drain({ ...base('77777777-7777-4777-8777-777777777777') })).toThrow(TypeError);
+    await expect(control.drain(drainBase('77777777-7777-4777-8777-777777777777'))).rejects.toThrow(TypeError);
     expect(calls).toBe(2);
+  });
+
+  test('tracks issued persistence through the full work promise and rejects reuse', async () => {
+    const { control } = makeControl();
+    const lease = control.acquireIssuedPersistence();
+    expect(control.snapshot()).toMatchObject({ issuedPersistence: 1, activeQueryReads: 0, phase: 'RUNNING' });
+    const work = Promise.reject(new Error('work failed'));
+    await expect(work.finally(() => lease.release())).rejects.toThrow('work failed');
+    expect(control.snapshot()).toMatchObject({ issuedPersistence: 0 });
+    expect(() => lease.release()).toThrow(TypeError);
+  });
+
+  test('leases are frozen opaque nominal capabilities and reject foreign or forged receivers', () => {
+    const first = makeControl().control;
+    const second = makeControl().control;
+    const writer = first.acquireIssuedPersistence();
+    const query = first.acquireActiveQueryRead();
+    const foreignWriter = second.acquireIssuedPersistence();
+    const foreignQuery = second.acquireActiveQueryRead();
+    const fake = Object.freeze({ release: () => undefined });
+
+    for (const lease of [writer, query, foreignWriter, foreignQuery]) {
+      expect(Object.isFrozen(lease)).toBe(true);
+      expect(Reflect.ownKeys(lease)).toEqual(['release']);
+    }
+    for (const [method, receivers] of [
+      [writer.release, [query, foreignWriter, fake]],
+      [query.release, [writer, foreignQuery, fake]],
+    ] as const) {
+      for (const receiver of receivers) {
+        expect(() => method.call(receiver)).toThrow(TypeError);
+        expect(() => method.apply(receiver, [])).toThrow(TypeError);
+        expect(() => method.bind(receiver)()).toThrow(TypeError);
+      }
+    }
+    expect(first.snapshot()).toMatchObject({ issuedPersistence: 1, activeQueryReads: 1 });
+    expect(second.snapshot()).toMatchObject({ issuedPersistence: 1, activeQueryReads: 1 });
+
+    for (const lease of [writer, query, foreignWriter, foreignQuery]) {
+      expect(() => lease.release()).not.toThrow();
+      expect(() => lease.release()).toThrow(TypeError);
+    }
+    expect(first.snapshot()).toMatchObject({ issuedPersistence: 0, activeQueryReads: 0 });
+    expect(second.snapshot()).toMatchObject({ issuedPersistence: 0, activeQueryReads: 0 });
+  });
+
+  test('tracks active query reads around synchronous invocation and blocks new reads after maintenance starts', async () => {
+    const { control } = makeControl();
+    const lease = control.acquireActiveQueryRead();
+    expect(control.snapshot()).toMatchObject({ activeQueryReads: 1, issuedPersistence: 0 });
+    let observed = false;
+    try {
+      observed = true;
+      expect(control.snapshot().activeQueryReads).toBe(1);
+    } finally {
+      lease.release();
+    }
+    expect(observed).toBe(true);
+    expect(control.snapshot().activeQueryReads).toBe(0);
+    const drained = await control.drain(drainBase());
+    expect(drained.outcome).toBe('DRAINED');
+    expect(() => control.acquireActiveQueryRead()).toThrow(new RuntimeControlError('CONTROL_BUSY'));
+  });
+
+  test('drain waits for both issued persistence and active query leases before becoming DRAINED', async () => {
+    const { control } = makeControl();
+    const writer = control.acquireIssuedPersistence();
+    const query = control.acquireActiveQueryRead();
+    const draining = control.drain(drainBase());
+    await Promise.resolve();
+    expect(control.snapshot()).toMatchObject({
+      phase: 'MAINTENANCE_DRAINING',
+      issuedPersistence: 1,
+      activeQueryReads: 1,
+      maintenance: { active: true, outcome: 'WAITING' },
+    });
+    writer.release();
+    expect(control.snapshot().issuedPersistence).toBe(0);
+    expect(control.snapshot().activeQueryReads).toBe(1);
+    query.release();
+    await expect(draining).resolves.toMatchObject({ outcome: 'DRAINED', snapshot: { phase: 'MAINTENANCE_HELD', issuedPersistence: 0, activeQueryReads: 0 } });
+  });
+
+  test('drain timeout and abort settle NOT_DRAINED while retaining maintenance veto', async () => {
+    let now = 0;
+    let timeoutObservations = 0;
+    const issuer = createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run });
+    const control = createRuntimeControl({
+      epoch, run, identityIssuer: issuer, controlIdFactory: nextControlId,
+      clock: { nowMs: () => now },
+      awaitObservation: (remainingMs) => { timeoutObservations += 1; now += remainingMs; },
+    });
+    const writer = control.acquireIssuedPersistence();
+    await expect(control.drain(drainBase(request, '0', 10))).resolves.toMatchObject({ outcome: 'NOT_DRAINED', snapshot: { phase: 'MAINTENANCE_HELD', maintenance: { outcome: 'NOT_DRAINED' }, issuedPersistence: 1 } });
+    writer.release();
+    await Promise.resolve();
+    expect(timeoutObservations).toBe(1);
+
+    const second = makeControl().control;
+    const held = second.acquireIssuedPersistence();
+    const abort = new AbortController();
+    const pending = second.drain(drainBase('77777777-7777-4777-8777-777777777777', '0', 100, abort.signal));
+    abort.abort();
+    await expect(pending).resolves.toMatchObject({ outcome: 'NOT_DRAINED', snapshot: { maintenance: { outcome: 'NOT_DRAINED' } } });
+    held.release();
+    await Promise.resolve();
+    expect(second.snapshot()).toMatchObject({ revision: '1', phase: 'MAINTENANCE_HELD', issuedPersistence: 0, maintenance: { outcome: 'NOT_DRAINED' } });
+  });
+
+  test('observation failure settles INTERNAL_UNAVAILABLE and late lease settlement cannot rewrite its terminal', async () => {
+    const issuer = createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run });
+    const control = createRuntimeControl({
+      epoch, run, identityIssuer: issuer, controlIdFactory: nextControlId,
+      clock: { nowMs: () => 0 },
+      awaitObservation: () => Promise.reject(new Error('SECRET_OBSERVATION_CANARY')),
+    });
+    const writer = control.acquireIssuedPersistence();
+    const terminal = await control.drain(drainBase());
+    expect(terminal).toMatchObject({
+      outcome: 'INTERNAL_UNAVAILABLE', revision: '1',
+      snapshot: { phase: 'MAINTENANCE_HELD', issuedPersistence: 1, maintenance: { active: true, outcome: 'INTERNAL_UNAVAILABLE' } },
+    });
+    expect(() => control.acquireIssuedPersistence()).toThrow(new RuntimeControlError('CONTROL_BUSY'));
+    expect(() => control.acquireActiveQueryRead()).toThrow(new RuntimeControlError('CONTROL_BUSY'));
+    writer.release();
+    await Promise.resolve();
+    expect(control.snapshot()).toMatchObject({
+      revision: '1', phase: 'MAINTENANCE_HELD', issuedPersistence: 0,
+      maintenance: { active: true, controlId: terminal.controlId, outcome: 'INTERNAL_UNAVAILABLE' },
+    });
+    await expect(control.drain(drainBase())).resolves.toBe(terminal);
+  });
+
+  test('timeout terminal remains NOT_DRAINED after late writer and query settlements', async () => {
+    let now = 0;
+    const issuer = createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run });
+    const control = createRuntimeControl({
+      epoch, run, identityIssuer: issuer, controlIdFactory: nextControlId,
+      clock: { nowMs: () => now },
+      awaitObservation: (remainingMs) => { now += remainingMs; },
+    });
+    const writer = control.acquireIssuedPersistence();
+    const query = control.acquireActiveQueryRead();
+    const terminal = await control.drain(drainBase(request, '0', 10));
+    expect(terminal).toMatchObject({ outcome: 'NOT_DRAINED', revision: '1' });
+    writer.release();
+    query.release();
+    await Promise.resolve();
+    expect(control.snapshot()).toMatchObject({
+      revision: '1', phase: 'MAINTENANCE_HELD', issuedPersistence: 0, activeQueryReads: 0,
+      maintenance: { active: true, controlId: terminal.controlId, outcome: 'NOT_DRAINED' },
+    });
+    await expect(control.drain(drainBase(request, '0', 10))).resolves.toBe(terminal);
+  });
+
+  test('manual hold combines with a live drain as MANUAL_AND_MAINTENANCE_DRAINING then remains held', async () => {
+    const { control } = makeControl();
+    const writer = control.acquireIssuedPersistence();
+    const query = control.acquireActiveQueryRead();
+    const held = control.hold(base());
+    const draining = control.drain(drainBase('77777777-7777-4777-8777-777777777777', held.revision));
+    await Promise.resolve();
+    expect(control.snapshot()).toMatchObject({
+      revision: '2', phase: 'MANUAL_AND_MAINTENANCE_DRAINING',
+      manual: { active: true, controlId: held.controlId },
+      maintenance: { active: true, outcome: 'WAITING' },
+      issuedPersistence: 1, activeQueryReads: 1,
+    });
+    expect(() => control.acquireIssuedPersistence()).toThrow(new RuntimeControlError('CONTROL_BUSY'));
+    expect(() => control.acquireActiveQueryRead()).toThrow(new RuntimeControlError('CONTROL_BUSY'));
+    writer.release();
+    query.release();
+    await expect(draining).resolves.toMatchObject({
+      outcome: 'DRAINED', revision: '2', snapshot: { phase: 'MANUAL_AND_MAINTENANCE_HELD', maintenance: { outcome: 'DRAINED' } },
+    });
+  });
+
+  test('rejects a signal that only satisfies the old structural guard instead of starting an uncleanable observer', () => {
+    const { control } = makeControl();
+    const structuralSignal = Object.freeze({
+      aborted: false,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    });
+    expect(() => control.drain(drainBase(request, '0', 10, structuralSignal as unknown as AbortSignal))).toThrow(new RuntimeControlError('INVALID_REQUEST'));
+    const nativePrototypeFake = Object.create(AbortSignal.prototype) as AbortSignal;
+    expect(() => control.drain(drainBase(request, '0', 10, nativePrototypeFake))).toThrow(new RuntimeControlError('INVALID_REQUEST'));
+    expect(control.snapshot()).toMatchObject({ revision: '0', phase: 'RUNNING', maintenance: { active: false, outcome: null } });
+  });
+
+  test('rejects an AbortSignal-prototype fake with own aborted and event method overrides', () => {
+    const { control } = makeControl();
+    let traps = 0;
+    const fake = Object.create(AbortSignal.prototype) as AbortSignal & { aborted: boolean; addEventListener: () => void; removeEventListener: () => void };
+    Object.defineProperties(fake, {
+      aborted: { configurable: true, enumerable: true, get: () => { traps += 1; return false; } },
+      addEventListener: { configurable: true, enumerable: true, value: () => { traps += 1; } },
+      removeEventListener: { configurable: true, enumerable: true, value: () => { traps += 1; } },
+    });
+    expect(() => control.drain(drainBase(request, '0', 10, fake))).toThrow(new RuntimeControlError('INVALID_REQUEST'));
+    expect(traps).toBe(0);
+    expect(control.snapshot()).toMatchObject({ revision: '0', phase: 'RUNNING', maintenance: { active: false, outcome: null } });
+  });
+
+  test('a genuine non-aborted native AbortSignal reaches timeout and keeps its terminal after late release', async () => {
+    let now = 0;
+    const issuer = createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run });
+    const control = createRuntimeControl({
+      epoch, run, identityIssuer: issuer, controlIdFactory: nextControlId,
+      clock: { nowMs: () => now },
+      awaitObservation: (remainingMs) => { now += remainingMs; },
+    });
+    const native = new AbortController();
+    const writer = control.acquireIssuedPersistence();
+    const terminal = await control.drain(drainBase(request, '0', 10, native.signal));
+    expect(terminal).toMatchObject({ outcome: 'NOT_DRAINED', revision: '1', snapshot: { issuedPersistence: 1 } });
+    expect(native.signal.aborted).toBe(false);
+    writer.release();
+    await Promise.resolve();
+    expect(control.snapshot()).toMatchObject({ revision: '1', issuedPersistence: 0, maintenance: { active: true, outcome: 'NOT_DRAINED' } });
+  });
+
+  test('accepts fractional monotonic clock values and fails closed on clock rollback', async () => {
+    let fractionalNow = 1.25;
+    const issuer = createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run });
+    const fractionalControl = createRuntimeControl({
+      epoch, run, identityIssuer: issuer, controlIdFactory: nextControlId,
+      clock: { nowMs: () => fractionalNow },
+      awaitObservation: (remainingMs) => { fractionalNow += remainingMs; },
+    });
+    let fractionalWriter = fractionalControl.acquireIssuedPersistence();
+    const fractionalDrain = fractionalControl.drain(drainBase(request, '0', 10));
+    fractionalWriter.release();
+    await expect(fractionalDrain).resolves.toMatchObject({ outcome: 'DRAINED', snapshot: { issuedPersistence: 0 } });
+
+    let reads = 0;
+    const rollbackControl = createRuntimeControl({
+      epoch, run, identityIssuer: createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run }), controlIdFactory: nextControlId,
+      clock: { nowMs: () => reads++ === 0 ? 2 : 1 },
+      awaitObservation: () => undefined,
+    });
+    const rollbackWriter = rollbackControl.acquireIssuedPersistence();
+    await expect(rollbackControl.drain(drainBase('77777777-7777-4777-8777-777777777777', '0', 10))).resolves.toMatchObject({ outcome: 'INTERNAL_UNAVAILABLE' });
+    rollbackWriter.release();
+  });
+
+  test('deadline overflow settles INTERNAL_UNAVAILABLE without changing revision or maintenance terminal later', async () => {
+    const issuer = createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run });
+    const control = createRuntimeControl({
+      epoch, run, identityIssuer: issuer, controlIdFactory: nextControlId,
+      clock: { nowMs: () => Number.MAX_SAFE_INTEGER - 4 },
+      awaitObservation: () => { throw new Error('must not observe overflowed deadline'); },
+    });
+    const writer = control.acquireIssuedPersistence();
+    const terminal = await control.drain(drainBase(request, '0', 5));
+    expect(terminal).toMatchObject({ outcome: 'INTERNAL_UNAVAILABLE', revision: '1', snapshot: { issuedPersistence: 1 } });
+    writer.release();
+    await Promise.resolve();
+    expect(control.snapshot()).toMatchObject({ revision: '1', issuedPersistence: 0, maintenance: { active: true, outcome: 'INTERNAL_UNAVAILABLE' } });
+  });
+
+  test('late observation settlement after successful drain cannot rewrite terminal or retain a counter waiter', async () => {
+    let resolveObservation!: () => void;
+    let observationCalls = 0;
+    const issuer = createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run });
+    const control = createRuntimeControl({
+      epoch, run, identityIssuer: issuer, controlIdFactory: nextControlId,
+      clock: { nowMs: () => 0 },
+      awaitObservation: () => {
+        observationCalls += 1;
+        return new Promise<void>((resolve) => { resolveObservation = resolve; });
+      },
+    });
+    const writer = control.acquireIssuedPersistence();
+    const pending = control.drain(drainBase());
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(observationCalls).toBe(1);
+    writer.release();
+    const terminal = await pending;
+    expect(terminal).toMatchObject({ outcome: 'DRAINED', revision: '1' });
+    resolveObservation();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(observationCalls).toBe(1);
+    expect(control.snapshot()).toMatchObject({ revision: '1', phase: 'MAINTENANCE_HELD', issuedPersistence: 0, maintenance: { outcome: 'DRAINED' } });
+  });
+
+  test('cleanup failure cannot prevent terminal drain resolution or current cleanup', async () => {
+    const { control } = makeControl();
+    const abort = new AbortController();
+    const eventPrototype = EventTarget.prototype;
+    const originalRemove = Object.getOwnPropertyDescriptor(eventPrototype, 'removeEventListener');
+    if (originalRemove === undefined) throw new Error('native removeEventListener descriptor missing');
+    let cleanupCalls = 0;
+    Object.defineProperty(eventPrototype, 'removeEventListener', {
+      ...originalRemove,
+      value: function hostileNativeCleanup(): never { cleanupCalls += 1; throw new Error('cleanup canary'); },
+    });
+    try {
+      const writer = control.acquireIssuedPersistence();
+      const pending = control.drain(drainBase(request, '0', 100, abort.signal));
+      abort.abort();
+      await expect(pending).resolves.toMatchObject({ outcome: 'NOT_DRAINED', snapshot: { maintenance: { outcome: 'NOT_DRAINED' } } });
+      expect(cleanupCalls).toBe(1);
+      writer.release();
+      await expect(control.drain(drainBase(request, '0', 100, abort.signal))).resolves.toMatchObject({ outcome: 'NOT_DRAINED' });
+      expect(control.snapshot()).toMatchObject({ revision: '1', phase: 'MAINTENANCE_HELD', issuedPersistence: 0, maintenance: { outcome: 'NOT_DRAINED' } });
+    } finally {
+      Object.defineProperty(eventPrototype, 'removeEventListener', originalRemove);
+    }
+  });
+
+  test('lease release requires its nominal receiver and exact control/kind provenance', () => {
+    const first = makeControl().control;
+    const second = makeControl().control;
+    const writer = first.acquireIssuedPersistence();
+    const query = first.acquireActiveQueryRead();
+    expect(() => writer.release.call(query)).toThrow(TypeError);
+    expect(() => query.release.call(writer)).toThrow(TypeError);
+    expect(() => writer.release.call({})).toThrow(TypeError);
+    expect(() => query.release.call(Object.freeze({}))).toThrow(TypeError);
+    const foreignWriter = second.acquireIssuedPersistence();
+    expect(foreignWriter).toBeDefined();
+    expect(first.snapshot()).toMatchObject({ issuedPersistence: 1, activeQueryReads: 1 });
+    writer.release();
+    query.release();
+    expect(() => writer.release()).toThrow(TypeError);
+    expect(() => query.release()).toThrow(TypeError);
+    expect(first.snapshot()).toMatchObject({ issuedPersistence: 0, activeQueryReads: 0 });
+    foreignWriter.release();
   });
 });
