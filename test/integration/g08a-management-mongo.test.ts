@@ -3,10 +3,6 @@ import { randomUUID } from 'node:crypto';
 import { MongoClient } from 'mongodb';
 
 import { createAccessComposition } from '../../src/composition/access-composition.js';
-import {
-  createVerifiedComparisonPort,
-  verifyStartupVectorsAndCreateComparisonCapability,
-} from '../../src/access/application/comparison/index.js';
 import type { ManagementApplicationError } from '../../src/access/application/management-errors.js';
 import {
   G04A_FACE_SLOTS_COLLECTION,
@@ -19,11 +15,6 @@ import {
   type G04bMetadataDocument,
   type G04bQualificationDocument,
 } from '../../src/infrastructure/mongo/index.js';
-import {
-  FIXED_COMPARISON_REFERENCE_ID,
-  FIXED_STARTUP_VECTORS,
-  FIXED_TEST_HMAC_KEY,
-} from '../fixtures/comparison-vectors.js';
 
 const uri = process.env.G08A_MONGO_URI ?? 'mongodb://127.0.0.1:27029/?replicaSet=rs0';
 const databasePrefix = process.env.G08A_MONGO_DATABASE_PREFIX ?? `passhub_g08a_${process.pid}`;
@@ -61,19 +52,10 @@ describe('G08a true MongoDB 8.0.32 replica-set management', () => {
     const adapter = new G04bMongoPersistenceAdapter(client, databaseName, { nowMs: () => serverNow });
     await adapter.ensureSchema();
     await adapter.clearAndSeed(fixture);
-    const comparison = createVerifiedComparisonPort(verifyStartupVectorsAndCreateComparisonCapability({
-      hmacKey: FIXED_TEST_HMAC_KEY,
-      comparisonReferenceId: FIXED_COMPARISON_REFERENCE_ID,
-      vectors: FIXED_STARTUP_VECTORS,
-    }));
     const access = createAccessComposition({
       management: adapter,
-      recognition: adapter,
-      sourceFacts: adapter,
       query: adapter,
       epoch: fixture.datasetEpoch,
-      sourceId: fixture.sourceEntryId,
-      comparison,
     });
     return {
       database: client.db(databaseName), fixture, adapter, access,

@@ -16,7 +16,6 @@ import {
   decideQualificationRevocation,
   decideQualificationUpdate,
   decideQualificationWindow,
-  type AccessDecision,
   type IdentityResolution,
 } from '../domain/index.js';
 import { ManagementApplicationError } from './management-errors.js';
@@ -25,7 +24,11 @@ import type {
   RedactedAccessEventProjection,
   RedactedQualificationProjection,
   ManagementPublicChangeResult,
+  RecognitionPersistenceResult,
+  ComparisonArtifact,
 } from '../ports/index.js';
+import { isComparisonArtifact } from '../ports/index.js';
+import { registerArtifactBoundRecognizeAttempt } from './internal/recognition-execution.js';
 
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
@@ -279,28 +282,48 @@ export interface RecognitionAttemptCommand {
   readonly externalEventId: string;
 }
 
+export type RecognitionAttemptResult = RecognitionPersistenceResult;
+
 /**
  * The use case owns source facts, identity resolution, the pure domain
  * decision, and staging. Persistence remains behind the scope port.
  */
 export interface RecognizeAttempt {
-  execute(input: RecognitionAttemptCommand): Promise<AccessDecision>;
+  execute(input: RecognitionAttemptCommand): Promise<RecognitionAttemptResult>;
 }
 
 export class RecognizeAttemptImplementation implements RecognizeAttempt {
   public constructor(
-    private readonly openScope: (sourceId: string) => RecognitionScope,
-    private readonly sourceId: string,
+    private readonly openScope: () => RecognitionScope,
     private readonly comparison: ComparisonPort,
-  ) {}
+  ) {
+    registerArtifactBoundRecognizeAttempt(this);
+  }
 
-  public async execute(input: RecognitionAttemptCommand): Promise<AccessDecision> {
+  public async execute(input: RecognitionAttemptCommand): Promise<RecognitionAttemptResult> {
+    return this.executeInternal(input);
+  }
+
+  public async executeWithComparisonArtifact(
+    input: RecognitionAttemptCommand,
+    comparisonArtifact: ComparisonArtifact,
+  ): Promise<RecognitionAttemptResult> {
+    if (!isComparisonArtifact(comparisonArtifact) || !Object.isFrozen(comparisonArtifact)) {
+      throw new TypeError('verified comparison artifact is required');
+    }
+    return this.executeInternal(input, comparisonArtifact);
+  }
+
+  private async executeInternal(
+    input: RecognitionAttemptCommand,
+    suppliedComparisonArtifact?: ComparisonArtifact,
+  ): Promise<RecognitionAttemptResult> {
     assertExternalEventId(input.externalEventId);
     this.comparison.validate(input.input);
     if (!Number.isSafeInteger(input.receivedAtMs)) {
       throw new TypeError('receivedAtMs must be a safe integer instant');
     }
-    const scope = this.openScope(this.sourceId);
+    const scope = this.openScope();
     try {
       const sourceFacts = await scope.readSourceFacts();
       const { handle, qualification, resolution } = await this.resolve(
@@ -316,7 +339,7 @@ export class RecognizeAttemptImplementation implements RecognizeAttempt {
         resolution,
         receivedAtMs: input.receivedAtMs,
       });
-      const comparisonArtifact = this.comparison.artifact.create(input.input);
+      const comparisonArtifact = suppliedComparisonArtifact ?? this.comparison.artifact.create(input.input);
       const persisted = await scope.stageRecognitionResult(
         handle,
         createRecognitionResultPlan(handle, decision, {
@@ -327,7 +350,7 @@ export class RecognizeAttemptImplementation implements RecognizeAttempt {
           comparisonArtifact,
         }),
       );
-      return persisted.decision;
+      return persisted;
     } finally {
       await scope.closeAsync();
     }

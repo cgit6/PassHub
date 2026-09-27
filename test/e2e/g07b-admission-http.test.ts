@@ -73,8 +73,18 @@ async function harness(options: {
       login: () => { calls.push('login'); return Promise.resolve(ok('login')); },
       query: () => { calls.push('query'); return Promise.resolve(ok('query')); },
       management: (_token, context) => { calls.push(`management:${context.sequence}`); return Promise.resolve(Object.freeze({ disposition: 'BUSINESS_RESULT_PERSISTED', response: ok('management') })); },
-      recognition: (_token, context) => { calls.push(`recognition:${context.sequence}`); const disposition = options.recognitionDisposition ?? 'BUSINESS_RESULT_PERSISTED';
-        return Promise.resolve(Object.freeze({ disposition, response: ok('recognition', { disposition }) })); },
+      recognition: (_token, context) => {
+        calls.push(`recognition:${context.sequence}`);
+        const disposition = options.recognitionDisposition ?? 'BUSINESS_RESULT_PERSISTED';
+        if (disposition === 'BUSINESS_RESULT_PERSISTED') {
+          return Promise.resolve(Object.freeze({
+            disposition,
+            originalResponse: ok('recognition', { disposition, replayed: false }),
+            replayResponse: ok('recognition', { disposition, replayed: true }),
+          }));
+        }
+        return Promise.resolve(Object.freeze({ disposition, response: ok('recognition', { disposition }) }));
+      },
     } });
   const app = await createPassHubHttpApplication(handler); await app.nestApplication.listen(0, '127.0.0.1');
   const address = app.server.address(); if (address === null || typeof address === 'string') throw new Error('no port');
@@ -112,7 +122,9 @@ describe('G07b true HTTP admission composition', () => {
     const replay = await send(h.port, 'POST', '/recognition/attempts', { externalEventId: 'event-1', digest: 'a' }, headers);
     const conflict = await send(h.port, 'POST', '/recognition/attempts', { externalEventId: 'event-1', digest: 'b' }, headers);
     expect(first.body).toMatchObject({ kind: 'recognition', disposition: 'BUSINESS_RESULT_PERSISTED', currentDatasetEpoch: EPOCH });
-    expect(replay.body).toEqual(first.body); expect(conflict).toMatchObject({ status: 409, body: { code: 'IDEMPOTENCY_CONFLICT' } });
+    expect(first.body).toMatchObject({ replayed: false });
+    expect(replay.body).toEqual({ ...first.body, replayed: true });
+    expect(conflict).toMatchObject({ status: 409, body: { code: 'IDEMPOTENCY_CONFLICT' } });
     expect(h.calls).toEqual(['recognition:0']);
   });
 

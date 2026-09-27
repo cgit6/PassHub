@@ -24,6 +24,7 @@ export {
 } from './comparison-capability.js';
 export {
   createVerifiedComparisonPort,
+  isVerifiedComparisonPort,
   type ComparisonPort,
   type QrCredentialPort,
 } from './comparison-port.js';

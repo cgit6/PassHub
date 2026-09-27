@@ -45,6 +45,7 @@ export {
 export {
   createOperationRegistry,
   createOperationRegistryCapabilityIssuer,
+  isOperationRegistryCapabilityIssuer,
   OperationRegistryError,
   type ExistingOperationLookup,
   type OperationComparisonArtifact,

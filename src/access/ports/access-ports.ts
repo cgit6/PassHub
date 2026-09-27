@@ -2,7 +2,6 @@ import type {
   Direction,
   QualificationState,
   ReasonCode,
-  AccessDecision,
 } from '../domain/index.js';
 import type { AccessScopeContext } from '../../shared/access-scope-context.js';
 export type { AccessScopeContext } from '../../shared/access-scope-context.js';
@@ -156,10 +155,34 @@ export interface RecognitionResultPlan {
   readonly faceMappingEffect: 'KEEP' | 'RELEASE';
 }
 
-export interface RecognitionPersistenceResult {
+export interface RecognitionPersistenceConflictResult {
+  readonly status: 'CONFLICT';
+  readonly event: null;
+  readonly error: RecognitionPersistenceErrorFacts;
+}
+
+export interface RecognitionPersistenceUnknownResult {
+  readonly status: 'UNKNOWN';
+  readonly event: null;
+  readonly error: RecognitionPersistenceErrorFacts;
+}
+
+export interface RecognitionPersistenceErrorFacts {
+  readonly kind: string;
+  readonly stage: string;
+  readonly code: number | null;
+  readonly labels: readonly string[];
+}
+
+export type RecognitionPersistenceResult =
+  | RecognitionPersistenceCommittedResult
+  | RecognitionPersistenceConflictResult
+  | RecognitionPersistenceUnknownResult;
+
+export interface RecognitionPersistenceCommittedResult {
   readonly status: 'COMMITTED' | 'REPLAYED';
-  readonly eventId: string;
-  readonly decision: AccessDecision;
+  readonly event: RedactedAccessEventProjection;
+  readonly replayed: boolean;
 }
 
 export interface ManagementDataPort {

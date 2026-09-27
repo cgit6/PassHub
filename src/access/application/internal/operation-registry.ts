@@ -98,6 +98,12 @@ export interface OperationRegistryCapabilityIssuerOptions {
   readonly sameArtifact: (existing: unknown, candidate: unknown) => boolean;
 }
 
+export function isOperationRegistryCapabilityIssuer(
+  value: unknown,
+): value is OperationRegistryCapabilityIssuer {
+  return isObject(value) && capabilityIssuers.has(value);
+}
+
 /**
  * Composition-only issuer.  Every returned value is a frozen empty token;
  * payload and provenance live solely in module-private WeakMaps.

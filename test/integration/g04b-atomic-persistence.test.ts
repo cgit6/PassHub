@@ -9,7 +9,15 @@ import {
   createVerifiedComparisonPort,
   verifyStartupVectorsAndCreateComparisonCapability,
 } from '../../src/access/application/comparison/index.js';
-import { createAccessComposition } from '../../src/composition/access-composition.js';
+import { createAccessComposition as createPublicAccessComposition } from '../../src/composition/access-composition.js';
+import { createSourceAuth } from '../../src/auth/application/source-auth.js';
+import {
+  createSourceBoundRecognitionExecutorFactory,
+  type SourceBoundRecognitionExecutorFactory,
+} from '../../src/composition/internal/index.js';
+import { createSourceBoundRecognitionExecutorForPrincipal } from '../../src/composition/internal/source-bound-recognition.js';
+import type { ComparisonPort } from '../../src/access/application/comparison/index.js';
+import type { RecognitionDataPort, SourceFactsPort } from '../../src/access/ports/index.js';
 
 import {
   G04A_FACE_QUALIFICATION_INDEX,
@@ -45,6 +53,37 @@ const uri = process.env.G04B_MONGO_URI ?? 'mongodb://127.0.0.1:27029/?replicaSet
 const databasePrefix = process.env.G04B_MONGO_DATABASE_PREFIX ?? `passhub_g04b_direct_${process.pid}`;
 interface StringIdDocument extends Document { _id: string }
 interface LooseDocument extends Document { _id: unknown }
+
+type LegacyTestCompositionDependencies = Parameters<typeof createPublicAccessComposition>[0] & Readonly<{
+  recognition: RecognitionDataPort;
+  sourceFacts: SourceFactsPort;
+  sourceId: string;
+  comparison: ComparisonPort;
+}>;
+
+/** Test-only bridge for the pre-G08b scenarios: production recognition is now source-bound internally. */
+function createAccessComposition(dependencies: LegacyTestCompositionDependencies) {
+  const access = createPublicAccessComposition(dependencies);
+  const factory: SourceBoundRecognitionExecutorFactory = createSourceBoundRecognitionExecutorFactory({
+    recognition: dependencies.recognition,
+    sourceFacts: dependencies.sourceFacts,
+    epoch: dependencies.epoch,
+    comparison: dependencies.comparison,
+  });
+  const sourceAuth = createSourceAuth({ credentialVerifier: {
+    verify: () => Promise.resolve(Object.freeze({ sourceId: dependencies.sourceId })),
+  } });
+  return Object.freeze({
+    ...access,
+    recognizeAttempt: Object.freeze({
+      execute: async (...args: Parameters<ReturnType<typeof createSourceBoundRecognitionExecutorForPrincipal>['execute']>) => {
+        const principal = await sourceAuth.verifySourceCredential(`entry.${'A'.repeat(43)}`);
+        const executor = createSourceBoundRecognitionExecutorForPrincipal(factory, sourceAuth, principal);
+        return executor.execute(...args);
+      },
+    }),
+  });
+}
 
 describe('G04b bootstrap fails closed against an existing dataset', () => {
   let client: MongoClient;
@@ -277,13 +316,13 @@ describe('G04b bootstrap fails closed against an existing dataset', () => {
       receivedAtMs: 1_800_000_001_000,
       externalEventId: 'qr-entry-1',
     });
-    expect(entryDecision).toMatchObject({ outcome: 'ACCEPTED', reasonCode: 'ENTRY_GRANTED' });
+    expect(entryDecision).toMatchObject({ status: 'COMMITTED', replayed: false, event: { outcome: 'ACCEPTED', reasonCode: 'ENTRY_GRANTED' } });
     const exitDecision = await compose(fixture.sourceExitId).recognizeAttempt.execute({
       input: { kind: 'QR_SCANNED', token: created.qrToken! },
       receivedAtMs: 1_800_000_002_000,
       externalEventId: 'qr-exit-1',
     });
-    expect(exitDecision).toMatchObject({ outcome: 'ACCEPTED', reasonCode: 'EXIT_RECORDED' });
+    expect(exitDecision).toMatchObject({ status: 'COMMITTED', replayed: false, event: { outcome: 'ACCEPTED', reasonCode: 'EXIT_RECORDED' } });
     expect(await database.collection<Document>(G04B_EVENTS_COLLECTION).countDocuments({ qualificationId: created.qualificationId })).toBe(2);
     expect(await database.collection<StringIdDocument>(G04B_QUALIFICATIONS_COLLECTION).findOne({ _id: created.qualificationId })).toMatchObject({
       presence: 'EXITED', version: 2,
@@ -316,24 +355,24 @@ describe('G04b bootstrap fails closed against an existing dataset', () => {
     expect(await compose(fixture.sourceEntryId).recognizeAttempt.execute({
       input: { kind: 'FACE_MATCHED', provider: 'DemoFace', externalSubjectId: 'subject-1' },
       receivedAtMs: 1_800_000_001_000, externalEventId: 'face-entry-1',
-    })).toMatchObject({ outcome: 'ACCEPTED', reasonCode: 'ENTRY_GRANTED' });
+    })).toMatchObject({ status: 'COMMITTED', event: { outcome: 'ACCEPTED', reasonCode: 'ENTRY_GRANTED' } });
     expect(await compose(fixture.sourceExitId).recognizeAttempt.execute({
       input: { kind: 'FACE_MATCHED', provider: 'DemoFace', externalSubjectId: 'subject-1' },
       receivedAtMs: 1_800_000_002_000, externalEventId: 'face-exit-1',
-    })).toMatchObject({ outcome: 'ACCEPTED', reasonCode: 'EXIT_RECORDED', faceMappingEffect: 'RELEASE' });
+    })).toMatchObject({ status: 'COMMITTED', event: { outcome: 'ACCEPTED', reasonCode: 'EXIT_RECORDED' } });
     expect(await database.collection<Document>(G04A_FACE_SLOTS_COLLECTION).countDocuments({ qualificationId: fixture.qualificationId })).toBe(0);
 
     expect(await compose(fixture.sourceEntryId).recognizeAttempt.execute({
       input: { kind: 'FACE_UNKNOWN' }, receivedAtMs: 1_800_000_003_000, externalEventId: 'face-unknown-1',
-    })).toMatchObject({ outcome: 'REJECTED', reasonCode: 'FACE_UNKNOWN' });
+    })).toMatchObject({ status: 'COMMITTED', event: { outcome: 'REJECTED', reasonCode: 'FACE_UNKNOWN' } });
     expect(await compose(fixture.sourceEntryId).recognizeAttempt.execute({
       input: { kind: 'FACE_MATCHED', provider: 'DemoFace', externalSubjectId: 'never-mapped' },
       receivedAtMs: 1_800_000_004_000, externalEventId: 'face-unmapped-1',
-    })).toMatchObject({ outcome: 'REJECTED', reasonCode: 'FACE_SUBJECT_NOT_MAPPED' });
+    })).toMatchObject({ status: 'COMMITTED', event: { outcome: 'REJECTED', reasonCode: 'FACE_SUBJECT_NOT_MAPPED' } });
     expect(await compose(fixture.sourceEntryId).recognizeAttempt.execute({
       input: { kind: 'QR_SCANNED', token: 'valid-shape-but-unknown' },
       receivedAtMs: 1_800_000_005_000, externalEventId: 'qr-invalid-1',
-    })).toMatchObject({ outcome: 'REJECTED', reasonCode: 'INVALID_QR_CREDENTIAL' });
+    })).toMatchObject({ status: 'COMMITTED', event: { outcome: 'REJECTED', reasonCode: 'INVALID_QR_CREDENTIAL' } });
     expect(await database.collection(G04A_FACE_SLOTS_COLLECTION).countDocuments({})).toBe(initialSlots);
     expect(await database.collection(G04B_EVENTS_COLLECTION).countDocuments({})).toBe(5);
     expect(await database.collection(G04B_EVENTS_COLLECTION).countDocuments({ outcome: 'REJECTED', qualificationId: null })).toBe(3);
@@ -359,16 +398,13 @@ describe('G04b bootstrap fails closed against an existing dataset', () => {
     };
     const first = await access.recognizeAttempt.execute(command);
     const replay = await access.recognizeAttempt.execute(command);
-    expect(replay).toEqual(first);
-    expect(first).toMatchObject({ outcome: 'ACCEPTED', reasonCode: 'ENTRY_GRANTED' });
-    await expect(access.recognizeAttempt.execute({
+    expect(first).toMatchObject({ status: 'COMMITTED', replayed: false, event: { outcome: 'ACCEPTED', reasonCode: 'ENTRY_GRANTED' } });
+    expect(replay).toMatchObject({ status: 'REPLAYED', replayed: true, event: first.event });
+    expect(await access.recognizeAttempt.execute({
       input: { kind: 'FACE_UNKNOWN' },
       receivedAtMs: 1_800_000_009_000,
       externalEventId: command.externalEventId,
-    })).rejects.toMatchObject({
-      name: 'G04bTransactionError',
-      facts: { kind: 'IDEMPOTENCY_CONFLICT' },
-    });
+    })).toMatchObject({ status: 'CONFLICT', event: null, error: { kind: 'IDEMPOTENCY_CONFLICT' } });
     expect(await database.collection(G04B_EVENTS_COLLECTION).countDocuments({ sourceId: fixture.sourceEntryId, externalEventId: command.externalEventId })).toBe(1);
     expect(await database.collection<StringIdDocument>(G04B_QUALIFICATIONS_COLLECTION).findOne({ _id: fixture.qualificationId })).toMatchObject({ presence: 'INSIDE', version: 1 });
     expect(await database.collection<StringIdDocument>(G04B_SOURCES_COLLECTION).findOne({ _id: fixture.sourceEntryId })).toMatchObject({ version: 1 });
@@ -400,7 +436,11 @@ describe('G04b bootstrap fails closed against an existing dataset', () => {
     const fulfilled = raced.filter((result) => result.status === 'fulfilled');
     const rejected = raced.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
     expect(fulfilled.length).toBeGreaterThanOrEqual(1);
-    for (const result of fulfilled) expect(result.value).toMatchObject({ outcome: 'ACCEPTED', reasonCode: 'ENTRY_GRANTED' });
+    for (const result of fulfilled) expect(result.value).toMatchObject(
+      result.value.status === 'UNKNOWN'
+        ? { status: 'UNKNOWN', event: null, error: { kind: expect.stringMatching(/^(?:WRITE_CONFLICT|UNKNOWN_COMMIT_RESULT)$/u) } }
+        : { event: { outcome: 'ACCEPTED', reasonCode: 'ENTRY_GRANTED' } },
+    );
     for (const result of rejected) {
       expect(result.reason).toMatchObject({
         name: 'G04bTransactionError',
@@ -409,12 +449,14 @@ describe('G04b bootstrap fails closed against an existing dataset', () => {
     }
     expect(await database.collection(G04B_EVENTS_COLLECTION).countDocuments({ sourceId: fixture.sourceEntryId, externalEventId: command.externalEventId })).toBe(1);
     expect(await database.collection<StringIdDocument>(G04B_QUALIFICATIONS_COLLECTION).findOne({ _id: fixture.qualificationId })).toMatchObject({ presence: 'INSIDE', version: 1 });
-    expect(await compose(fixture.sourceEntryId).recognizeAttempt.execute(command)).toEqual(fulfilled[0]!.value);
+    expect(await compose(fixture.sourceEntryId).recognizeAttempt.execute(command)).toMatchObject({
+      status: 'REPLAYED', replayed: true, event: { outcome: 'ACCEPTED', reasonCode: 'ENTRY_GRANTED' },
+    });
     expect(await database.collection(G04B_EVENTS_COLLECTION).countDocuments({ sourceId: fixture.sourceEntryId, externalEventId: command.externalEventId })).toBe(1);
     expect(await database.collection<StringIdDocument>(G04B_QUALIFICATIONS_COLLECTION).findOne({ _id: fixture.qualificationId })).toMatchObject({ presence: 'INSIDE', version: 1 });
 
     expect(await compose(fixture.sourceExitId).recognizeAttempt.execute({ ...command, receivedAtMs: 1_800_000_002_000 })).toMatchObject({
-      outcome: 'ACCEPTED', reasonCode: 'EXIT_RECORDED',
+      event: { outcome: 'ACCEPTED', reasonCode: 'EXIT_RECORDED' },
     });
     expect(await database.collection(G04B_EVENTS_COLLECTION).countDocuments({ externalEventId: command.externalEventId })).toBe(2);
     expect(await database.collection(G04B_EVENTS_COLLECTION).distinct('sourceId', { externalEventId: command.externalEventId })).toEqual(
@@ -442,13 +484,10 @@ describe('G04b bootstrap fails closed against an existing dataset', () => {
     const raced = await Promise.allSettled([execute('different-a'), execute('different-b')]);
     const fulfilled = raced.filter((result) => result.status === 'fulfilled');
     const rejected = raced.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
-    expect(fulfilled).toHaveLength(1);
-    expect(fulfilled[0]!.value).toMatchObject({ outcome: 'ACCEPTED', reasonCode: 'ENTRY_GRANTED' });
-    expect(rejected).toHaveLength(1);
-    expect(rejected[0]!.reason).toMatchObject({
-      name: 'G04bTransactionError',
-      facts: { kind: expect.stringMatching(/^(?:WRITE_CONFLICT|UNKNOWN_COMMIT_RESULT)$/u) },
-    });
+    expect(fulfilled).toHaveLength(2);
+    expect(fulfilled.some((item) => item.value.status === 'COMMITTED')).toBe(true);
+    expect(fulfilled.some((item) => item.value.status === 'UNKNOWN')).toBe(true);
+    expect(rejected).toHaveLength(0);
     expect(await database.collection(G04B_EVENTS_COLLECTION).countDocuments({ externalEventId: { $in: ['different-a', 'different-b'] } })).toBe(1);
     expect(await database.collection(G04B_EVENTS_COLLECTION).countDocuments({ reasonCode: 'ALREADY_INSIDE' })).toBe(0);
     expect(await database.collection<StringIdDocument>(G04B_QUALIFICATIONS_COLLECTION).findOne({ _id: fixture.qualificationId })).toMatchObject({ presence: 'INSIDE', version: 1 });
@@ -481,11 +520,11 @@ describe('G04b bootstrap fails closed against an existing dataset', () => {
       data: { failCommands: [commandName], errorCode: 112 },
     });
     try {
-      await expect(access.recognizeAttempt.execute({
+      expect(await access.recognizeAttempt.execute({
         input: { kind: 'FACE_MATCHED', provider: 'DemoFace', externalSubjectId: 'subject-1' },
         receivedAtMs: 1_800_000_001_000,
         externalEventId: `fault-${commandName}-${skip}`,
-      })).rejects.toMatchObject({ name: 'G04bTransactionError' });
+      })).toMatchObject({ status: 'UNKNOWN', event: null, error: { kind: 'WRITE_CONFLICT' } });
     } finally {
       await client.db('admin').command({ configureFailPoint: 'failCommand', mode: 'off' });
     }
@@ -568,10 +607,10 @@ describe('G04b bootstrap fails closed against an existing dataset', () => {
     const first = await access.recognizeAttempt.execute(command);
     const replay = await access.recognizeAttempt.execute(command);
     expect(first).toMatchObject({
-      outcome: 'REJECTED', reasonCode: 'QUALIFICATION_EXPIRED',
-      qualificationEffect: 'EXPIRE_NOT_ENTERED', faceMappingEffect: 'RELEASE',
+      status: 'COMMITTED', replayed: false,
+      event: { outcome: 'REJECTED', reasonCode: 'QUALIFICATION_EXPIRED' },
     });
-    expect(replay).toEqual(first);
+    expect(replay).toMatchObject({ status: 'REPLAYED', replayed: true, event: first.event });
     expect(await database.collection(G04B_EVENTS_COLLECTION).countDocuments({ externalEventId: command.externalEventId })).toBe(1);
     expect(await database.collection<Document>(G04A_FACE_SLOTS_COLLECTION).countDocuments({ qualificationId: fixture.qualificationId })).toBe(0);
     expect(await database.collection<StringIdDocument>(G04B_QUALIFICATIONS_COLLECTION).findOne({ _id: fixture.qualificationId })).toMatchObject({
@@ -606,7 +645,7 @@ describe('G04b bootstrap fails closed against an existing dataset', () => {
     expect(await access.recognizeAttempt.execute({
       input: { kind: 'FACE_MATCHED', provider: 'DemoFace', externalSubjectId: 'subject-1' },
       receivedAtMs: 1_800_000_001_000, externalEventId: `rejection-${reasonCode.toLowerCase()}`,
-    })).toMatchObject({ outcome: 'REJECTED', reasonCode });
+    })).toMatchObject({ status: 'COMMITTED', event: { outcome: 'REJECTED', reasonCode } });
     expect(await database.collection(G04B_EVENTS_COLLECTION).findOne({ externalEventId: `rejection-${reasonCode.toLowerCase()}` })).toMatchObject({
       outcome: 'REJECTED', reasonCode, qualificationId: fixture.qualificationId,
     });
@@ -634,7 +673,7 @@ describe('G04b bootstrap fails closed against an existing dataset', () => {
     expect(await compose().recognizeAttempt.execute({
       input: { kind: 'FACE_MATCHED', provider: 'DemoFace', externalSubjectId: 'subject-1' },
       receivedAtMs: 1_800_000_001_000, externalEventId: 'inactive-source-1',
-    })).toMatchObject({ outcome: 'REJECTED', reasonCode: 'SOURCE_INACTIVE' });
+    })).toMatchObject({ status: 'COMMITTED', event: { outcome: 'REJECTED', reasonCode: 'SOURCE_INACTIVE' } });
     expect(await database.collection(G04B_EVENTS_COLLECTION).findOne({ externalEventId: 'inactive-source-1' })).toMatchObject({ qualificationId: null });
     expect(await database.collection<StringIdDocument>(G04B_QUALIFICATIONS_COLLECTION).findOne({ _id: inactiveFixture.qualificationId })).toMatchObject({ version: 0 });
 
@@ -742,7 +781,7 @@ describe('G04b bootstrap fails closed against an existing dataset', () => {
     expect(() => createAccessComposition({
       management: adapter, recognition: adapter, sourceFacts: adapter, query: adapter,
       epoch: fixture.datasetEpoch, sourceId: fixture.sourceEntryId,
-    } as never)).toThrow(/comparison port/i);
+    } as never)).toThrow(/recognition executor options/i);
   });
 
   test('adapter source contains no withTransaction, hidden retries, or transaction Promise.all', async () => {
@@ -800,10 +839,10 @@ describe('G04b bootstrap fails closed against an existing dataset', () => {
       data: { failCommands: [commandName], errorCode: 112 },
     });
     try {
-      await expect(access.recognizeAttempt.execute({
+      expect(await access.recognizeAttempt.execute({
         input: { kind: 'FACE_MATCHED', provider: 'DemoFace', externalSubjectId: 'subject-1' },
         receivedAtMs: 1_800_000_001_000, externalEventId: `exit-fault-${commandName}-${skip}`,
-      })).rejects.toMatchObject({ name: 'G04bTransactionError' });
+      })).toMatchObject({ status: 'UNKNOWN', event: null, error: { kind: 'WRITE_CONFLICT' } });
     } finally {
       await client.db('admin').command({ configureFailPoint: 'failCommand', mode: 'off' });
     }
@@ -942,7 +981,9 @@ describe('G04b bootstrap fails closed against an existing dataset', () => {
       receivedAtMs: 1_800_000_001_000, externalEventId: `canonical-after-${mutation.replaceAll(' ', '-')}`,
     };
     const canonicalDecision = await access().recognizeAttempt.execute(command);
-    expect(canonicalDecision).toMatchObject({ outcome: 'ACCEPTED', reasonCode: 'ENTRY_GRANTED' });
+    expect(canonicalDecision).toMatchObject({
+      status: 'COMMITTED', replayed: false, event: { outcome: 'ACCEPTED', reasonCode: 'ENTRY_GRANTED' },
+    });
 
     if (mutation === 'source active') {
       await database.collection<StringIdDocument>(G04B_SOURCES_COLLECTION).updateOne(
@@ -969,15 +1010,17 @@ describe('G04b bootstrap fails closed against an existing dataset', () => {
       );
     }
 
-    expect(await access().recognizeAttempt.execute(command)).toEqual(canonicalDecision);
+    expect(await access().recognizeAttempt.execute(command)).toMatchObject({
+      status: 'REPLAYED', replayed: true, event: canonicalDecision.event,
+    });
     const beforeConflict = {
       source: await database.collection<StringIdDocument>(G04B_SOURCES_COLLECTION).findOne({ _id: fixture.sourceEntryId }),
       qualification: await database.collection<StringIdDocument>(G04B_QUALIFICATIONS_COLLECTION).findOne({ _id: fixture.qualificationId }),
       slots: await database.collection<StringIdDocument>(G04A_FACE_SLOTS_COLLECTION).find({}).sort({ _id: 1 }).toArray(),
     };
-    await expect(access().recognizeAttempt.execute({
+    expect(await access().recognizeAttempt.execute({
       input: { kind: 'FACE_UNKNOWN' }, receivedAtMs: 1_800_000_009_000, externalEventId: command.externalEventId,
-    })).rejects.toMatchObject({ name: 'G04bTransactionError', facts: { kind: 'IDEMPOTENCY_CONFLICT' } });
+    })).toMatchObject({ status: 'CONFLICT', event: null, error: { kind: 'IDEMPOTENCY_CONFLICT' } });
     expect(await database.collection(G04B_EVENTS_COLLECTION).countDocuments({ sourceId: fixture.sourceEntryId, externalEventId: command.externalEventId })).toBe(1);
     expect({
       source: await database.collection<StringIdDocument>(G04B_SOURCES_COLLECTION).findOne({ _id: fixture.sourceEntryId }),

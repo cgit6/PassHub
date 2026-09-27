@@ -10,6 +10,7 @@ import {
   assertUnknownRecognitionOfferPort,
   type UnknownRecognitionOfferPort,
 } from './unknown-recognition-coordinator.js';
+import { issueUnknownRecognitionRecoveryToken } from './unknown-recognition-recovery.js';
 import {
   createWriteOperationCoordinatorBundle,
   type WriteOperationContext,
@@ -120,10 +121,30 @@ export type AdmissionWriterDisposition =
   | 'KNOWN_NO_EFFECT'
   | 'UNKNOWN_EFFECT';
 
-export interface AdmissionWriterOutcome {
+export interface AdmissionManagementWriterOutcome {
   readonly disposition: AdmissionWriterDisposition;
   readonly response: HttpResponsePlan;
 }
+
+export interface AdmissionRecognitionPersistedOutcome {
+  readonly disposition: 'BUSINESS_RESULT_PERSISTED';
+  readonly originalResponse: HttpResponsePlan;
+  readonly replayResponse: HttpResponsePlan;
+}
+
+export interface AdmissionRecognitionTerminalOutcome {
+  readonly disposition: 'KNOWN_NO_EFFECT' | 'UNKNOWN_EFFECT';
+  readonly response: HttpResponsePlan;
+}
+
+export type AdmissionRecognitionWriterOutcome =
+  | AdmissionRecognitionPersistedOutcome
+  | AdmissionRecognitionTerminalOutcome;
+
+/** Management keeps its legacy single-response contract; recognition is typed separately. */
+export type AdmissionWriterOutcome =
+  | AdmissionManagementWriterOutcome
+  | AdmissionRecognitionWriterOutcome;
 
 export interface AdmissionWorkContext {
   readonly operationId: string;
@@ -134,8 +155,8 @@ export interface AdmissionWorkContext {
 export interface AdmissionWorkPort {
   login(input: AdmissionWorkToken): Promise<HttpResponsePlan>;
   query(input: AdmissionWorkToken): Promise<HttpResponsePlan>;
-  management(input: AdmissionWorkToken, context: AdmissionWorkContext): Promise<AdmissionWriterOutcome>;
-  recognition(input: AdmissionWorkToken, context: AdmissionWorkContext): Promise<AdmissionWriterOutcome>;
+  management(input: AdmissionWorkToken, context: AdmissionWorkContext): Promise<AdmissionManagementWriterOutcome>;
+  recognition(input: AdmissionWorkToken, context: AdmissionWorkContext): Promise<AdmissionRecognitionWriterOutcome>;
 }
 
 export interface G07bAdmissionHandlerOptions {
@@ -175,6 +196,11 @@ interface ObservationState {
     readonly sequence: bigint;
   }>;
   progressPlan: HttpResponsePlan;
+}
+
+interface RecognitionResponsePlans {
+  readonly original: HttpResponsePlan;
+  readonly replay: HttpResponsePlan;
 }
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -306,7 +332,7 @@ export function createG07bAdmissionHandler(
 
   const originByOperation = new Map<string, OriginAdmissionLease>();
   const observations = new WeakMap<object, ObservationState>();
-  const resultPlans = new WeakMap<object, HttpResponsePlan>();
+  const resultPlans = new WeakMap<object, RecognitionResponsePlans>();
   let invokingAsyncDependency = false;
   let asyncDependenciesFrozen = false;
 
@@ -495,11 +521,12 @@ export function createG07bAdmissionHandler(
     lease: OperationExecutionLease,
     observationReference: OperationObservationReference,
   ): Promise<void> {
-    let outcome: AdmissionWriterOutcome;
+    let outcome: AdmissionRecognitionWriterOutcome;
     try {
-      outcome = sanitizeWriterOutcome(await invokeNativePromise(
-        () => recognitionWork(input.workInput, workContext(context)),
-      ));
+      outcome = sanitizeRecognitionWriterOutcome(
+        await invokeNativePromise(() => recognitionWork(input.workInput, workContext(context))),
+        renderResponsePlan,
+      );
     } catch {
       transitionUnknown(input, lease, context, observationReference);
       settleUnknown(input.owner, settlement, 'RECOGNITION_WORK_UNCONFIRMED');
@@ -512,22 +539,53 @@ export function createG07bAdmissionHandler(
       settlement.unknownEffect(new AdmissionTechnicalError('RECOGNITION_UNKNOWN_EFFECT'));
       return;
     }
+    if (outcome.disposition === 'KNOWN_NO_EFFECT') {
+      let result: OperationResultReference | null = null;
+      try {
+        renderResponsePlan(outcome.response);
+        result = issueResultReference();
+        resultPlans.set(result, Object.freeze({
+          original: outcome.response,
+          replay: outcome.response,
+        }));
+        completeSafeTerminal(lease, result);
+      } catch {
+        if (result !== null) resultPlans.delete(result);
+        transitionUnknown(input, lease, context, observationReference);
+        settleUnknown(input.owner, settlement, 'RECOGNITION_TERMINAL_UNCONFIRMED');
+        return;
+      }
+      respond(input.owner, outcome.response);
+      settlement.knownNoEffect(new AdmissionTechnicalError('KNOWN_NO_EFFECT'));
+      return;
+    }
+    if (outcome.disposition !== 'BUSINESS_RESULT_PERSISTED') {
+      throw new AdmissionTechnicalError('INVALID_RECOGNITION_WRITER_OUTCOME');
+    }
     let result: OperationResultReference | null = null;
     try {
-      renderResponsePlan(outcome.response);
+      renderResponsePlan(outcome.originalResponse);
+      renderResponsePlan(outcome.replayResponse);
       result = issueResultReference();
-      resultPlans.set(result, outcome.response);
-      if (outcome.disposition === 'BUSINESS_RESULT_PERSISTED') completeCanonical(lease, result);
-      else completeSafeTerminal(lease, result);
+      resultPlans.set(result, Object.freeze({
+        original: outcome.originalResponse,
+        replay: outcome.replayResponse,
+      }));
+      completeCanonical(lease, result);
     } catch {
       if (result !== null) resultPlans.delete(result);
       transitionUnknown(input, lease, context, observationReference);
       settleUnknown(input.owner, settlement, 'RECOGNITION_TERMINAL_UNCONFIRMED');
       return;
     }
-    respond(input.owner, outcome.response);
-    if (outcome.disposition === 'BUSINESS_RESULT_PERSISTED') settlement.businessResultPersisted(outcome);
-    else settlement.knownNoEffect(new AdmissionTechnicalError('KNOWN_NO_EFFECT'));
+    const plans = resultPlans.get(result);
+    if (plans === undefined) {
+      transitionUnknown(input, lease, context, observationReference);
+      settleUnknown(input.owner, settlement, 'RECOGNITION_RESULT_PLAN_UNCONFIRMED');
+      return;
+    }
+    respond(input.owner, plans.original);
+    settlement.businessResultPersisted(outcome);
   }
 
   function transitionUnknown(
@@ -549,10 +607,19 @@ export function createG07bAdmissionHandler(
       input.deadlineObservation.useProgress(input.pausedUnknownPlan);
     }
     try {
+      if (input.keyFacts === null || input.comparisonArtifact === null) {
+        throw new AdmissionTechnicalError('RECOGNITION_RECOVERY_PROVENANCE_MISSING');
+      }
+      const recovery = issueUnknownRecognitionRecoveryToken({
+        sourceId: input.keyFacts.sourceId,
+        externalEventId: input.keyFacts.externalEventId,
+        comparisonArtifact: input.comparisonArtifact,
+      });
       const receipt = offerUnknownRecognition(Object.freeze({
         confirmationLease: confirmation,
         operation: workContext(context),
         observationReference,
+        recovery,
       }));
       acceptUnknownRecognition(receipt);
     } catch {
@@ -572,12 +639,12 @@ export function createG07bAdmissionHandler(
       return;
     }
     try {
-      const plan = resultPlans.get(resultReference);
-      if (plan === undefined) {
+      const plans = resultPlans.get(resultReference);
+      if (plans === undefined) {
         respond(owner, technical.canonicalUnconfirmed);
         return;
       }
-      respond(owner, plan);
+      respond(owner, plans.replay);
     } catch {
       respond(owner, technical.canonicalUnconfirmed);
     } finally {
@@ -1073,7 +1140,7 @@ export function createG07bAdmissionHandler(
   function settleWriterOutcome(
     owner: HttpResponseOwner,
     settlement: WriteOperationSettlement<AdmissionWriterOutcome>,
-    outcome: AdmissionWriterOutcome,
+    outcome: AdmissionManagementWriterOutcome,
   ): void {
     try {
       outcome = sanitizeWriterOutcome(outcome);
@@ -1222,7 +1289,7 @@ function sanitizeValidationResult(
   throw new TypeError('validation result does not match route');
 }
 
-function sanitizeWriterOutcome(value: unknown): AdmissionWriterOutcome {
+function sanitizeWriterOutcome(value: unknown): AdmissionManagementWriterOutcome {
   const record = exactDataRecord(value, ['disposition', 'response']);
   const disposition = recordString(record, 'disposition');
   if (disposition !== 'BUSINESS_RESULT_PERSISTED'
@@ -1233,6 +1300,37 @@ function sanitizeWriterOutcome(value: unknown): AdmissionWriterOutcome {
   const response = record.response;
   if (!isObject(response)) throw new TypeError('invalid writer response');
   return Object.freeze({ disposition, response: response as HttpResponsePlan });
+}
+
+function sanitizeRecognitionWriterOutcome(
+  value: unknown,
+  renderResponsePlan: (plan: HttpResponsePlan) => unknown,
+): AdmissionRecognitionWriterOutcome {
+  const header = exactDataRecord(value, ['disposition'], true);
+  const disposition = recordString(header, 'disposition');
+  if (disposition === 'BUSINESS_RESULT_PERSISTED') {
+    const record = exactDataRecord(value, ['disposition', 'originalResponse', 'replayResponse']);
+    const originalResponse = record.originalResponse;
+    const replayResponse = record.replayResponse;
+    if (!isObject(originalResponse) || !isObject(replayResponse)) {
+      throw new TypeError('invalid recognition response plans');
+    }
+    renderResponsePlan(originalResponse as HttpResponsePlan);
+    renderResponsePlan(replayResponse as HttpResponsePlan);
+    return Object.freeze({
+      disposition,
+      originalResponse: originalResponse as HttpResponsePlan,
+      replayResponse: replayResponse as HttpResponsePlan,
+    });
+  }
+  if (disposition === 'KNOWN_NO_EFFECT' || disposition === 'UNKNOWN_EFFECT') {
+    const record = exactDataRecord(value, ['disposition', 'response']);
+    const response = record.response;
+    if (!isObject(response)) throw new TypeError('invalid recognition response plan');
+    renderResponsePlan(response as HttpResponsePlan);
+    return Object.freeze({ disposition, response: response as HttpResponsePlan });
+  }
+  throw new TypeError('invalid recognition writer disposition');
 }
 
 function canonicalKeyFacts(value: unknown): OperationRegistryKeyFacts {

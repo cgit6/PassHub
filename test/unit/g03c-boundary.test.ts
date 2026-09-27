@@ -19,6 +19,9 @@ import {
   FIXED_TEST_HMAC_KEY,
 } from '../fixtures/comparison-vectors.js';
 import { createAccessComposition } from '../../src/composition/access-composition.js';
+import { createSourceAuth } from '../../src/auth/application/source-auth.js';
+import { createSourceBoundRecognitionExecutorFactory } from '../../src/composition/internal/index.js';
+import { createSourceBoundRecognitionExecutorForPrincipal } from '../../src/composition/internal/source-bound-recognition.js';
 import type {
   AccessQueryPort,
   FaceMappingSnapshot,
@@ -198,14 +201,19 @@ class FakeRecognitionPort implements RecognitionDataPort {
     this.staged.push(plan as unknown as Record<string, unknown>);
     return {
       status: 'COMMITTED',
-      eventId: 'event-fake',
-      decision: {
+      replayed: false,
+      event: Object.freeze({
+        eventId: 'event-fake',
+        sourceId: 'source-1',
+        direction: 'ENTRY',
+        kind: plan.media === 'QR' ? 'QR_SCANNED' : plan.media,
         outcome: plan.outcome,
         reasonCode: plan.reasonCode,
+        receivedAtMs: 1_000,
+        recordedAtMs: 1_000,
+        qualificationId: plan.qualificationId,
         presenceTransition: plan.presenceTransition,
-        qualificationEffect: plan.qualificationEffect,
-        faceMappingEffect: plan.faceMappingEffect,
-      },
+      }),
     };
   }
 }
@@ -256,33 +264,39 @@ async function resolvedQr(
   return scope.resolveQr('lookup-digest');
 }
 
-test('composition exposes three distinct wrappers and keeps write capabilities separated', async () => {
+test('public composition exposes only management/query; internal factory source-binds recognition', async () => {
   const management = new FakeManagementPort();
   const recognition = new FakeRecognitionPort();
   const facts = new FakeSourceFactsPort();
   const query = new FakeQueryPort();
   const composition = createAccessComposition({
     management,
-    recognition,
-    sourceFacts: facts,
     query,
     epoch: 'epoch-1',
-    sourceId: 'source-1',
-    comparison: TEST_COMPARISON,
   });
 
-  expect(Object.keys(composition).sort()).toEqual([
-    'manageQualifications', 'readAccessData', 'recognizeAttempt',
-  ]);
-  expect(composition.manageQualifications).not.toBe(composition.recognizeAttempt);
+  expect(Object.keys(composition).sort()).toEqual(['manageQualifications', 'readAccessData']);
   expect(composition.manageQualifications).not.toBe(composition.readAccessData);
+
+  const sourceId = '11111111-1111-4111-8111-111111111111';
+  const sourceAuth = createSourceAuth({ credentialVerifier: {
+    verify: () => Promise.resolve(Object.freeze({ sourceId })),
+  } });
+  const principal = await sourceAuth.verifySourceCredential(`entry.${'A'.repeat(43)}`);
+  const recognizeAttempt = createSourceBoundRecognitionExecutorForPrincipal(
+    createSourceBoundRecognitionExecutorFactory({
+      recognition, sourceFacts: facts, epoch: 'epoch-1', comparison: TEST_COMPARISON,
+    }),
+    sourceAuth,
+    principal,
+  );
 
   await composition.manageQualifications.create({
     displayName: 'Demo', validFromMs: 1_000, validUntilMs: 2_000,
     faceMapping: null, receivedAtMs: 1_000,
     actorId: '22222222-2222-4222-8222-222222222222',
   });
-  await composition.recognizeAttempt.execute({
+  await recognizeAttempt.execute({
     input: { kind: 'FACE_UNKNOWN' }, receivedAtMs: 1_000,
     externalEventId: 'unit-composition-face-unknown',
   });
@@ -290,7 +304,7 @@ test('composition exposes three distinct wrappers and keeps write capabilities s
 
   expect(management.calls).toEqual(['stageManagementChange']);
   expect(recognition.calls).toEqual(['stageRecognitionResult']);
-  expect(facts.calls).toEqual(['source-1']);
+  expect(facts.calls).toEqual([sourceId]);
   expect(query.calls).toEqual(['qualifications']);
 });
 
@@ -413,9 +427,7 @@ test('inactive sources perform zero identity resolution and still stage SOURCE_I
 test('redacted query wrapper exposes no token, subject, HMAC, or comparison reference', async () => {
   const query = new FakeQueryPort();
   const composition = createAccessComposition({
-    management: new FakeManagementPort(), recognition: new FakeRecognitionPort(),
-    sourceFacts: new FakeSourceFactsPort(), query, epoch: 'epoch-1', sourceId: 'source-1',
-    comparison: TEST_COMPARISON,
+    management: new FakeManagementPort(), query, epoch: 'epoch-1',
   });
   const result = await composition.readAccessData.qualifications({ limit: 10, cursor: 'cursor-1' });
   const serialized = JSON.stringify(result);

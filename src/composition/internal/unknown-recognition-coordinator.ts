@@ -2,6 +2,10 @@ import type {
   OperationConfirmationLease,
   OperationObservationReference,
 } from '../../access/application/internal/operation-registry.js';
+import {
+  assertUnknownRecognitionRecoveryToken,
+  type UnknownRecognitionRecoveryToken,
+} from './unknown-recognition-recovery.js';
 import { types as utilTypes } from 'node:util';
 
 declare const unknownRecognitionReceiptBrand: unique symbol;
@@ -20,6 +24,7 @@ export interface UnknownRecognitionItem {
   readonly confirmationLease: OperationConfirmationLease;
   readonly operation: UnknownRecognitionSafeContext;
   readonly observationReference: OperationObservationReference;
+  readonly recovery: UnknownRecognitionRecoveryToken;
 }
 
 export interface UnknownRecognitionOfferPort {
@@ -107,11 +112,12 @@ export function createUnknownRecognitionCoordinatorBundle(): UnknownRecognitionC
 function copyItem(item: UnknownRecognitionItem): UnknownRecognitionItem {
   const record = exactDataRecord(
     item,
-    ['confirmationLease', 'operation', 'observationReference'],
+    ['confirmationLease', 'operation', 'observationReference', 'recovery'],
     'item',
   );
   assertConfirmationLease(record.confirmationLease);
   assertOpaque(record.observationReference, 'observation reference');
+  assertUnknownRecognitionRecoveryToken(record.recovery as UnknownRecognitionRecoveryToken);
   const operation = exactDataRecord(
     record.operation,
     ['operationId', 'receivedAtMs', 'sequence'],
@@ -130,6 +136,7 @@ function copyItem(item: UnknownRecognitionItem): UnknownRecognitionItem {
       sequence: operation.sequence,
     }),
     observationReference: record.observationReference as OperationObservationReference,
+    recovery: record.recovery as UnknownRecognitionRecoveryToken,
   });
 }
 

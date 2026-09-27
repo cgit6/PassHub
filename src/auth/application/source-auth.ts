@@ -10,6 +10,7 @@ import { SourceCredentialVerifierError } from '../../shared/internal/source-cred
 const CREDENTIAL = /^(entry|exit)\.([A-Za-z0-9_-]{43})$/u;
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const VERIFICATION_KEYS = Object.freeze(['sourceId'] as const);
+const sourceAuthCapabilities = new WeakSet<object>();
 
 export interface SourceAuthCapability {
   verifySourceCredential(credential: string): Promise<SourcePrincipal>;
@@ -18,6 +19,10 @@ export interface SourceAuthCapability {
 
 export interface SourceAuthDependencies {
   readonly credentialVerifier: SourceCredentialVerifierPort;
+}
+
+export function isSourceAuthCapability(value: unknown): value is SourceAuthCapability {
+  return typeof value === 'object' && value !== null && sourceAuthCapabilities.has(value);
 }
 
 function sourceAuthError(code: SourceAuthErrorCode): SourceAuthError {
@@ -139,5 +144,6 @@ export function createSourceAuth(dependencies: SourceAuthDependencies): SourceAu
       return Object.freeze({ sourceId: facts.sourceId });
     },
   };
+  sourceAuthCapabilities.add(capability);
   return Object.freeze(capability);
 }

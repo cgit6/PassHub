@@ -25,6 +25,10 @@ export {
   type AdmissionWorkPort,
   type AdmissionWriterDisposition,
   type AdmissionWriterOutcome,
+  type AdmissionManagementWriterOutcome,
+  type AdmissionRecognitionWriterOutcome,
+  type AdmissionRecognitionPersistedOutcome,
+  type AdmissionRecognitionTerminalOutcome,
   type G07bAdmissionHandlerOptions,
   type G07bMonotonicClock,
   type G07bWallClock,
@@ -34,6 +38,25 @@ export {
   type G08aManagementComposition,
   type G08aManagementCompositionOptions,
 } from './g08a-management-composition.js';
+export {
+  createSourceBoundRecognitionExecutorFactory,
+  type SourceBoundRecognitionExecutorFactory,
+} from './source-bound-recognition.js';
+export {
+  issueUnknownRecognitionRecoveryToken,
+  assertUnknownRecognitionRecoveryToken,
+  type UnknownRecognitionRecoveryToken,
+} from './unknown-recognition-recovery.js';
+export {
+  createG08bRecognitionComposition,
+  type G08bRecognitionComposition,
+  type G08bRecognitionCompositionOptions,
+} from './g08b-recognition-composition.js';
+export {
+  createG07bRouteComposition,
+  type G07bRouteComposition,
+  type G07bRouteCompositionOptions,
+} from './g07b-route-composition.js';
 export {
   HTTP_RESPONSE_DEADLINE_MS,
   HttpResponseOwnerError,

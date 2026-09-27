@@ -15,7 +15,7 @@ import {
   createG08aManagementComposition,
   createHttpResponsePlanBundle,
   type AdmissionValidationInput,
-  type AdmissionWriterOutcome,
+  type AdmissionManagementWriterOutcome,
   type HttpResponsePlanBundle,
 } from '../../src/composition/internal/index.js';
 import {
@@ -146,7 +146,7 @@ function input(
   };
 }
 
-async function execute(h: Harness, validationInput: AdmissionValidationInput): Promise<AdmissionWriterOutcome> {
+async function execute(h: Harness, validationInput: AdmissionValidationInput): Promise<AdmissionManagementWriterOutcome> {
   const validation = await h.composition.validator.validate(validationInput);
   if (validation.kind !== 'MANAGEMENT') throw new Error(`expected MANAGEMENT, received ${validation.kind}`);
   return h.composition.work.management(validation.workInput, {
@@ -156,7 +156,7 @@ async function execute(h: Harness, validationInput: AdmissionValidationInput): P
   });
 }
 
-function rendered(h: Harness, outcome: AdmissionWriterOutcome): { status: number; body: Record<string, unknown> } {
+function rendered(h: Harness, outcome: AdmissionManagementWriterOutcome): { status: number; body: Record<string, unknown> } {
   const response = h.plans.renderer.render(outcome.response);
   return { status: response.status, body: JSON.parse(response.body) as Record<string, unknown> };
 }

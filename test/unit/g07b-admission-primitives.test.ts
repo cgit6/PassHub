@@ -10,6 +10,7 @@ import {
   createHttpResponseOwner,
   createHttpResponsePlanBundle,
   createUnknownRecognitionCoordinatorBundle,
+  issueUnknownRecognitionRecoveryToken,
 } from '../../src/composition/internal/index.js';
 import { classifyBusinessRoute } from '../../src/shared/internal/http/index.js';
 import type { NarrowHttpResponse } from '../../src/composition/internal/index.js';
@@ -159,6 +160,11 @@ describe('G07b opaque capabilities and response plans', () => {
       confirmationLease: Object.freeze({ generation: 1 }) as OperationConfirmationLease,
       operation: Object.freeze({ operationId: 'o', receivedAtMs: 1, sequence: 0n }),
       observationReference: Object.freeze({}) as OperationObservationReference,
+      recovery: issueUnknownRecognitionRecoveryToken({
+        sourceId: '11111111-1111-4111-8111-111111111111',
+        externalEventId: 'event-1',
+        comparisonArtifact: Object.freeze({}),
+      }),
     });
     const receipt = bundle.handler.offer(item); bundle.handler.accept(receipt);
     expect(bundle.drain.drain()).toEqual([receipt]);

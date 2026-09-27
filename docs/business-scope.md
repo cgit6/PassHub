@@ -1,9 +1,9 @@
 # PassHub v1 業務邊界規格
 
-- 文件狀態：業務與實作規劃已收斂；G02–G03c、窄 G04a、G04b、G05a–G05c、G06a–G06b、G07a–G07b及G08a管理用例／完整保存已有各自限定工程證據，依25 STOP停止於G08a；完整v1工程驗證仍未完成
-- 更新日期：2026-09-26
+- 文件狀態：業務與實作規劃已收斂；G02–G03c、窄 G04a、G04b、G05a–G05c、G06a–G06b、G07a–G07b、G08a管理鏈及G08b辨識鏈已有各自限定工程證據，依25 STOP停止於G08b；完整v1工程驗證仍未完成
+- 更新日期：2026-09-27
 - 適用版本：PassHub v1
-- 文件目的：以 D01–D35 為業務底稿，同步至 D178 的有效修正；實作細節及逐關驗收集中在 implementation-plan.md，不把官方查證、歷史候選或待做測試當成工程成果
+- 文件目的：以 D01–D35 為業務底稿，同步至 D179 的有效修正；實作細節及逐關驗收集中在 implementation-plan.md，不把官方查證、歷史候選或待做測試當成工程成果
 
 原始依據見[討論紀錄](./discuss.md)，逐項實作及驗收對應見[要求追蹤矩陣](./requirements-traceability.md)。本文件的「已確認」是規格採用狀態，不代表程式／測試已完成。
 
@@ -244,7 +244,7 @@ PassHub 不在此流程中控制門鎖、呼叫 Webhook 或建立任何下游投
 - 身分／業務格式不合法不得進業務保存；同步暫占及登記不是可信受理或通行授權。既有事件回放不是新通行決策。
 - 未知結果不能因等待逾時就放開後項；故障確認、續辦及維護依第 7.4–7.6 節與第 9.2 節。
 
-G05a 已證內部同步登記／單調序號／單一FIFO權限、settlement與unknown fail-closed primitive；G05b 已證每原操作 15秒／3輪 execution、10秒／7格 confirmation、single-send cadence、native precommit兩送預扣及continuation admission ledger；G05c 已證 process-local registry／opaque artifact join／conflict、4096 retention、generation／late-callback與epoch／read-only claim primitive；G06a／G06b 已證人員與Source認證 primitives；G07a／G07b 已證bounded raw ingress、同步分池／registry暫占、provisional FIFO、一次回覆owner、rate、join／replay／conflict及unknown handoff。G08a再證Operator-only管理鏈、strict DTO、create／PATCH／revoke、QR一次、安全摘要、receivedAt／FIFO接線、惰性逾期及Face容量／重用／衝突的真Mongo交易保存。這些限定證據仍不包含G08b辨識、G09查詢、G10故障／控制、G11維護部署或完整v1。
+G05a 已證內部同步登記／單調序號／單一FIFO權限、settlement與unknown fail-closed primitive；G05b 已證每原操作 15秒／3輪 execution、10秒／7格 confirmation、single-send cadence、native precommit兩送預扣及continuation admission ledger；G05c 已證 process-local registry／opaque artifact join／conflict、4096 retention、generation／late-callback與epoch／read-only claim primitive；G06a／G06b 已證人員與Source認證 primitives；G07a／G07b 已證bounded raw ingress、同步分池／registry暫占、provisional FIFO、一次回覆owner、rate、join／replay／conflict及unknown handoff。G08a再證Operator-only管理鏈、strict DTO、create／PATCH／revoke、QR一次、安全摘要、receivedAt／FIFO接線、惰性逾期及Face容量／重用／衝突的真Mongo交易保存；G08b再證Source-only strict QR／Face／UNKNOWN辨識入口、安全Event回覆、正常提交／回放／衝突、停用Source拒絕Event，以及Face ENTRY→EXIT時Event／Presence／映射的真Mongo原子保存。這些限定證據仍不包含G09查詢、G10傳輸未知確認／私密控制、G11維護部署或完整v1。
 
 ## 6. Presence 與通行決策
 
@@ -749,10 +749,10 @@ Qualification 時間錯誤、Face重複、越權與公開限制均拒絕，使�
 
 P01–P15採用決策與逐關驗收見[實作方案](implementation-plan.md)及追蹤矩陣。剩餘不是讓實作者自由選架構：Face唯一索引替換微型真測、固定工具相容性及fault映像digest是明確前置gate；未過便停止回討論，不靜默換策。外部主機／domain／TLS需環境提供。D161已取代舊碼私密備份要求，不再建立legacy備份。
 
-目前矩陣為 A01、A11–A16、B04、B09、B13、B19、B41、B42 共 13 項 V（G08a以完整直接證據新增B04、B09、B19），其餘123項仍U；這不代表完整 v1、辨識API、查詢、fault protocol或部署完成。G08a直接證明管理輸入契約、Operator合規Face預綁及撤銷完整保存；其餘管理相關要求只記局部證據：例如QR所有未來表面、Face替換失敗、管理與ENTRY競爭、跨媒介辨識、查詢及日誌仍需後續gate閉合。G08b recognition、G09 query、G10 fault／control與G11 deployment均未開始。依25 STOP停止於G08a；下一合法 gate 為 G08b，尚未開始。
+目前矩陣為 A01、A05–A09、A11–A16、B04、B08、B09、B13、B19、B27、B35、B41、B42、B52 共22項V，其餘114項仍U；G08b只把本關完整直接支持的A05–A09、B08、B27、B35、B52升為V。這不代表完整v1、全部辨識情境、查詢、fault protocol或部署完成；跨媒介完整矩陣、各reason的HTTP／Event一致性、不同事件並行勝負、管理與ENTRY競爭，以及G10真正transport-loss確認仍只具局部或尚無證據。依25 STOP停止於G08b；下一合法gate為G09a，尚未開始。
 
 ## 決策來源
 
-本文件以[討論紀錄](./discuss.md) D01–D35為業務底稿，同步至D178；D114明確授權持續逐題討論、預設接受及必要文件同步，非逐題個別回答。D69依D72、D17依D76修正；D89安全續辦保留，D130永久終局候選未採；D117取代binaryv1、D131七格取代三次、D129原生兩送局部例外、D149同epoch普通重啟寫入關閉，D174–D178的逐關限定證據皆有效。其餘歷史候選及背景不新增產品要求。
+本文件以[討論紀錄](./discuss.md) D01–D35為業務底稿，同步至D179；D114明確授權持續逐題討論、預設接受及必要文件同步，非逐題個別回答。D69依D72、D17依D76修正；D89安全續辦保留，D130永久終局候選未採；D117取代binaryv1、D131七格取代三次、D129原生兩送局部例外、D149同epoch普通重啟寫入關閉，D174–D179的逐關限定證據皆有效。其餘歷史候選及背景不新增產品要求。
 
 本次同步不是新業務決策，也不改寫原始討論。未來若變更已確認結論，須先新增討論決策 block，再同步本文件、驗收及追蹤矩陣。實作／測試／公開證據未完成前，不把文件採用視為履歷成果。

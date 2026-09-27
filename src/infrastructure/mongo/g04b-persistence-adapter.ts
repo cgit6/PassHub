@@ -17,6 +17,7 @@ import type {
   ManagementDataPort,
   ManagementQualificationSnapshot,
   QualificationSnapshot,
+  RedactedAccessEventProjection,
   RecognitionDataPort,
   RecognitionPersistenceResult,
   RecognitionResultPlan,
@@ -24,10 +25,12 @@ import type {
   SourceFacts,
   SourceFactsPort,
 } from '../../access/ports/index.js';
+import { toRedactedAccessEventProjection } from '../../access/application/recognition-result-mapper.js';
 import { isAccessScopeContextRetired, readAccessScopeContextClaims } from '../../shared/access-scope-context.js';
 import { isComparisonArtifact, type ComparisonArtifact } from '../../access/ports/comparison-artifact.js';
 import { assertExternalEventId, assertExternalSubjectId, assertProvider } from '../../access/application/comparison/recognition-input.js';
-import { assertQualificationState, type AccessDecision, type QualificationState, type ReasonCode } from '../../access/domain/index.js';
+import { assertQualificationState, type QualificationState } from '../../access/domain/index.js';
+import { compareComparisonArtifacts } from '../../access/application/comparison/comparison-capability.js';
 import {
   ensureG04bSchema,
   assertG04bMetadataBootstrap,
@@ -76,12 +79,19 @@ export interface G04bErrorFacts {
   readonly labels: readonly string[];
 }
 
-export interface G04bRecognitionResult {
-  readonly status: G04bPersistenceStatus;
-  readonly eventId: string | null;
-  readonly error: G04bErrorFacts | null;
-  readonly decision: AccessDecision | null;
-}
+export type G04bRecognitionResult =
+  | {
+      readonly status: 'COMMITTED' | 'REPLAYED';
+      readonly event: RedactedAccessEventProjection;
+      readonly replayed: boolean;
+      readonly error: null;
+    }
+  | {
+      readonly status: 'CONFLICT' | 'UNKNOWN';
+      readonly event: null;
+      readonly replayed: false;
+      readonly error: G04bErrorFacts;
+    };
 
 export interface G04bCanonicalSnapshot {
   readonly event: Readonly<{
@@ -299,16 +309,18 @@ export class G04bMongoPersistenceAdapter
 
   public async stageRecognitionResult(context: AccessScopeContext, plan: RecognitionResultPlan): Promise<RecognitionPersistenceResult> {
     const result = await this.stageRecognitionResultWithResult(context, plan);
-    if (result.status !== 'COMMITTED' && result.status !== 'REPLAYED') {
-      throw new G04bTransactionError(
-        result.error ?? { kind: 'OTHER', stage: 'event', code: null, labels: [] },
-        result.error,
-      );
+    if (result.status === 'COMMITTED' || result.status === 'REPLAYED') {
+      if (result.event === null || result.replayed !== (result.status === 'REPLAYED')) {
+        throw new G04bTechnicalError('recognition persistence result is incomplete');
+      }
+      return { status: result.status, event: result.event, replayed: result.replayed };
     }
-    if (result.eventId === null || result.decision === null) {
-      throw new G04bTechnicalError('recognition persistence result is incomplete');
-    }
-    return { status: result.status, eventId: result.eventId, decision: result.decision };
+    if (result.error === null) throw new G04bTechnicalError('recognition persistence error facts are missing');
+    return {
+      status: result.status,
+      event: null,
+      error: result.error,
+    };
   }
 
   public async stageRecognitionResultWithResult(context: AccessScopeContext, plan: RecognitionResultPlan): Promise<G04bRecognitionResult> {
@@ -324,24 +336,30 @@ export class G04bMongoPersistenceAdapter
         if (failed instanceof G04bTransactionError &&
             (failed.facts.kind === 'DUPLICATE_KEY' || failed.facts.kind === 'WRITE_CONFLICT')) {
           const envelope = readRecognitionPersistenceEnvelope(plan as object);
-          if (envelope === null) return { status: 'UNKNOWN', eventId: null, error: failed.facts, decision: null };
-          const canonical = await this.readCanonicalSnapshotInternal(envelope.sourceId, envelope.externalEventId);
-          if (canonical === null) return {
-            status: 'UNKNOWN', eventId: null,
+          if (envelope === null) return { status: 'UNKNOWN', event: null, replayed: false, error: failed.facts };
+          // Once the unique Event exists, replay classification is based on
+          // that old Event only. Do not re-read current source, qualification,
+          // or mapping state and accidentally re-judge the attempt.
+          const canonicalEvent = await this.readCanonicalEventInternal(envelope.sourceId, envelope.externalEventId);
+          if (canonicalEvent === null) return {
+            status: 'UNKNOWN', event: null, replayed: false,
             error: failed.facts,
-            decision: null,
           };
-          if (canonical.event.inputHmac === envelope.comparisonArtifact.inputHmac && canonical.event.comparisonReferenceId === envelope.comparisonArtifact.comparisonReferenceId) {
-            return { status: 'REPLAYED', eventId: canonical.event._id, error: null, decision: decisionFromEvent(canonical.event) };
+          if (compareComparisonArtifacts(envelope.comparisonArtifact, canonicalEvent)) {
+            return {
+              status: 'REPLAYED',
+              event: toRedactedAccessEventProjection(canonicalEvent),
+              replayed: true,
+              error: null,
+            };
           }
           return {
-            status: 'CONFLICT', eventId: canonical.event._id,
+            status: 'CONFLICT', event: null, replayed: false,
             error: { kind: 'IDEMPOTENCY_CONFLICT', stage: 'canonical', code: failed.facts.code, labels: failed.facts.labels },
-            decision: null,
           };
         }
         if (failed instanceof G04bTransactionError && failed.facts.kind === 'UNKNOWN_COMMIT_RESULT') {
-          return { status: 'UNKNOWN', eventId: null, error: failed.facts, decision: null };
+          return { status: 'UNKNOWN', event: null, replayed: false, error: failed.facts };
         }
         throw failed;
       }
@@ -427,6 +445,24 @@ export class G04bMongoPersistenceAdapter
       if (metadata === null) throw new G04bTechnicalError('metadata system document is missing');
       await session.commitTransaction();
       return { event, qualification, mapping, guardVersions: { qr: metadata.qrGuardVersion, face: metadata.faceGuardVersion } };
+    } catch (error: unknown) {
+      if (session.inTransaction()) await session.abortTransaction().catch(() => undefined);
+      throw error;
+    } finally {
+      await session.endSession();
+    }
+  }
+
+  private async readCanonicalEventInternal(
+    sourceId: string,
+    externalEventId: string,
+  ): Promise<G04bEventDocument | null> {
+    const session = this.client.startSession();
+    try {
+      session.startTransaction({ readConcern: { level: 'snapshot' }, readPreference: 'primary' });
+      const event = await this.requireCollections().events.findOne({ sourceId, externalEventId }, { session });
+      await session.commitTransaction();
+      return event;
     } catch (error: unknown) {
       if (session.inTransaction()) await session.abortTransaction().catch(() => undefined);
       throw error;
@@ -575,16 +611,21 @@ export class G04bMongoPersistenceAdapter
     // The envelope is an internal WeakMap trusted boundary; G04b has no HTTP/auth layer.
     // Once the source+external key and artifact are safely validated, persisted Event is canonical.
     const existing = await this.requireCollections().events.findOne({ sourceId, externalEventId }, { session: state.session });
-    if (existing !== null) {
-      if (existing.inputHmac !== artifact.inputHmac || existing.comparisonReferenceId !== artifact.comparisonReferenceId) {
+      if (existing !== null) {
+      if (!compareComparisonArtifacts(artifact, existing)) {
         return {
           status: 'CONFLICT',
-          eventId: existing._id,
+          event: null,
+          replayed: false,
           error: { kind: 'IDEMPOTENCY_CONFLICT', stage: 'event', code: null, labels: [] },
-          decision: null,
         };
       }
-      return { status: 'REPLAYED', eventId: existing._id, error: null, decision: decisionFromEvent(existing) };
+      return {
+        status: 'REPLAYED',
+        event: toRedactedAccessEventProjection(existing),
+        replayed: true,
+        error: null,
+      };
     }
 
     let source = state.sourceFacts.get(envelope.sourceId);
@@ -635,7 +676,12 @@ export class G04bMongoPersistenceAdapter
     };
     await this.requireCollections().events.insertOne(document, { session: state.session });
     await this.ensureSlotCount(state);
-    return { status: 'COMMITTED', eventId, error: null, decision: decisionFromPlan(plan) };
+    return {
+      status: 'COMMITTED',
+      event: toRedactedAccessEventProjection(document),
+      replayed: false,
+      error: null,
+    };
   }
 
   private async applyQualificationEffect(state: TransactionState, current: G04bQualificationDocument, plan: RecognitionResultPlan, receivedAtMs: number): Promise<void> {
@@ -888,24 +934,6 @@ function requireArtifact(value: ComparisonArtifact | undefined): ComparisonArtif
     throw new G04bTechnicalError('verified comparison artifact fields are malformed');
   }
   return value;
-}
-function decisionFromPlan(plan: RecognitionResultPlan): AccessDecision {
-  return {
-    outcome: plan.outcome,
-    reasonCode: plan.reasonCode,
-    presenceTransition: plan.presenceTransition,
-    qualificationEffect: plan.qualificationEffect,
-    faceMappingEffect: plan.faceMappingEffect,
-  };
-}
-function decisionFromEvent(event: G04bEventDocument): AccessDecision {
-  return {
-    outcome: event.outcome,
-    reasonCode: event.reasonCode as ReasonCode,
-    presenceTransition: event.presenceTransition,
-    qualificationEffect: event.reasonCode === 'QUALIFICATION_EXPIRED' ? 'EXPIRE_NOT_ENTERED' : 'NONE',
-    faceMappingEffect: event.reasonCode === 'QUALIFICATION_EXPIRED' || event.reasonCode === 'EXIT_RECORDED' ? 'RELEASE' : 'KEEP',
-  };
 }
 function randomUuidToken(): string { return randomBytes(32).toString('base64url'); }
 function sha256Lookup(token: string): string { return createHash('sha256').update(Buffer.from('PassHub/qr-lookup/v1\0', 'utf8')).update(Buffer.from(token, 'utf8')).digest('hex'); }

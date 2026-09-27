@@ -22,7 +22,7 @@ import {
   type AdmissionValidatorPort,
   type AdmissionWorkContext,
   type AdmissionWorkPort,
-  type AdmissionWriterOutcome,
+  type AdmissionManagementWriterOutcome,
 } from './g07b-admission-handler.js';
 import type {
   AdmissionWorkHandoffBundle,
@@ -166,7 +166,7 @@ export function createG08aManagementComposition(
   });
 
   const work = Object.freeze({
-    async management(input: AdmissionWorkToken, context: AdmissionWorkContext): Promise<AdmissionWriterOutcome> {
+    async management(input: AdmissionWorkToken, context: AdmissionWorkContext): Promise<AdmissionManagementWriterOutcome> {
       const payload = payloads.get(input as object);
       if (payload === undefined) throw new TypeError('management work token is missing or already consumed');
       payloads.delete(input as object);
@@ -251,7 +251,7 @@ function classifyManagementFailure(
   error: unknown,
   issueTechnical: (code: 'AUTHENTICATION_FAILED' | 'AUTH_UNAVAILABLE' | 'FORBIDDEN' | 'MANAGEMENT_CONFLICT' | 'PERSISTENCE_UNAVAILABLE' | 'FACE_SUBJECT_SLOT_CAPACITY_EXHAUSTED') => HttpResponsePlan,
   issueBusiness: (status: 200 | 201 | 202 | 409, payload: Readonly<Record<string, unknown>>) => HttpResponsePlan,
-): AdmissionWriterOutcome {
+): AdmissionManagementWriterOutcome {
   if (error instanceof ManagementApplicationError) {
     const response = issueBusiness(409, Object.freeze({ code: error.code }));
     return Object.freeze({

@@ -2,7 +2,11 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 
 import { encodeComparisonFrame } from './frame-codec.js';
 import { assertRecognitionComparisonInput, type RecognitionComparisonInput } from './recognition-input.js';
-import { registerComparisonArtifact, type ComparisonArtifact } from '../../ports/comparison-artifact.js';
+import {
+  isComparisonArtifact,
+  registerComparisonArtifact,
+  type ComparisonArtifact,
+} from '../../ports/comparison-artifact.js';
 
 const LOWER_HEX_32_BYTES = /^[0-9a-f]{64}$/u;
 const UUID_V4 =
@@ -15,6 +19,37 @@ export interface StartupComparisonVector {
 }
 
 export type { ComparisonArtifact } from '../../ports/comparison-artifact.js';
+
+/**
+ * Compare a verified artifact with persisted comparison facts without
+ * re-encoding the recognition input. Reference identity is checked first;
+ * the digest bytes are then compared in constant time.
+ */
+export function compareComparisonArtifacts(
+  candidate: ComparisonArtifact,
+  stored: ComparisonArtifact | Readonly<{ inputHmac: unknown; comparisonReferenceId: unknown }>,
+): boolean {
+  if (!isComparisonArtifact(candidate) ||
+      typeof stored.inputHmac !== 'string' || !LOWER_HEX_32_BYTES.test(stored.inputHmac) ||
+      typeof stored.comparisonReferenceId !== 'string' || !UUID_V4.test(stored.comparisonReferenceId)) {
+    return false;
+  }
+  if (candidate.comparisonReferenceId !== stored.comparisonReferenceId) return false;
+  return timingSafeEqual(
+    Buffer.from(candidate.inputHmac, 'hex'),
+    Buffer.from(stored.inputHmac, 'hex'),
+  );
+}
+
+export function assertComparisonArtifactsEqual(
+  left: ComparisonArtifact,
+  right: ComparisonArtifact,
+): void {
+  if (!isComparisonArtifact(left) || !isComparisonArtifact(right) ||
+      !compareComparisonArtifacts(left, right)) {
+    throw new ComparisonCompatibilityError('comparison artifacts are not equal');
+  }
+}
 
 export class ComparisonCompatibilityError extends Error {
   public constructor(message: string) {

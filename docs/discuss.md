@@ -23,7 +23,7 @@ aliases:
   - "PassHub 求職作品範圍決策"
   - "PassHub 架構辯論"
 created: "2026-09-15"
-updated: "2026-09-26"
+updated: "2026-09-27"
 ---
 
 # PassHub v1 業務邊界與架構討論紀錄
@@ -31,18 +31,18 @@ updated: "2026-09-26"
 ## 快速檢索卡
 
 - 核心問題：在小型訪客資格／模擬辨識決策業務上，形成合理、模組化、可驗證的Node.js/TypeScript架構與逐關方案；不以兩天時限取代品質論證。
-- 當前結論：D160完成規劃封口；D161完成舊碼清除；D163–D177保存G02–G07b各自限定證據；D178完成G08a管理用例及完整保存限定gate（unit 52、true HTTP e2e 12、true Mongo 10）並停止於G08a。矩陣為13V／123U，完整v1未完成。
+- 當前結論：D160完成規劃封口；D161完成舊碼清除；D163–D178保存G02–G08a各自限定證據；D179完成G08b辨識處理鏈限定gate（unit 42、true HTTP e2e 6、true Mongo 3）並停止於G08b。矩陣為22V／114U，完整v1未完成。
 - 關鍵爭點：D129原生中止兩送有界組預扣不退、跨窗口局部例外；D130較早確認起點／D131七格；D143 Face反向unique同txn替換必须G04a先真測。D149同epoch普通restart關寫是明示可用性代價，不能依memory空接管。
 - 適用於：D01–D165有效採用／修正、獨立角色公開論點、官方查證及剩餘gate風險。採Nest預設Express/strictTS/官方driver/單API/單Mongo member replica set，非無框架或HA；25STOP見D157及實作方案。
 - 不適用於：把歷史候選／官方語法／manifest／獨立唯讀實驗當PassHub已完成成果。D117 JSON v2已取代binary v1，D130永久終局候選未採，D89安全條件續辦仍有效；D161只有A01為V。
-- 待驗證：G08b及其後gate。G08a已證Operator-only管理、strict DTO、create／PATCH／revoke、QR一次、安全摘要、惰性逾期、Face容量／重用／衝突與真Mongo交易；仍未驗正式recognition鏈、G09查詢、G10 driver wire／native清理／真回程loss／logs／hold、G11部署及完整release。
+- 待驗證：G09及其後gate。G08b已證Source-only strict QR／Face／UNKNOWN辨識、正常Event／Presence／映射保存、回放／conflict及unknown-effect停寫；仍未驗G09查詢、G10 driver wire／native清理／真回程loss／logs／hold、G11部署及完整release。
 - 實作者入口：[實作方案](implementation-plan.md)，再讀[136要求矩陣](requirements-traceability.md)及[業務規格](business-scope.md)，並回查對應D原文。未來每子關報實際證據後STOP，D114不授權未來不停實作。
 
 ## 閱讀狀態與階段界線
 
-- 最新狀態：D178記錄G08a管理用例及完整保存限定gate已通過並停止；G08b recognition、G09 query、G10 fault／control、G11 deployment及完整v1仍未完成。A01、A11–A16、B04、B09、B13、B19、B41、B42共13項為V，其餘123項仍U。
+- 最新狀態：D179記錄G08b完整辨識處理鏈限定gate已通過並停止於G08b；下一合法gate為G09a，尚未開始。G09 query、G10 fault／control、G11 deployment及完整v1仍未完成。A01、A05–A09、A11–A16、B04、B08、B09、B13、B19、B27、B35、B41、B42、B52共22項為V，其餘114項仍U。
 - D01–D35 及所有較早摘要／交接保留歷史；其中「K1尚未同步」「尚未開始第二階段」「API/schema未定」不代表當前狀態。最新有效版本由D117/119/122/125/129–139/140–157及後續明確覆核修正判定，歷史block不回寫。下方回溯狀態描述只對當時有效，不能用來覆蓋新版。
-- 文件整體settled代表有效規劃已採用；D161留下舊碼處理證據，D163–D177留下G02–G07b各自限定證據，D178留下G08a管理／真Mongo保存限定證據。partially-sourced仍含專案取捨、官方查證與未實測組合；上述限定gates不代表G08b辨識、G09查詢、G10 fault／control、G11部署或其餘123要求通過。
+- 文件整體settled代表有效規劃已採用；D161留下舊碼處理證據，D163–D178留下G02–G08a各自限定證據，D179留下G08b辨識／真Mongo保存限定證據。partially-sourced仍含專案取捨、官方查證與未實測組合；上述限定gates不代表G09查詢、G10 fault／control、G11部署或其餘114要求通過。
 - 「使用者已接受」與「辯論暫定」逐 block 區分。授權保存辯論不等於確認候選架構，也不等於授權重寫程式。
 - D36–D41 為 2026-09-16 回溯追加；統一使用建檔時間，不捏造各輪原始時間。
 - D42–D46 為 2026-09-17 回溯追加；統一記錄保存時間，不捏造各輪原始時間。公開程式查核另保留查詢日期及固定 commit。
@@ -3312,3 +3312,15 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - coverage：aggregate 79.00% statements／73.91% branches／84.61% functions／82.28% lines；Access application 69.64%／65.75%／86.66%／71.02%，G08a composition 87.97%／79.72%／90.00%／94.77%。這不是全面高覆蓋或136要求完成率。
 - 需求裁定：只有完整直接支持的B04、B09、B19由U升V；矩陣成為13V／123U。B05、B06、B10–B12、B15–B18、B20、B22–B24、L01–L02等只補局部證據，因未來查詢、辨識、競爭、日誌或其他表面未閉合而維持U。
 - 限制與停止：G08b recognition、G09 query、G10 fault／control、G11 deployment、OpenAPI／CI／Docker／公開Demo及G12完整release未完成。正式證據見`docs/evidence/g08a/report.md`；停止於G08a，不開始G08b，PM本輪只修改docs。
+
+
+### D179｜G08b 完整辨識處理鏈限定 gate 通過並停止
+
+- 日期：2026-09-27；狀態：production architecture四輪由三次`NEEDS_CHANGES`修正至PASS，formal tester PASS；PM獨立對照業務、方案、136要求矩陣、current production／test diff及正式測試，未發現production blocker。G08b限定gate PASS，依25 STOP停止於G08b；下一合法gate為G09a，尚未開始。
+- 交付契約：`POST /recognition/attempts`只接受已認證Source及exact QR_SCANNED／FACE_MATCHED／FACE_UNKNOWN DTO；來源身分與方向不能由payload指定。已保存Event是唯一200回覆來源；回覆不含token、完整subject、credential或comparison材料。同Source＋event ID＋同內容回放原Event，不同內容409且不建第二Event；不同Source同ID互相獨立。
+- 完整保存：真Mongo直接驗Face ENTRY→EXIT的兩筆Event、Presence及Face映射釋放共同原子保存；UNKNOWN及停用Source各保存單一拒絕Event而無孤兒effect；canonical replay在Source現況變更後仍回原結果且不建第二Event。不能確定效果時交unknown handoff並停寫，不在G08b自行確認或重試。
+- 架構四輪：R1修正handoff四鍵、artifact provenance／唯一產生、typed dual response plans、共用internal dispatcher、public surface及dependency capture／分類；R2修正可變port receiver、Event request／reason／transition invariant及factory issuer過曝；R3補construction-time WeakMap provenance fail-fast；R4確認foreign factory啟動即拒、合法HTTP replay／conflict／existing-only、artifact一次、Event mismatch UNKNOWN、dispatcher與邊界均未回退後PASS。
+- 正式驗證：G08b unit 42／42、true Node／Nest／Express HTTP e2e 6／6、true MongoDB 8.0.32 replica-set integration 3／3、combined 51、full unit 16 suites／521。boundary `files=7 edges=36 publicLeaks=0 forbidden=0`，negative compile及build通過。PM另重跑`test:g08b`與full unit同樣PASS。
+- coverage：aggregate 82.81% statements／82.01% branches／93.47% functions／85.09% lines。這不是repository全面高覆蓋、完整136要求覆蓋率或完整v1完成度。
+- 需求裁定：矩陣136個unique IDs無重複；只把完整直接支持的A05–A09、B08、B27、B35、B52由U升V，總數成為22V／114U。跨媒介完整矩陣、全reason API／Event一致性、不同事件並行勝負、管理與ENTRY競爭、生命期及真正transport-loss仍只具局部或尚無證據，維持U。
+- 限制與停止：G09 query／perf、G10 transport-loss／fault／control、G11 maintenance／deployment、OpenAPI／CI／Docker／公開Demo及G12完整release未完成。正式證據見`docs/evidence/g08b/report.md`；停止於G08b，不開始G09a，PM本輪只修改docs。

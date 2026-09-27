@@ -17,6 +17,17 @@ export interface ComparisonPort {
   readonly qrCredential: QrCredentialPort;
   /** Present only after startup vectors have been verified. */
   readonly artifact: ComparisonArtifactIssuer;
+  /** Internal provenance check; must not re-encode or mint another artifact. */
+  readonly matches?: (
+    input: RecognitionComparisonInput,
+    stored: Readonly<{ inputHmac: string; comparisonReferenceId: string }>,
+  ) => boolean;
+}
+
+const verifiedComparisonPorts = new WeakSet<object>();
+
+export function isVerifiedComparisonPort(value: unknown): value is ComparisonPort {
+  return typeof value === 'object' && value !== null && verifiedComparisonPorts.has(value);
 }
 
 const qrCredential: QrCredentialPort = Object.freeze({
@@ -33,9 +44,15 @@ export function createVerifiedComparisonPort(
   const artifact: ComparisonArtifactIssuer = Object.freeze({
     create: (input: unknown) => capability.create(input),
   });
-  return Object.freeze({
+  const port = Object.freeze({
     validate: assertRecognitionComparisonInput,
     qrCredential,
     artifact,
+    matches: (input: RecognitionComparisonInput, stored: Readonly<{
+      readonly inputHmac: string;
+      readonly comparisonReferenceId: string;
+    }>): boolean => capability.matches(input, stored),
   });
+  verifiedComparisonPorts.add(port);
+  return port;
 }
