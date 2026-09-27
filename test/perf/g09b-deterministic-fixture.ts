@@ -118,6 +118,10 @@ export function createG09bDeterministicFixture(): G09bDeterministicFixture {
   return Object.freeze(fixture);
 }
 
+export function assertG09bDeterministicFixture(fixture: G09bDeterministicFixture): void {
+  assertFixture(fixture);
+}
+
 export function createG09bFixtureManifest(fixture: G09bDeterministicFixture): G09bFixtureManifest {
   assertFixture(fixture);
   const fixtureHash = hashFixture(fixture);
