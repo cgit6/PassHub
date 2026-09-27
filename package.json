@@ -74,6 +74,7 @@
     "test:perf": "node scripts/test-perf.mjs",
     "test:g09b:perf:smoke": "node scripts/test-perf.mjs --gate g09b --smoke",
     "test:g09b:fixture": "npm run build && NODE_OPTIONS=--experimental-vm-modules jest --config jest.g09b.fixture.config.cjs",
+    "test:g10a:unit": "npm run build && NODE_OPTIONS=--experimental-vm-modules jest --config jest.g10a.unit.config.cjs",
     "test:integration": "npm run build && NODE_OPTIONS=--experimental-vm-modules jest --config jest.integration.config.cjs",
     "test:g04a": "node scripts/test-g04a-integration.mjs",
     "test:g04b": "node scripts/test-g04b-integration.mjs",
