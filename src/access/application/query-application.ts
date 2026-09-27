@@ -24,9 +24,16 @@ import {
   type QueryAfterKey,
 } from '../ports/query-ports.js';
 import { REASON_CODES, assertQualificationState, qualificationCanRetainFaceMapping } from '../domain/index.js';
+import {
+  captureConstructionMethod,
+  captureOptionalConstructionProperty,
+  captureConstructionProperty,
+} from '../../shared/internal/construction-capture.js';
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const MAX_LIMIT = 100;
+const queryApplications = new WeakSet<object>();
+const queryApplicationQuiescence = new WeakMap<object, object>();
 
 export interface QueryApplication {
   listQualifications(input: Readonly<{ limit: number; cursor?: string | null }>): Promise<QueryPage<QualificationQueryItem>>;
@@ -46,20 +53,23 @@ export function createQueryApplication(options: Readonly<{
   readonly epoch: string;
   readonly cursorCodec?: QueryCursorCodec;
 }>): QueryApplication {
-  assertOptions(options);
-  const listQualifications = options.data.listQualifications.bind(options.data);
-  const listInside = options.data.listInside.bind(options.data);
-  const listEvents = options.data.listEvents.bind(options.data);
-  const readQualification = options.data.readQualification.bind(options.data);
-  const readEvent = options.data.readEvent.bind(options.data);
-  const acquireLease = options.writerQuiescence.acquireReadObservationLease.bind(options.writerQuiescence);
-  const codec = options.cursorCodec ?? createQueryCursorCodec();
+  const captured = captureOptions(options);
+  const data = captured.data;
+  const writerQuiescence = captured.writerQuiescence;
+  const listQualifications = captureConstructionMethod(data, 'listQualifications', 'query data').bind(data) as QueryDataPort['listQualifications'];
+  const listInside = captureConstructionMethod(data, 'listInside', 'query data').bind(data) as QueryDataPort['listInside'];
+  const listEvents = captureConstructionMethod(data, 'listEvents', 'query data').bind(data) as QueryDataPort['listEvents'];
+  const readQualification = captureConstructionMethod(data, 'readQualification', 'query data').bind(data) as QueryDataPort['readQualification'];
+  const readEvent = captureConstructionMethod(data, 'readEvent', 'query data').bind(data) as QueryDataPort['readEvent'];
+  const acquireLease = captureConstructionMethod(writerQuiescence, 'acquireReadObservationLease', 'writer quiescence').bind(writerQuiescence);
+  assertOptions(captured);
+  const codec = captured.cursorCodec ?? createQueryCursorCodec();
   if (!isQueryCursorCodec(codec)) throw new TypeError('query cursor codec provenance is invalid');
-  const encodeCursor = codec.encode.bind(codec);
-  const decodeCursor = codec.decode.bind(codec);
-  const epoch = options.epoch;
+  const encodeCursor = captureConstructionMethod(codec, 'encode', 'query cursor codec').bind(codec);
+  const decodeCursor = captureConstructionMethod(codec, 'decode', 'query cursor codec').bind(codec);
+  const epoch = captured.epoch;
 
-  return Object.freeze({
+  const application = Object.freeze({
     async listQualifications(input: Readonly<{ limit: number; cursor?: string | null }>): Promise<QueryPage<QualificationQueryItem>> {
       assertLimit(input.limit);
       const filters = emptyFilters();
@@ -118,6 +128,22 @@ export function createQueryApplication(options: Readonly<{
       return runDetail(acquireLease, (lease) => readEvent(eventId, lease.observedAtMs), (row) => mapEvent(row));
     },
   });
+  queryApplications.add(application);
+  queryApplicationQuiescence.set(application, writerQuiescence as object);
+  return application;
+}
+
+export function isQueryApplication(value: unknown): value is QueryApplication {
+  return typeof value === 'object' && value !== null && queryApplications.has(value);
+}
+
+export function assertQueryApplicationQuiescence(
+  application: QueryApplication,
+  writerQuiescence: WriterQuiescencePort,
+): void {
+  if (!isQueryApplication(application) || queryApplicationQuiescence.get(application as object) !== writerQuiescence) {
+    throw new TypeError('query application quiescence provenance is invalid');
+  }
 }
 
 async function runList<TSnapshot, TItem>(
@@ -398,12 +424,28 @@ function assertOptions(options: Readonly<{
     || typeof options.writerQuiescence !== 'object' || options.writerQuiescence === null
     || !isWriterQuiescencePort(options.writerQuiescence)
     || typeof options.epoch !== 'string' || !UUID_V4.test(options.epoch)
-    || typeof options.data.listQualifications !== 'function'
-    || typeof options.data.listInside !== 'function'
-    || typeof options.data.listEvents !== 'function'
-    || typeof options.data.readQualification !== 'function'
-    || typeof options.data.readEvent !== 'function'
-    || typeof options.writerQuiescence.acquireReadObservationLease !== 'function') {
+    || typeof options.cursorCodec !== 'undefined' && !isQueryCursorCodec(options.cursorCodec)) {
     throw new TypeError('query application options are invalid');
   }
+}
+
+function captureOptions(options: Readonly<{
+  readonly data: QueryDataPort;
+  readonly writerQuiescence: WriterQuiescencePort;
+  readonly epoch: string;
+  readonly cursorCodec?: QueryCursorCodec;
+}>): Readonly<{
+  readonly data: QueryDataPort;
+  readonly writerQuiescence: WriterQuiescencePort;
+  readonly epoch: string;
+  readonly cursorCodec?: QueryCursorCodec;
+}> {
+  const cursorCodec = captureOptionalConstructionProperty(options, 'cursorCodec', 'query application options') as QueryCursorCodec | undefined;
+  const captured = {
+    data: captureConstructionProperty(options, 'data', 'query application options') as QueryDataPort,
+    writerQuiescence: captureConstructionProperty(options, 'writerQuiescence', 'query application options') as WriterQuiescencePort,
+    epoch: captureConstructionProperty(options, 'epoch', 'query application options') as string,
+  } as { data: QueryDataPort; writerQuiescence: WriterQuiescencePort; epoch: string; cursorCodec?: QueryCursorCodec };
+  if (cursorCodec !== undefined) captured.cursorCodec = cursorCodec;
+  return Object.freeze(captured);
 }

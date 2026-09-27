@@ -18,3 +18,13 @@ composition.createWriterQuiescence;
 composition.ReadObservationLease;
 // @ts-expect-error Persistence invariant assertions remain internal.
 root.assertPersistedEventInvariant;
+// @ts-expect-error G09a transport composition remains internal.
+root.createG09aQueryComposition;
+// @ts-expect-error Neutral admission identity lookup is never public.
+composition.getQueryAdmissionIdentity;
+// @ts-expect-error Construction capture primitives remain internal.
+root.captureConstructionMethod;
+// @ts-expect-error Legacy query admission factory is direct-internal test wiring only.
+composition.createLegacyQueryAdmissionCapability;
+// @ts-expect-error Nominal query admission capability is not public API.
+root.QueryAdmissionCapability;

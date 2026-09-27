@@ -224,6 +224,7 @@ export function createWriteOperationCoordinatorBundle<
   let nextSequence = 0n;
   let running = false;
   let drainScheduled = false;
+  let deferredByGate = false;
   let blocked = false;
   let current: Operation | null = null;
 
@@ -234,7 +235,7 @@ export function createWriteOperationCoordinatorBundle<
   };
 
   const scheduleDrain = (): void => {
-    if (drainScheduled || running || blocked) return;
+    if (drainScheduled || running || blocked || deferredByGate) return;
     drainScheduled = true;
     queueMicrotask(() => {
       drainScheduled = false;
@@ -415,7 +416,10 @@ export function createWriteOperationCoordinatorBundle<
             failClosed(operation, error);
             return;
           }
-          if (!allowed) return;
+          if (!allowed) {
+            deferredByGate = true;
+            return;
+          }
         }
         queue.shift();
         if (operation.validationState === 'REJECTED') {
@@ -427,7 +431,7 @@ export function createWriteOperationCoordinatorBundle<
     } finally {
       running = false;
       const head = queue[0];
-      if (!blocked && head?.validationState === 'READY') scheduleDrain();
+      if (!blocked && !deferredByGate && head?.validationState === 'READY') scheduleDrain();
     }
   }
 
@@ -571,7 +575,10 @@ export function createWriteOperationCoordinatorBundle<
     recognition: createPort('RECOGNITION', capturedExecutors.recognition),
   };
   Object.defineProperty(bundleChannels, 'wake', {
-    value: scheduleDrain,
+    value: (): void => {
+      deferredByGate = false;
+      scheduleDrain();
+    },
     enumerable: false,
     writable: false,
     configurable: false,

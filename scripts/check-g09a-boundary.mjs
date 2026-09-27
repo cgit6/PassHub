@@ -9,6 +9,10 @@ const selected = [
   'src/access/application/query-application.ts',
   'src/access/application/query-errors.ts',
   'src/access/ports/query-ports.ts',
+  'src/composition/internal/g09a-query-composition.ts',
+  'src/composition/internal/g07b-route-composition.ts',
+  'src/composition/internal/query-admission-binding.ts',
+  'src/shared/internal/construction-capture.ts',
 ];
 const violations = [];
 let edges = 0;
@@ -18,8 +22,16 @@ for (const relative of selected) {
   const source = await readFile(path.join(root, relative), 'utf8');
   for (const specifier of importsOf(source)) {
     edges += 1;
-    if (/auth|sources|mongodb|infrastructure|composition|nestjs|express|http/iu.test(specifier)) {
+    if (relative.startsWith('src/access/')
+      && /auth|sources|mongodb|infrastructure|composition|nestjs|express|http/iu.test(specifier)) {
       violations.push(`${relative} -> ${specifier} (G09a Access query core cannot depend on Auth, transport, composition, or infrastructure)`);
+    }
+    if (relative.endsWith('g07b-route-composition.ts') && /g08|g09/iu.test(specifier)) {
+      violations.push(`${relative} -> ${specifier} (neutral G07b route composition cannot import G08/G09 feature composition)`);
+    }
+    if (relative.endsWith('query-admission-binding.ts')
+      && /g08|g09|auth|infrastructure|mongo|http-application/iu.test(specifier)) {
+      violations.push(`${relative} -> ${specifier} (neutral query admission binding depends on a feature or infrastructure layer)`);
     }
   }
 }
@@ -29,6 +41,11 @@ const internalSymbols = [
   'createQueryApplication', 'createQueryCursorCodec', 'QueryDataPort',
   'QuerySnapshotQualification', 'QuerySnapshotEvent', 'createWriterQuiescence',
   'ReadObservationLease', 'assertPersistedEventInvariant',
+  'createG09aQueryComposition', 'G09aQueryComposition',
+  'bindQueryAdmissionComposition', 'getQueryAdmissionIdentity',
+  'captureConstructionMethod', 'captureConstructionProperty',
+  'createLegacyQueryAdmissionCapability', 'createQuiescedQueryAdmissionCapability',
+  'QueryAdmissionCapability',
 ];
 let publicLeaks = 0;
 for (const symbol of internalSymbols) {
@@ -49,4 +66,4 @@ if (/\b(?:withTransaction|insertOne|updateOne|deleteOne|setInterval|setTimeout|r
 
 console.log(`G09a boundary files=${selected.length} edges=${edges} publicLeaks=${publicLeaks} forbidden=${violations.length}`);
 for (const violation of violations) console.error(`boundary violation: ${violation}`);
-if (selected.length !== 6 || violations.length > 0) process.exitCode = 1;
+if (selected.length !== 10 || violations.length > 0) process.exitCode = 1;

@@ -53,6 +53,11 @@ export {
   type G08bRecognitionCompositionOptions,
 } from './g08b-recognition-composition.js';
 export {
+  createG09aQueryComposition,
+  type G09aQueryComposition,
+  type G09aQueryCompositionOptions,
+} from './g09a-query-composition.js';
+export {
   createG07bRouteComposition,
   type G07bRouteComposition,
   type G07bRouteCompositionOptions,
@@ -69,6 +74,8 @@ export {
 } from './writer-quiescence.js';
 export {
   createQueryApplication,
+  isQueryApplication,
+  assertQueryApplicationQuiescence,
   type QueryApplication,
 } from '../../access/application/query-application.js';
 export {

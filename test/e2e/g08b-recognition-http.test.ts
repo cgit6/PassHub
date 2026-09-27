@@ -27,6 +27,7 @@ import {
   type HttpResponsePlan,
   type PassHubHttpApplication,
 } from '../../src/composition/internal/index.js';
+import { createLegacyQueryAdmissionCapability } from '../../src/composition/internal/query-admission-binding.js';
 import {
   FIXED_COMPARISON_REFERENCE_ID, FIXED_STARTUP_VECTORS, FIXED_TEST_HMAC_KEY,
 } from '../fixtures/comparison-vectors.js';
@@ -159,7 +160,7 @@ async function createHarness(): Promise<Harness> {
   };
   const routes = createG07bRouteComposition({
     login: fallback,
-    query: fallback,
+    query: createLegacyQueryAdmissionCapability(fallback),
     management: Object.freeze({ ...management.validator, ...management.work }),
     recognition: Object.freeze({ ...recognition.validator, ...recognition.work }),
   });

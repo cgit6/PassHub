@@ -20,6 +20,7 @@ import {
   type HttpResponsePlan,
   type PassHubHttpApplication,
 } from '../../src/composition/internal/index.js';
+import { createLegacyQueryAdmissionCapability } from '../../src/composition/internal/query-admission-binding.js';
 
 const EPOCH = '11111111-1111-4111-8111-111111111111';
 const ACCOUNT_ID = '22222222-2222-4222-8222-222222222222';
@@ -169,6 +170,10 @@ async function createHarness(): Promise<Harness> {
     assertContinuationEvidence: () => undefined,
   });
   const fallback = (): Promise<HttpResponsePlan> => Promise.resolve(responsePlans.technical.issue('INVALID_REQUEST'));
+  const queryAdmission = createLegacyQueryAdmissionCapability({
+    validate: g08a.validator.validate,
+    query: fallback,
+  });
   const handler = createG07bAdmissionHandler({
     currentDatasetEpoch: EPOCH,
     registry,
@@ -176,10 +181,10 @@ async function createHarness(): Promise<Harness> {
     responsePlans,
     workHandoff,
     unknownRecognition: createUnknownRecognitionCoordinatorBundle().handler,
-    validator: g08a.validator,
+    validator: queryAdmission.validator,
     work: {
       login: fallback,
-      query: fallback,
+      query: queryAdmission.work.query,
       management: g08a.work.management,
       recognition: async () => ({ disposition: 'KNOWN_NO_EFFECT', response: await fallback() }),
     },

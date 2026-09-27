@@ -26,6 +26,7 @@ import {
   type AdmissionWorkToken,
   type HttpResponsePlan,
 } from '../../src/composition/internal/index.js';
+import { createLegacyQueryAdmissionCapability } from '../../src/composition/internal/query-admission-binding.js';
 import {
   FIXED_COMPARISON_REFERENCE_ID,
   FIXED_STARTUP_VECTORS,
@@ -393,7 +394,12 @@ describe('G08b shared route dispatcher', () => {
     });
     const login = delegate('login'); const query = delegate('query');
     const management = delegate('management'); const recognition = delegate('recognition');
-    const routes = createG07bRouteComposition({ login, query, management, recognition });
+    const routes = createG07bRouteComposition({
+      login,
+      query: createLegacyQueryAdmissionCapability(query),
+      management,
+      recognition,
+    });
     const routeInputs = [
       input({}, {}),
       { ...input({}), routeId: 'AUTH_LOGIN' as const },

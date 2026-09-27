@@ -11,6 +11,7 @@ import {
   type AdmissionWriterOutcome,
   type HttpResponsePlan,
 } from '../../src/composition/internal/index.js';
+import { createLegacyQueryAdmissionCapability } from '../../src/composition/internal/query-admission-binding.js';
 import { createPassHubHttpApplication, type PassHubHttpApplication } from '../../src/composition/internal/http-application.js';
 import { createOperationRegistry, createOperationRegistryCapabilityIssuer } from '../../src/access/application/internal/operation-registry.js';
 
@@ -66,12 +67,15 @@ async function harness(options: {
     }
     return Object.freeze({ kind: 'QUERY', accountId: 'account-1', workInput: handoff.issuer.issue(input.routeId) });
   };
+  const validate = (input: AdmissionValidationInput) => options.validate?.(input, () => standard(input)) ?? Promise.resolve(standard(input));
+  const query = () => { calls.push('query'); return Promise.resolve(ok('query')); };
+  const queryAdmission = createLegacyQueryAdmissionCapability({ validate, query });
   const handler = createG07bAdmissionHandler({ currentDatasetEpoch: EPOCH, registry, registryCapabilities: capabilities, responsePlans: plans,
     workHandoff: handoff, unknownRecognition: unknown.handler,
-    validator: { validate: (input) => options.validate?.(input, () => standard(input)) ?? Promise.resolve(standard(input)) },
+    validator: queryAdmission.validator,
     work: {
       login: () => { calls.push('login'); return Promise.resolve(ok('login')); },
-      query: () => { calls.push('query'); return Promise.resolve(ok('query')); },
+      query: queryAdmission.work.query,
       management: (_token, context) => { calls.push(`management:${context.sequence}`); return Promise.resolve(Object.freeze({ disposition: 'BUSINESS_RESULT_PERSISTED', response: ok('management') })); },
       recognition: (_token, context) => {
         calls.push(`recognition:${context.sequence}`);

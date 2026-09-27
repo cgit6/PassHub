@@ -58,6 +58,7 @@ import {
 import {
   createHttpResponseOwner,
   type HttpResponseOwner,
+  type HttpResponseOwnerOptions,
   type NarrowHttpResponse,
 } from './http-response-owner.js';
 import {
@@ -65,6 +66,12 @@ import {
   type HttpResponsePlan,
   type HttpResponsePlanBundle,
 } from './http-response-plan.js';
+import { getQueryAdmissionIdentity } from './query-admission-binding.js';
+import {
+  captureConstructionMethod,
+  captureOptionalConstructionProperty,
+  captureConstructionProperty,
+} from '../../shared/internal/construction-capture.js';
 
 export interface G07bWallClock {
   nowMs(): number;
@@ -235,15 +242,56 @@ class AdmissionTechnicalError extends Error {
 export function createG07bAdmissionHandler(
   options: G07bAdmissionHandlerOptions,
 ): AcceptedIngressHandler {
-  assertOptions(options);
+  options = captureOptions(options);
+  const validator = options.validator;
+  const work = options.work;
+  const validatorValidate = captureConstructionMethod(validator, 'validate', 'G07b validator') as AdmissionValidatorPort['validate'];
+  const loginWorkMethod = captureConstructionMethod(work, 'login', 'G07b work') as AdmissionWorkPort['login'];
+  const queryWorkMethod = captureConstructionMethod(work, 'query', 'G07b work') as AdmissionWorkPort['query'];
+  const managementWorkMethod = captureConstructionMethod(work, 'management', 'G07b work') as AdmissionWorkPort['management'];
+  const recognitionWorkMethod = captureConstructionMethod(work, 'recognition', 'G07b work') as AdmissionWorkPort['recognition'];
+  const registryAssertComposition = captureConstructionMethod(options.registry, 'assertComposition', 'G07b registry');
+  const reserveCandidateMethod = captureConstructionMethod(options.registry, 'reserveCandidate', 'G07b registry');
+  const releaseReservationMethod = captureConstructionMethod(options.registry, 'releaseReservation', 'G07b registry');
+  const registerReservedMethod = captureConstructionMethod(options.registry, 'registerReserved', 'G07b registry');
+  const lookupExistingMethod = captureConstructionMethod(options.registry, 'lookupExisting', 'G07b registry');
+  const completeCanonicalMethod = captureConstructionMethod(options.registry, 'completeCanonical', 'G07b registry');
+  const completeSafeTerminalMethod = captureConstructionMethod(options.registry, 'completeSafeTechnicalTerminal', 'G07b registry');
+  const markUnknownMethod = captureConstructionMethod(options.registry, 'markUnknown', 'G07b registry');
+  const assertRegistryKeyMethod = captureConstructionMethod(options.registryCapabilities, 'assertKey', 'G07b registry capabilities') as OperationRegistryCapabilityIssuer['assertKey'];
+  const issueObservationReferenceMethod = captureConstructionMethod(options.registryCapabilities, 'issueObservationReference', 'G07b registry capabilities') as OperationRegistryCapabilityIssuer['issueObservationReference'];
+  const issueResultReferenceMethod = captureConstructionMethod(options.registryCapabilities, 'issueResultReference', 'G07b registry capabilities') as OperationRegistryCapabilityIssuer['issueResultReference'];
+  const claimer = captureConstructionProperty(options.workHandoff, 'claimer', 'G07b handoff');
+  const claimWorkTokenMethod = captureConstructionMethod(claimer, 'claim', 'G07b handoff claimer');
+  const offerUnknownRecognitionMethod = captureConstructionMethod(options.unknownRecognition, 'offer', 'G07b unknown recognition');
+  const acceptUnknownRecognitionMethod = captureConstructionMethod(options.unknownRecognition, 'accept', 'G07b unknown recognition');
+  const renderer = captureConstructionProperty(options.responsePlans, 'renderer', 'G07b response plans');
+  const responseTechnical = captureConstructionProperty(options.responsePlans, 'technical', 'G07b response plans');
+  const responseBusiness = captureConstructionProperty(options.responsePlans, 'business', 'G07b response plans');
+  const renderResponsePlanMethod = captureConstructionMethod(renderer, 'render', 'G07b response renderer');
+  const issueTechnicalPlan = captureConstructionMethod(responseTechnical, 'issue', 'G07b technical plans');
+  const issueBusinessPlan = captureConstructionMethod(responseBusiness, 'issue', 'G07b business plans');
+  const responsePlanRenderer = renderer as HttpResponseOwnerOptions['responsePlanRenderer'];
+  const wallClockNow = options.wallClock === undefined ? undefined : captureConstructionMethod(options.wallClock, 'nowMs', 'G07b wall clock');
+  const monotonicClockNow = options.monotonicClock === undefined ? undefined : captureConstructionMethod(options.monotonicClock, 'nowMs', 'G07b monotonic clock');
+  assertOptions(options, validator, work, validatorValidate, loginWorkMethod, queryWorkMethod, managementWorkMethod, recognitionWorkMethod);
+  const validatorIdentity = getQueryAdmissionIdentity(validatorValidate);
+  const workIdentity = getQueryAdmissionIdentity(queryWorkMethod);
+  if (validatorIdentity === undefined || workIdentity === undefined || validatorIdentity !== workIdentity) {
+    throw new TypeError('G09a query delegate provenance is incomplete or mismatched');
+  }
+  if (validatorIdentity.kind === 'QUIESCED'
+    && options.writerQuiescence !== undefined
+    && options.writerQuiescence !== validatorIdentity.writerQuiescence) {
+    throw new TypeError('G09a query quiescence does not match G07b writer quiescence');
+  }
   assertAdmissionWorkHandoffBundle(options.workHandoff);
   assertUnknownRecognitionOfferPort(options.unknownRecognition);
   const currentDatasetEpoch = options.currentDatasetEpoch;
   assertHttpResponsePlanComposition(options.responsePlans, currentDatasetEpoch);
-  const responsePlanRenderer = options.responsePlans.renderer;
-  const issueTechnical = options.responsePlans.technical.issue.bind(options.responsePlans.technical);
-  const renderResponsePlan = responsePlanRenderer.render.bind(responsePlanRenderer);
-  const issueBusiness = options.responsePlans.business.issue.bind(options.responsePlans.business);
+  const issueTechnical = issueTechnicalPlan.bind(responseTechnical);
+  const renderResponsePlan = renderResponsePlanMethod.bind(renderer);
+  const issueBusiness = issueBusinessPlan.bind(responseBusiness);
   const technical = Object.freeze({
     invalidRetry: issueTechnical('INVALID_RETRY_MODE'),
     invalidEpoch: issueTechnical('INVALID_DATASET_EPOCH'),
@@ -277,7 +325,7 @@ export function createG07bAdmissionHandler(
   };
   let writeClaimDisposition: 'WRITABLE' | 'READ_ONLY' | 'STALE';
   try {
-    const composition = options.registry.assertComposition(options.registryCapabilities);
+    const composition = registryAssertComposition.call(options.registry, options.registryCapabilities);
     if (composition.datasetEpoch !== currentDatasetEpoch) {
       throw new TypeError('registry dataset epoch does not match handler epoch');
     }
@@ -289,14 +337,18 @@ export function createG07bAdmissionHandler(
   const suppliedWallClock = options.wallClock ?? Object.freeze({ nowMs: Date.now });
   const suppliedMonotonicClock = options.monotonicClock
     ?? Object.freeze({ nowMs: performance.now.bind(performance) });
-  const capturedWallNow = suppliedWallClock.nowMs.bind(suppliedWallClock);
-  const capturedMonotonicNow = suppliedMonotonicClock.nowMs.bind(suppliedMonotonicClock);
+  const capturedWallNow = wallClockNow === undefined ? suppliedWallClock.nowMs.bind(suppliedWallClock) : wallClockNow.bind(options.wallClock);
+  const capturedMonotonicNow = monotonicClockNow === undefined
+    ? suppliedMonotonicClock.nowMs.bind(suppliedMonotonicClock)
+    : monotonicClockNow.bind(options.monotonicClock);
   const wallClock = Object.freeze({ nowMs: () => capturedWallNow() });
   const monotonicClock = Object.freeze({ nowMs: () => capturedMonotonicNow() });
   const rates = options.rates ?? createFixedMinuteRateLedger({
     clock: wallClock,
   });
-  const writerQuiescence = options.writerQuiescence ?? createWriterQuiescence({ clock: wallClock });
+  const writerQuiescence = options.writerQuiescence
+    ?? (validatorIdentity.kind === 'QUIESCED' ? validatorIdentity.writerQuiescence : undefined)
+    ?? createWriterQuiescence({ clock: wallClock });
 
   const acquireBundle = resources.tryAcquire.bind(resources);
   const releaseHttp = resources.releaseHttp.bind(resources);
@@ -315,28 +367,24 @@ export function createG07bAdmissionHandler(
   const allowQuery = rates.query.allow.bind(rates.query);
   const allowRecognition = rates.recognition.allow.bind(rates.recognition);
   const allowManagement = rates.management.allow.bind(rates.management);
-  const validate = options.validator.validate.bind(options.validator);
-  const loginWork = options.work.login.bind(options.work);
-  const queryWork = options.work.query.bind(options.work);
-  const managementWork = options.work.management.bind(options.work);
-  const recognitionWork = options.work.recognition.bind(options.work);
-  const claimWorkToken = options.workHandoff.claimer.claim.bind(options.workHandoff.claimer);
-  const offerUnknownRecognition = options.unknownRecognition.offer.bind(options.unknownRecognition);
-  const acceptUnknownRecognition = options.unknownRecognition.accept.bind(options.unknownRecognition);
-  const reserveCandidate = options.registry.reserveCandidate.bind(options.registry);
-  const releaseReservation = options.registry.releaseReservation.bind(options.registry);
-  const registerReserved = options.registry.registerReserved.bind(options.registry);
-  const lookupExisting = options.registry.lookupExisting.bind(options.registry);
-  const completeCanonical = options.registry.completeCanonical.bind(options.registry);
-  const completeSafeTerminal = options.registry.completeSafeTechnicalTerminal.bind(options.registry);
-  const markUnknown = options.registry.markUnknown.bind(options.registry);
-  const issueObservationReference = options.registryCapabilities.issueObservationReference.bind(
-    options.registryCapabilities,
-  );
-  const assertRegistryKey = options.registryCapabilities.assertKey.bind(options.registryCapabilities);
-  const issueResultReference = options.registryCapabilities.issueResultReference.bind(
-    options.registryCapabilities,
-  );
+  const validate = validatorValidate.bind(validator);
+  const loginWork = loginWorkMethod.bind(work);
+  const queryWork = queryWorkMethod.bind(work);
+  const managementWork = managementWorkMethod.bind(work);
+  const recognitionWork = recognitionWorkMethod.bind(work);
+  const claimWorkToken = claimWorkTokenMethod.bind(claimer);
+  const offerUnknownRecognition = offerUnknownRecognitionMethod.bind(options.unknownRecognition);
+  const acceptUnknownRecognition = acceptUnknownRecognitionMethod.bind(options.unknownRecognition);
+  const reserveCandidate = reserveCandidateMethod.bind(options.registry);
+  const releaseReservation = releaseReservationMethod.bind(options.registry);
+  const registerReserved = registerReservedMethod.bind(options.registry);
+  const lookupExisting = lookupExistingMethod.bind(options.registry);
+  const completeCanonical = completeCanonicalMethod.bind(options.registry);
+  const completeSafeTerminal = completeSafeTerminalMethod.bind(options.registry);
+  const markUnknown = markUnknownMethod.bind(options.registry);
+  const issueObservationReference = issueObservationReferenceMethod.bind(options.registryCapabilities);
+  const assertRegistryKey = assertRegistryKeyMethod.bind(options.registryCapabilities);
+  const issueResultReference = issueResultReferenceMethod.bind(options.registryCapabilities);
 
   const originByOperation = new Map<string, OriginAdmissionLease>();
   const observations = new WeakMap<object, ObservationState>();
@@ -1482,31 +1530,52 @@ function writeImmediateResponse(
   }
 }
 
-function assertOptions(options: G07bAdmissionHandlerOptions): void {
+function assertOptions(
+  options: G07bAdmissionHandlerOptions,
+  validator: AdmissionValidatorPort,
+  work: AdmissionWorkPort,
+  validatorValidate: unknown,
+  loginWork: unknown,
+  queryWork: unknown,
+  managementWork: unknown,
+  recognitionWork: unknown,
+): void {
   if (!isObject(options)
     || typeof options.currentDatasetEpoch !== 'string'
     || !UUID_V4.test(options.currentDatasetEpoch)
     || !isObject(options.registry)
     || !isObject(options.registryCapabilities)
     || !isObject(options.responsePlans)
-    || !isObject(options.responsePlans.technical)
-    || typeof options.responsePlans.technical.issue !== 'function'
-    || !isObject(options.responsePlans.renderer)
-    || typeof options.responsePlans.renderer.render !== 'function'
-    || !isObject(options.validator) || typeof options.validator.validate !== 'function'
-    || !isObject(options.work)
-    || typeof options.work.login !== 'function'
-    || typeof options.work.query !== 'function'
-    || typeof options.work.management !== 'function'
-    || typeof options.work.recognition !== 'function'
+    || !isObject(validator) || typeof validatorValidate !== 'function'
+    || !isObject(work)
+    || typeof loginWork !== 'function'
+    || typeof queryWork !== 'function'
+    || typeof managementWork !== 'function'
+    || typeof recognitionWork !== 'function'
     || !isObject(options.unknownRecognition)
-    || typeof options.unknownRecognition.offer !== 'function'
-    || typeof options.unknownRecognition.accept !== 'function'
-    || (options.wallClock !== undefined && typeof options.wallClock.nowMs !== 'function')
-    || (options.monotonicClock !== undefined && typeof options.monotonicClock.nowMs !== 'function')
+    || (options.wallClock !== undefined && !isObject(options.wallClock))
+    || (options.monotonicClock !== undefined && !isObject(options.monotonicClock))
     || (options.writerQuiescence !== undefined && !isWriterQuiescencePort(options.writerQuiescence))) {
     throw new TypeError('invalid G07b admission handler options');
   }
+}
+
+function captureOptions(options: G07bAdmissionHandlerOptions): G07bAdmissionHandlerOptions {
+  return Object.freeze({
+    currentDatasetEpoch: captureConstructionProperty(options, 'currentDatasetEpoch', 'G07b options'),
+    registry: captureConstructionProperty(options, 'registry', 'G07b options'),
+    registryCapabilities: captureConstructionProperty(options, 'registryCapabilities', 'G07b options'),
+    responsePlans: captureConstructionProperty(options, 'responsePlans', 'G07b options'),
+    workHandoff: captureConstructionProperty(options, 'workHandoff', 'G07b options'),
+    validator: captureConstructionProperty(options, 'validator', 'G07b options'),
+    work: captureConstructionProperty(options, 'work', 'G07b options'),
+    unknownRecognition: captureConstructionProperty(options, 'unknownRecognition', 'G07b options'),
+    wallClock: captureOptionalConstructionProperty(options, 'wallClock', 'G07b options'),
+    monotonicClock: captureOptionalConstructionProperty(options, 'monotonicClock', 'G07b options'),
+    resources: captureOptionalConstructionProperty(options, 'resources', 'G07b options'),
+    rates: captureOptionalConstructionProperty(options, 'rates', 'G07b options'),
+    writerQuiescence: captureOptionalConstructionProperty(options, 'writerQuiescence', 'G07b options'),
+  }) as G07bAdmissionHandlerOptions;
 }
 
 function recordString(value: Readonly<Record<string, unknown>>, key: string): string {
