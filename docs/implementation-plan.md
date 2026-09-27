@@ -27,7 +27,7 @@ updated: "2026-09-27"
 ## 快速檢索卡
 
 - 核心問題：把已採用的業務與架構討論交給實作者，避免自行補架構、丟要求或用測試數量取代證據。
-- 當前結論：P01–P15規劃已收斂；G02–G09a已有各自限定證據並通過gate，依25 STOP停止於G09a。矩陣共28V／108U；G09a只新增具完整直接證據的B44–B49，完整v1仍未完成。
+- 當前結論：P01–P15規劃已收斂；G02–G09a已有各自限定證據並通過gate，依25 STOP停止於G09a。D182已使G09b開發前契約達到READY但尚未開始；矩陣維持28V／108U，完整v1仍未完成。
 - 關鍵爭點：G04a 真 Mongo 8.0.32 已證明窄 face reverse-unique release/reuse 交易情境；G02只證工具鏈可用，不證API、模組接線或完整交易 adapter。
 - 適用於：單API／單logicalplace／單次Qualification／QR或模擬Face的公開共享sandbox；Nest預設Express、strictTS、官方Mongo driver。
 - 不適用於：真實人臉辨識／硬體門禁、多據點／多租戶、多API、跨崩潰／reset續辦、正式SLA或業務復原。
@@ -205,7 +205,17 @@ endpoint限qualifications/inside/events，前兩filtersnull；綁route/filters/e
 
 `lastTime`必為UTC毫秒ISO字串；cursor必為canonical unpadded base64url，末頁與空頁均回`null`。`limit`不綁入cursor，可在續頁改變且仍為decimal 1–100；舊epoch回409，route／filter mismatch回400。成功response序列化上限256KiB，request仍16KiB；超限不回部分page。（D180）
 
-isolated performance10000qual/40000Event合法fixture，八種filter組合每種各固定matched/selectivity/params、first+fixednext，每個10warmup100measure，raw/p50/p95與獨立explain keys/docs/execution/env/hardware/fixture/code hash；before-after只變query非uniqueindexes，不預設改善，負結果照報。
+G09b只直接量測production Mongo query adapter，不走HTTP／Auth／read lease，也不得改業務API、production查詢語意或公開Demo資料。正式命令`npm run test:perf -- --gate g09b`，環境固定Node 24.21、MongoDB 8.0.32單成員`rs0`、隔離performance DB與1800秒總期限；cleanup錯誤另報且不得蓋掉原錯。（D182）
+
+fixture literal seed為`passhub-g09b-v1-20260927`。所有UUIDv4、digest、BSON時間及插入／排序順序均以canonical UTF-8 label frame與SHA-256派生；UUID明設v4 version／variant bits，禁止`Math.random`、`randomUUID`與執行當下時間。canonical NDJSON依collection再`_id`排序後計fixture SHA-256。10,000 Qualification精確分布為4,000 active `NOT_ENTERED`、1,000 revoked `NOT_ENTERED`、1,000 expired-terminal `NOT_ENTERED`、2,000 `INSIDE`、2,000 `EXITED`；4,000 Face slots只綁2,000 active及2,000 `INSIDE`，`slotCount=4000`。40,000 Event精確為HOT Qualification 5,000 rejected／`QUALIFICATION_EXPIRED`＋5,000 accepted、其他Qualification 10,000 rejected／`QUALIFICATION_EXPIRED`＋10,000 accepted，以及10,000筆null-qualification `FACE_UNKNOWN`。fixture是隔離查詢資料，不冒充公開Demo或完整真實來訪歷史。
+
+十個case為Qualification list、INSIDE list及Event的無filter／qualification／outcome／reason／qualification+outcome／qualification+reason／outcome+reason／三者AND。Event參數固定HOT／`REJECTED`／`QUALIFICATION_EXPIRED`，預期match counts依序40,000／10,000／25,000／15,000／5,000／5,000／15,000／5,000；Qualification／INSIDE分別10,000／2,000。每case各測first與fixed-next，`limit=20`、adapter fetch 21；next key由獨立oracle第20項預定，預期第二頁為第21–40項，並用第41項判定next cursor。每個被測sort／filter至少建立64筆同time tie bucket，逐ID驗無gap／duplicate。
+
+BEFORE／AFTER各`10 cases × 2 pages × 100 measured`，合計4,000 raw samples；每格先10次warmup。測量以`process.hrtime.bigint()`包住完整production adapter await及projection，全部串行、保留全部outliers。每格100筆ns升序後nearest-rank p50／p95使用zero-based indices 49／94，另記runtime。BEFORE只drop `g04b_qualification_created_v1`、`g04b_qualification_inside_v1`、`g04b_event_received_v1`、`g04b_event_qualification_received_v1`四個non-unique query indexes；AFTER以既定keys精確重建。`_id`、unique／partial、comparison、user及source indexes不得變；同DB同fixture、每階段清plan cache、不用hint或`allowDiskUse`，報告明示固定before→after造成的cache／order bias。
+
+command-monitoring client須捕捉真正adapter aggregate command，再以`executionStats`重放；每個state／case／page一份，共40份。主cursor與Face lookup分開保存／摘要；完整sanitized explain留私有run，公開只留summary。兩個index states都先通過counts、fixture hash、schema／reference／Event invariants、index inventory、十case first／next exact IDs、tie gap／duplicate、before-after outputs相同、4,000 sample count、40 explains及環境／source指紋。任一正確性／證據失敗即STOP；AFTER較慢、無改善或`COLLSCAN`如實報告而不算正確性失敗，也不得宣稱改善。
+
+私有run輸出固定於`output/evidence/g09b/<runId>/`，含manifest、fixture summary、raw JSONL、summary、explains、environment、before／after index catalogs及correctness；tracked公開輸出為`docs/evidence/g09b/report.md`、`summary.json`、`fixture-manifest.json`、`explain-summary.json`。正式證據區分clean `sourceCommit`與其後只發布證據文件的revision，並hash code／lock／config／fixture。這是READY契約，不是已完成證據；G10 fault／logs／private control及G11部署均不得在G09b宣稱完成。
 
 D153 allowlist logs：request/operation UUID、epoch/run/owner/phase/round/group/budget/fixedcode，不dumpcommand/reply/drivererror/body/fullsubject/secret/hash。128records×≤2KiB，5files×10MiB/private0700/0600，best-effort drop＋LOGGING_DEGRADED非必要Event失敗；host-only logs:read按operationUUID。
 
@@ -255,7 +265,7 @@ API/Mongo SIGTERM grace30s，API無自動restart；stoprequest/graceexpiry不是
 | G08a | 管理用例及完整保存 | PASS：unit 52／true HTTP e2e 12／true Mongo 8.0.32 integration 10；Operator-only、strict DTO、create／PATCH／revoke、QR一次、安全摘要、惰性逾期、Face 4096容量／重用／衝突、交易原子性及unknown-effect停寫 |
 | G08b | 完整辨識處理鏈 | PASS：unit 42／true HTTP e2e 6／true Mongo 8.0.32 integration 3；QR／Face／UNKNOWN、Source-only strict DTO、安全Event投影、正常回放／conflict、停用Source拒絕Event、Face ENTRY→EXIT原子保存及unknown-effect停寫；並行完整業務勝負與真transport-loss仍分屬後續證據 |
 | G09a | 安全查詢／keyset | PASS：unit 92／true HTTP e2e 13／true Mongo 8.0.32 integration 16；read-observation lease、五查詢、keyset／AND filters、exact投影、錯誤分類及去敏 |
-| G09b | 分case查詢效能 | test:perf／固定fixture／八filters、索引前後raw與explain |
+| G09b | READY，尚未開始：分case查詢效能 | `npm run test:perf -- --gate g09b`／D182固定fixture、10 cases×2 pages、索引前後4,000 raw與40 explains；正確性及證據完整才通過，不要求改善 |
 | G10a | allowlist日志／私密控制屏障 | integration private-control／有限buffer／rotation、hold release drain許可 |
 | G10b | precommit終止／abort完整清理 | 真fault termination／112 11000歸屬、最多兩送、endSession無額外送 |
 | G10c | 真傳輸未知確認 | 真fault transport-unknown／precommit未知及commit後回程loss、coherent observer |
@@ -348,6 +358,6 @@ Q1–Q13各實際細分見discuss原查證block（D105/111/116–125/127/133/135
 
 G05c evidence supplemental: exact Node image、G05c 51 tests、全 unit 189、G05a 21、G05b 80、boundary／negative compile／coverage及registry fail-closed boundary均已由 `docs/evidence/g05c/report.md` 保存；G06a evidence 另由 `docs/evidence/g06a/report.md` 保存，含 unit 88、true Mongo integration 5、full unit 277；G06b evidence 由 `docs/evidence/g06b/report.md` 保存，含 unit 78、true Mongo integration 4、full unit 355；G07a evidence由 `docs/evidence/g07a/report.md` 保存，含strict JSON unit 32、true HTTP e2e 41、combined 73、full unit 387；G07b evidence由 `docs/evidence/g07b/report.md` 保存，含unit 40、true HTTP e2e 5、combined 45、full unit 427；G08a evidence由 `docs/evidence/g08a/report.md` 保存，含unit 52、true HTTP e2e 12、true Mongo 8.0.32 integration 10、coverage combined 74及full unit 479；G08b evidence由 `docs/evidence/g08b/report.md` 保存，含unit 42、true HTTP e2e 6、true Mongo 8.0.32 integration 3、combined 51及full unit 521；G09a evidence由 `docs/evidence/g09a/report.md` 保存，含unit 92、true HTTP e2e 13、true Mongo 8.0.32 integration 16、combined 121及full unit 613。本段不把G09a安全查詢推論為G09b效能、G10真故障／控制／logs、G11部署或完整API完成。
 
-當前停止點為**G09a安全查詢／keyset限定證據已通過；依25 STOP規則停止於G09a。矩陣共28V／108U；G09a只新增具完整直接證據的B44–B49**。本關證明五條人員安全查詢、writer-quiescent read-observation lease、單一`observedAt`、三種keyset與Event AND filters、exact去敏投影、404／400／409／503分類及真Mongo primary-majority讀取。正式gate為unit 92、true HTTP 13、true Mongo 16，共121；full unit 613。coverage aggregate為88.21% statements／86.40% branches／98.38% functions／94.01% lines；這不是repository全面高覆蓋或需求完成率。G09b效能、G10真transport-loss／fault／control／logs、G11 deployment與完整release仍未解鎖；下一合法gate為G09b，尚未開始。
+當前停止點為**G09a安全查詢／keyset限定證據已通過；依25 STOP規則停止於G09a。矩陣共28V／108U；G09a只新增具完整直接證據的B44–B49**。本關證明五條人員安全查詢、writer-quiescent read-observation lease、單一`observedAt`、三種keyset與Event AND filters、exact去敏投影、404／400／409／503分類及真Mongo primary-majority讀取。正式gate為unit 92、true HTTP 13、true Mongo 16，共121；full unit 613。coverage aggregate為88.21% statements／86.40% branches／98.38% functions／94.01% lines；這不是repository全面高覆蓋或需求完成率。D182只使下一合法gate G09b達到READY，尚無perf程式或證據；G10真transport-loss／fault／control／logs、G11 deployment與完整release仍未解鎖。
 
 安全採用P01–P15契約、25STOP與136矩陣，另受D166正式Jest runner決策約束。G02–G09a各自限定evidence已保存；G04a/G04b另記錄真Mongo 8.0.32、9／57 integration。`ManageQualifications` 已於G08a收斂為公開discriminated result；G08b辨識回覆只由已保存Event映射；G09a查詢維持exact去敏投影。不得由此推論G09b效能、G10真transport-loss／confirmation／control／logs、maintenance、deployment或公開runtime成立。D156 formal clean `sourceCommit` 屬G12 release規則，本關只記source commit與docs working revision，不冒稱clean release commit。

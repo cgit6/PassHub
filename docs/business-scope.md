@@ -1,9 +1,9 @@
 # PassHub v1 業務邊界規格
 
-- 文件狀態：業務與實作規劃已收斂；G02–G03c、窄 G04a、G04b、G05a–G05c、G06a–G06b、G07a–G07b、G08a管理鏈、G08b辨識鏈及G09a安全查詢已有各自限定工程證據，依25 STOP停止於G09a；G09b尚未開始，完整v1工程驗證仍未完成
+- 文件狀態：業務與實作規劃已收斂；G02–G03c、窄 G04a、G04b、G05a–G05c、G06a–G06b、G07a–G07b、G08a管理鏈、G08b辨識鏈及G09a安全查詢已有各自限定工程證據，依25 STOP停止於G09a；D182已使G09b開發前契約達到READY，但尚未開始，完整v1工程驗證仍未完成
 - 更新日期：2026-09-27
 - 適用版本：PassHub v1
-- 文件目的：以 D01–D35 為業務底稿，同步至 D180 的有效修正；實作細節及逐關驗收集中在 implementation-plan.md，不把官方查證、歷史候選或待做測試當成工程成果
+- 文件目的：以 D01–D35 為業務底稿，同步至 D182 的有效修正；實作細節及逐關驗收集中在 implementation-plan.md，不把官方查證、歷史候選或待做測試當成工程成果
 
 原始依據見[討論紀錄](./discuss.md)，逐項實作及驗收對應見[要求追蹤矩陣](./requirements-traceability.md)。本文件的「已確認」是規格採用狀態，不代表程式／測試已完成。
 
@@ -725,7 +725,21 @@ Qualification 時間錯誤、Face重複、越權與公開限制均拒絕，使�
 - 權限測試涵蓋 Operator／Viewer 寫入差異、Source 機器認證、Source 不可查詢，以及方向只能由 server-side Source 取得。
 - 使用真實 MongoDB 驗證 Face Mapping 唯一性、冪等、修改／撤銷競爭、並行 ENTRY／EXIT 及 fail-closed；不得只用 in-memory mock 證明資料一致性。
 - 以真實並行 HTTP requests 證明同一資格每次狀態最多轉移一次，所有已準入的新合法 attempt 完成保存後有一致的 Event；同鍵重送只一個 Event，首次拒絕不轉移。技術準入拒收及保存未知不能假稱已留下 Event。
-- 三類清單按 D152 的 keyset／索引，八種Event filter case各別量測及explain；不預寫 latency或百分比，不以空資料或合併filter數字假證效能。
+- 三類清單按 D152／D182 的 keyset／索引，以隔離效能資料庫量測Qualification、INSIDE及八種Event filter cases的first／fixed-next頁。固定seed、fixture、索引前後各格10次warmup／100次串行measurement、raw nanoseconds、p50／p95及真實adapter查詢的explain；不預寫latency或改善百分比，不以空資料、合併filter數字或刪除outlier假證效能。
+
+### 12.1 G09b 查詢效能證據契約
+
+G09b只量測既有production Mongo query adapter，不修改業務API、查詢語意或公開Demo。正式命令為`npm run test:perf -- --gate g09b`，使用Node 24.21、MongoDB 8.0.32單成員`rs0`、隔離performance DB及1800秒總期限。fixture由literal seed `passhub-g09b-v1-20260927`以SHA-256決定所有UUIDv4、digest、時間與順序，禁止任何random或執行當下時間；正式證據須保存可重算fixture hash。
+
+- 10,000筆Qualification固定為4,000 active `NOT_ENTERED`、1,000 revoked `NOT_ENTERED`、1,000 expired-terminal `NOT_ENTERED`、2,000 `INSIDE`及2,000 `EXITED`。4,000個Face slots只綁2,000 active及2,000 `INSIDE`，`slotCount=4000`。
+- 40,000筆Event固定為HOT Qualification rejected／`QUALIFICATION_EXPIRED` 5,000、HOT accepted 5,000、其他Qualification rejected／`QUALIFICATION_EXPIRED` 10,000、其他Qualification accepted 10,000及`qualificationId=null`的`FACE_UNKNOWN` 10,000。八種Event cases依無filter、qualification、outcome、reason、三種兩兩AND及三者AND，符合筆數固定為40,000／10,000／25,000／15,000／5,000／5,000／15,000／5,000。
+- Qualification list與INSIDE list加八種Event cases共10 cases；每case測first與由獨立oracle第20項key固定的next page，`limit=20`而adapter實際fetch 21。每個被測sort／filter至少有64筆同時間tie，必須以ID tie-break證明無缺漏與重複。
+- BEFORE／AFTER各10 cases×2 pages×100 measured，共4,000筆raw樣本；每格另做10次warmup。以`process.hrtime.bigint()`包住完整adapter await與projection，全部串行且不刪outlier；排序100筆nanoseconds後，nearest-rank p50／p95使用zero-based index 49／94。
+- BEFORE只刪除四個具名non-unique query indexes；AFTER精確重建相同四個索引。`_id`、唯一／partial、comparison、user及source indexes均不得變動；兩階段共用同一DB與fixture、各自清plan cache、不用hint或`allowDiskUse`，報告明示固定before→after順序的cache／order bias。
+- command-monitoring client捕捉production adapter真正送出的aggregate，再以`executionStats`取得每個index state／case／page一份explain，共40份；主cursor與Face lookup分開呈現。私有證據保存sanitized完整explain，公開證據只保存去敏摘要。
+- BEFORE與AFTER都必須通過counts／hash／schema／reference／Event跨欄位不變量、index inventory、10 cases first／next exact IDs、tie無gap／duplicate、兩階段輸出一致、sample count、explain及環境核對。任何正確性或證據缺口均使gate停止；索引後較慢、無改善或`COLLSCAN`則如實報告，不單獨構成gate失敗，也不得解鎖改善宣稱。
+
+私有run輸出預定於`output/evidence/g09b/<runId>/`保存manifest、fixture summary、raw JSONL、summary、完整explains、environment、兩階段index catalogs及correctness結果；tracked公開輸出預定為`docs/evidence/g09b/report.md`、`summary.json`、`fixture-manifest.json`及`explain-summary.json`。這些皆為G09b完成後的預期證據，目前尚不存在；cleanup失敗須另行回報，不能覆蓋原始測試錯誤。
 - D153結構化allowlist與request／operationUUID、有限日志輪替及私密查詢，配合D155代理／Mongo／容器輸出已知秘密掃描；不能把best-effort技術日志冒充必要Event。
 - 自動化測試涵蓋第 11 節全部業務情境、固定 reason-code 優先序、一次顯示 QR、查詢去敏、準時 FIFO、未知停寫與續辦、共用預算、容量準入／釋放、每日重置及最低公平使用限制；逐項連至追蹤矩陣及真實執行證據。
 - CI使用D125精確基線與D156未被取代的命令／期限規則及D166正式Jest runner；fault／perf專項雖opt-in，仍是完整交付必需證據，普通CI綠燈不能解鎖全部成果。
@@ -758,10 +772,10 @@ Qualification 時間錯誤、Face重複、越權與公開限制均拒絕，使�
 
 P01–P15採用決策與逐關驗收見[實作方案](implementation-plan.md)及追蹤矩陣。剩餘不是讓實作者自由選架構：Face唯一索引替換微型真測、固定工具相容性及fault映像digest是明確前置gate；未過便停止回討論，不靜默換策。外部主機／domain／TLS需環境提供。D161已取代舊碼私密備份要求，不再建立legacy備份。
 
-目前矩陣為 A01、A05–A09、A11–A16、B04、B08、B09、B13、B19、B27、B35、B41、B42、B44–B49、B52 共28項V，其餘108項仍U；G09a只把本關完整直接支持的B44–B49升為V。這不代表完整v1、效能、所有秘密輸出表面、fault protocol或部署完成；B50、A17、A18、M04及E項仍因跨gate責任維持U。依25 STOP停止於G09a；下一合法gate為G09b，尚未開始。
+目前矩陣為 A01、A05–A09、A11–A16、B04、B08、B09、B13、B19、B27、B35、B41、B42、B44–B49、B52 共28項V，其餘108項仍U；G09a只把本關完整直接支持的B44–B49升為V。這不代表完整v1、效能、所有秘密輸出表面、fault protocol或部署完成；B50、A17、A18、M04及E項仍因跨gate責任維持U。依25 STOP停止於G09a；D182只使下一合法gate G09b達到READY，尚未開始且未新增工程證據。
 
 ## 決策來源
 
-本文件以[討論紀錄](./discuss.md) D01–D35為業務底稿，同步至D181；D114明確授權持續逐題討論、預設接受及必要文件同步，非逐題個別回答。D69依D72、D17依D76修正；D89安全續辦保留，D130永久終局候選未採；D117取代binaryv1、D131七格取代三次、D129原生兩送局部例外、D149同epoch普通重啟寫入關閉，D174–D179的逐關限定證據、D180的G09a開發前契約及D181的G09a限定驗收皆有效。其餘歷史候選及背景不新增產品要求。
+本文件以[討論紀錄](./discuss.md) D01–D35為業務底稿，同步至D182；D114明確授權持續逐題討論、預設接受及必要文件同步，非逐題個別回答。D69依D72、D17依D76修正；D89安全續辦保留，D130永久終局候選未採；D117取代binaryv1、D131七格取代三次、D129原生兩送局部例外、D149同epoch普通重啟寫入關閉，D174–D179的逐關限定證據、D180的G09a開發前契約、D181的G09a限定驗收及D182的G09b開發前契約皆有效。其餘歷史候選及背景不新增產品要求。
 
 本次同步不是新業務決策，也不改寫原始討論。未來若變更已確認結論，須先新增討論決策 block，再同步本文件、驗收及追蹤矩陣。實作／測試／公開證據未完成前，不把文件採用視為履歷成果。

@@ -1,6 +1,6 @@
 # PassHub 有效要求與實作追蹤矩陣
 
-規劃狀態：**D160封口；D161完成舊碼清除；D166改定正式Jest runner；G02–G09a已發行各自限定 evidence，目前停止於G09a；下一合法gate G09b尚未開始**。工程狀態：**28條為V、108條仍U；G09a只將具完整直接證據的B44–B49升為V**。整理日期：2026-09-27。
+規劃狀態：**D160封口；D161完成舊碼清除；D166改定正式Jest runner；G02–G09a已發行各自限定 evidence，目前停止於G09a；D182已使下一合法gate G09b達到READY，但尚未開始**。工程狀態：**28條為V、108條仍U；D182只有開發前契約，沒有新增工程證據或升格**。整理日期：2026-09-27。
 
 這份文件回答：「討論過的要求，實作時如何避免漏掉？」它不是已完成成果，也不授權開始重寫程式。
 
@@ -8,7 +8,7 @@
 
 ## 1. 來源、用法與完成定義
 
-- 來源：[業務範圍](business-scope.md)、[討論紀錄](discuss.md) D01–D181 及實作方案。衝突依明確採用的新版；D114預設接受是本輪授權，不捏造逐題答覆。候選／背景不當採用，官方來源不當工程證據。
+- 來源：[業務範圍](business-scope.md)、[討論紀錄](discuss.md) D01–D182 及實作方案。衝突依明確採用的新版；D114預設接受是本輪授權，不捏造逐題答覆。候選／背景不當採用，官方來源不當工程證據。
 - 本稿整理前的來源 SHA-256：`discuss.md = 96a222bde5938d5aa9a5d250ea61b79a7916fd4b494d3f63f4ec49e833d87da7`；`business-scope.md = 4c8969d698c1e5f315d6ada2a7312482b5b6b01e6098f38004314874a280ca09`。後續更新須記錄基線變動，不以舊摘要覆蓋新決策。
 - 以下「責任」是行為邊界，實際接線／目錄規劃見D140–D141；G02–G08b只具各gate限定程式／測試符號與局部 evidence，其餘不能由規劃欄推定已建立。
 - 每列的 `T-要求ID` 是**預定驗收情境編號**，不是已存在的測試。欄內分號分開的情境都要覆蓋；必要時拆成多個實際測試。
@@ -188,7 +188,7 @@
 | E01 | 可操作且已核對的 REST／OpenAPI 契約，區分業務結果、認證、格式、衝突及儲存錯誤。 | D30、D34–D35、業務 §12 | API 契約 | T-E01：真 HTTP 與文件一致，不只生成 Swagger UI。 | U：G08a／G08b及G09a真HTTP已區分管理、辨識、查詢、認證、格式、conflict與storage回覆；正式OpenAPI及完整API仍未完成。 |
 | E02 | 真 MongoDB 整合測試證明原子性、映射及冪等唯一性，不只 mock repository。 | D35、D65、業務 §12 | DB 整合驗證 | T-E02：實際交易故障／競爭、全部資料一致，保留環境及命令。 | U |
 | E03 | 真實並行 HTTP 測試，驗證跨媒介及管理競爭、Event／Presence／Mapping 完整。 | D19–D20、D35、D76、業務 §12 | HTTP 整合驗證 | T-E03：不同事件均保存且最多一個轉移；同事件只一個 Event。 | U |
-| E04 | D152固定10kqual/40kEvent與八filter各別索引前後實驗；正確性及完整證據為門檻、不要求改善百分比。 | 業務 §12、D152 | 查詢／測量 | T-E04：first/固定next每case10warmup100measure、raw/p50/p95/explain/fixture/環境；只改nonunique queryindexes，回歸如實報告。 | U |
+| E04 | D152／D182固定10k Qualification／40k Event與Qualification、INSIDE及八種Event filter cases的索引前後實驗；正確性及完整證據為門檻，不要求改善百分比。 | 業務 §12、D152、D182 | 查詢／測量 | T-E04：SHA-256 deterministic fixture及hash；10 cases各first／oracle fixed-next、tie≥64；每格10 warmup／100 serial measured，BEFORE／AFTER共4,000 raw ns，nearest-rank p50／p95 index 49／94；只切四個query non-unique indexes，兩state輸出相同；40份真adapter aggregate executionStats、主cursor／lookup分開、環境／index inventory／完整與公開去敏證據。 | U：D182只封閉開發前契約；尚無perf程式、執行或證據。 |
 | E05 | 結構化日誌與 request ID 可追蹤請求、原項及故障，不洩漏秘密。 | D21、業務 §12 | 可觀測性 | T-E05：跨層關聯可查；斷線、重送、未知、維護紀錄有安全上下文。 | U |
 | E06 | 自動化測試涵蓋規則、權限、秘密、冪等、並行、故障、預算及維護。 | D35、D65–D99、業務 §12 | 測試套件 | T-E06：逐列對應，不把單元測試數量等同需求覆蓋。 | U：至G09a full unit為19 suites／613，另有真HTTP／Mongo、boundary及negative compile；G09b perf、G10真fault／budget、G11維護及逐136 release audit仍未完成，數量不等同覆蓋。 |
 | E07 | 乾淨 Docker 環境啟動 API／真 Mongo，seed 與一鍵 Demo 可重跑且有斷言。 | D30、D35、業務 §12 | 交付／展示 | T-E07：無本機殘留安裝；交易環境、初始化及主流程成功。 | U |
@@ -293,13 +293,13 @@
 | P08 | D132–D139複合無效果＋無晚寫／canonical、真共同snapshot及受控回程loss；D153私密控制屏障。 | L07–L12、L16–L21；G10a/G10b/G10c |
 | P09 | D146–D147 bodyParser:false先接raw hook／同步準入及Auth provisional FIFO，D148分池與D151嚴格入口。 | L01–L02、L28–L34；G05a/G07a/G07b |
 | P10 | D149 registry4096無日間淘汰、epoch前置、writeRunClaim；ordinary restart同epoch關寫、只有限安全readonly回放，private fullreset重新開寫。 | L06、L13、L20–L21、L35；G05c/G11 |
-| P11 | D152三list固定keyset／route-filter-epoch cursor、四query索引、八filter case分測／explain／固定10k/40k fixture。 | B44–B47、E04；G09a/G09b |
+| P11 | D152三list固定keyset／route-filter-epoch cursor；D182固定SHA-256 fixture分布、十case first／fixed-next、四query索引前後各2,000次量測、40份真adapter explain、正確性gate及私有／公開證據分層。 | B44–B47、E04；G09a/G09b |
 | P12 | D153 request/operation/epoch/run allowlist、有限best-effort logs及私密read/socket，hold ACK前許可屏障／bounded current-last control回放。 | B40、B50、E05；G10a |
 | P13 | D148連線／reader/body/upload/validation/scrypt/query/canonical限額及fixed-minute rate、IP表256；D155信固定proxyIP/32。 | L01、L35、M04；G07a/G07b/G11 |
 | P14 | D154–D155單API/單成員replset/NGINX；systemd03臺北Persistent=false、host lock/marker、API與Mongo確停及恢復、六collection精確清理／runTicket分bootstrap-ready／failclosed。 | A18、M01、M05–M10；G11 |
 | P15 | D156未被D166取代的命令／期限／clean sourceCommit規則；D166正式Jest runner與其證據失效／重驗範圍；D157固定25STOP及maintenance600/1800。文件封口G00，完整release136證據G12；本輪只討論。 | E01–E09；G00/G01a–G12 |
 
-實作方案記錄25個STOP、命令dictionary與證據位置。G01a/G01b已依D161完成，G02/G03a/G03b/G03c、窄 G04a、G04b、G05a、G05b、G05c、G06a、G06b、G07a、G07b、G08a、G08b及G09a已依D166及各自證據完成限定驗收並停止於G09a；後續G09b效能、G10 fault／control／logs、G11 deployment、完整G05b execution／confirmation ledger整合、Mongo writeRunClaim state machine、driver wire、transport-loss及完整v1仍未驗證。
+實作方案記錄25個STOP、命令dictionary與證據位置。G01a/G01b已依D161完成，G02/G03a/G03b/G03c、窄 G04a、G04b、G05a、G05b、G05c、G06a、G06b、G07a、G07b、G08a、G08b及G09a已依D166及各自證據完成限定驗收並停止於G09a；D182使G09b契約READY但尚未開始。後續G09b效能、G10 fault／control／logs、G11 deployment、完整G05b execution／confirmation ledger整合、Mongo writeRunClaim state machine、driver wire、transport-loss及完整v1仍未驗證。
 
 ## 7. 實作時的證據帳本與反向覆核
 
@@ -317,7 +317,7 @@
 4. 獨立覆核者直接讀原始 D 段與測試，反查矩陣是否漏要求或誤採舊提案；不只閱讀實作者摘要。
 5. 交付差異與證據後停止。未達條件不進下一關，不因時間壓力靜默縮減要求；必要變更先與使用者確認。
 
-**當前停止點：G09a安全查詢／keyset evidence 已通過；unit 92、true HTTP e2e 13、true Mongo 8.0.32 integration 16、合計121，full unit 613。boundary `files=10 edges=35 publicLeaks=0 forbidden=0`，negative compile、build及diff check通過。coverage aggregate為88.21% statements／86.40% branches／98.38% functions／94.01% lines；明確不是repository全面高覆蓋。矩陣為28V／108U；本關僅將具完整直接證據的B44–B49升為V。G09b perf、G10真transport-loss／fault／control／logs、G11 deployment及完整release未完成；依25 STOP停止於G09a，下一合法gate為G09b，尚未開始。**
+**當前停止點：G09a安全查詢／keyset evidence 已通過；unit 92、true HTTP e2e 13、true Mongo 8.0.32 integration 16、合計121，full unit 613。boundary `files=10 edges=35 publicLeaks=0 forbidden=0`，negative compile、build及diff check通過。coverage aggregate為88.21% statements／86.40% branches／98.38% functions／94.01% lines；明確不是repository全面高覆蓋。矩陣為28V／108U。D182已封閉G09b開發前契約，但沒有perf工程證據；G10真transport-loss／fault／control／logs、G11 deployment及完整release亦未完成。依25 STOP仍停止於G09a，下一合法gate G09b為READY、尚未開始。**
 
 ## 8. 追蹤矩陣建立時的文件覆核紀錄（歷史）
 
@@ -337,7 +337,7 @@
 - 僅更新業務文件及本矩陣的同步狀態／驗收前提；136 條要求的工程證據仍 U，15 項 P 清單不變。沒有開始重寫、執行測試、清除資料或重啟服務。
 
 
-## 10. D100–D180 細化要求與固定關卡（當前）
+## 10. D100–D182 細化要求與固定關卡（當前）
 
 下列不是另加產品功能；是既有要求的新契約／反例／驗收細化。原136 ID保留，T-ID可拆多個測試，**本節的子情境也必須映射到實際測試與結果**，不能只讓第2節同名test存在便宣稱覆蓋。
 
@@ -359,6 +359,7 @@
 | D150–D151 | 十business routes含Eventdetail/null資格；嚴格DTO/dates/headers/query，management無idem/QR lost不可重取；200保存replayed/202stage-confirm-control/503unconfirmed vs safe terminal；epoch/existingonly；16KiB fatalUTFBOM/深度先filter原生語法後scan cookedduplicate/all arrays拒。 | B04、B22–B52、L24–L36、M04、E01、E03、E06 |
 | D152 | keyset fixed3sort/AND3filters、p1cursorroute-filter-epoch/512chars/limit1–100；不跨頁snapshot；四queryindexes／10k-40kfixture／八filter各別warmup10measure100raw p50p95explain／只改nonunique索引。 | B44–B49、E04、E06、E09 |
 | D180 | G09a writer-quiescent read-observation lease；非靜止writer立即503 busy、不等待，lease期間新writer可登記但不開始；單一observedAt；list/detail exact response、404／400、cursor canonical／epoch／filter分類、Mongo read 503、response 256KiB。只封閉開發前契約，不是工程證據。 | B44–B49、A17–A18、M04、E01、E06 |
+| D182 | G09b deterministic SHA-256 fixture：10k Qualification精確五組、4k Face slots、40k Event精確五組；Qualification／INSIDE＋八Event cases，各first／oracle fixed-next及tie≥64。BEFORE／AFTER只切四query non-unique indexes，每格10 warmup／100 serial measured，共4,000 raw ns，nearest-rank p50／p95；真adapter command-monitoring＋executionStats 40份，主cursor／lookup分開。兩state均須通過hash／schema／reference／invariants／index inventory／oracle／輸出一致／sample／explain／environment；退步照報。Node24.21／Mongo8.0.32 rs0、1800秒、隔離DB、私有完整／公開去敏證據。只封閉開發前契約，不改API／production／Demo，不是工程證據。 | B44–B49、E04、E06、E09 |
 | D153 | allowlist request/operation/epoch/run/fixedcode、有限log/drop非必要Event；socket私密權限；hold同步屏障ACK/不撤issued；manual與maintenance獨立；current-last control replay有界/stale拒絕；late callback歸屬不凍permission。 | B40、B50、L07–L12、E05–E06、M05、M07 |
 | D154–D155 | LinuxCompose單API/單member非HA、NGINXpins/HTTPS前提/固定proxy/禁止upstreamretry；systemd03TaipeiPersistentfalse/hostlockmarker/drain30/API+Mongo確認stop/恢復PRIMARY/僅passhub_demo六collection deleteMany保indexes；seed不整庫原子/任何fail off；受控ticketbootstrap與ready分開/普通boot不接claim；proxy/Mongo/容器全表面去敏及秘密scan。 | A18、L11–L13、M01–M10、B50、E05–E09 |
 | D156–D157、D166 | Jest runner先編TS/真HTTPMongo/固定fault工具digestgate；期限fail非rollback/cleanup不蓋錯；正式clean sourceCommit/指紋及報告revision區分/變更失效/普通CI非完整證據；25STOP／每關報驗證再停。D166取代D156的Node unit runner選擇，其他證據規則保留。 | E01–E09、A01–A02、L07–L23、M05–M10 |
