@@ -285,6 +285,12 @@ export function createG07bAdmissionHandler(
   const writerPermissionAcquire = writerPermission === undefined
     ? undefined
     : captureConstructionMethod(writerPermission, 'acquireIssuedPersistence', 'G10a writer permission').bind(writerPermission) as G10aWriterPermissionBinding['acquireIssuedPersistence'];
+  const writerPermissionCanStart = writerPermission === undefined
+    ? undefined
+    : captureConstructionMethod(writerPermission, 'canStartWriter', 'G10a writer permission').bind(writerPermission) as G10aWriterPermissionBinding['canStartWriter'];
+  const writerPermissionBindWake = writerPermission === undefined
+    ? undefined
+    : captureConstructionMethod(writerPermission, 'bindWriterWake', 'G10a writer permission').bind(writerPermission) as G10aWriterPermissionBinding['bindWriterWake'];
   assertOptions(options, validator, work, validatorValidate, loginWorkMethod, queryWorkMethod, managementWorkMethod, recognitionWorkMethod);
   const validatorIdentity = getQueryAdmissionIdentity(validatorValidate);
   const workIdentity = getQueryAdmissionIdentity(queryWorkMethod);
@@ -482,7 +488,7 @@ export function createG07bAdmissionHandler(
     clock: wallClock,
     monotonicClock,
     lifecycleObserver,
-    startGate: writerQuiescence.canStartWriter,
+    startGate: (): boolean => writerQuiescence.canStartWriter() && (writerPermissionCanStart?.() ?? true),
     executors: Object.freeze({
       managementCreate: executeManagement,
       managementUpdate: executeManagement,
@@ -491,6 +497,7 @@ export function createG07bAdmissionHandler(
     }),
   });
   writerQuiescence.bindCoordinatorWake(() => wakeCoordinator());
+  writerPermissionBindWake?.(() => wakeCoordinator());
   wakeCoordinator = coordinator.wake;
 
   async function executeManagement(

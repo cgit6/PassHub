@@ -56,8 +56,9 @@ function makeHandler(
   control: RuntimeControl,
   workOverrides: Partial<AdmissionWorkPort>,
   rates?: ReturnType<typeof createConfigurableFixedMinuteRateLedger>,
+  plansOverride?: ReturnType<typeof createHttpResponsePlanBundle>,
 ): ReturnType<typeof createG07bAdmissionHandler> {
-  const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
+  const plans = plansOverride ?? createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
   const handoff = createAdmissionWorkHandoffBundle();
   const unknown = createUnknownRecognitionCoordinatorBundle();
   const capabilities = createOperationRegistryCapabilityIssuer({
@@ -74,7 +75,7 @@ function makeHandler(
     assertContinuationEvidence: () => undefined,
   });
   const standardValidate = async (input: AdmissionValidationInput): Promise<AdmissionValidationResult> => {
-    if (input.routeId === 'QUALIFICATION_CREATE') {
+    if (input.routeId === 'QUALIFICATION_CREATE' || input.routeId === 'QUALIFICATION_UPDATE' || input.routeId === 'QUALIFICATION_REVOKE') {
       return Object.freeze({ kind: 'MANAGEMENT', accountId: 'account-1', workInput: handoff.issuer.issue(input.routeId) });
     }
     if (input.routeId === 'RECOGNITION_ATTEMPT') {
@@ -111,10 +112,10 @@ function makeHandler(
   });
 }
 
-function invoke(handler: ReturnType<typeof createG07bAdmissionHandler>, path: string, retryMode?: 'existing-only'): FakeResponse {
+function invoke(handler: ReturnType<typeof createG07bAdmissionHandler>, path: string, retryMode?: 'existing-only', method = 'POST'): FakeResponse {
   const response = new FakeResponse();
   handler(
-    Object.freeze({ method: 'POST', body: null, query: [], headers: { datasetEpoch: EPOCH, ...(retryMode === undefined ? {} : { retryMode }) } }),
+    Object.freeze({ method, body: null, query: [], headers: { datasetEpoch: EPOCH, ...(retryMode === undefined ? {} : { retryMode }) } }),
     { originalUrl: path, url: path, socket: { remoteAddress: '127.0.0.1' } } as never,
     response as never,
     (() => undefined) as never,
@@ -132,6 +133,158 @@ function lowRecognitionRates(): ReturnType<typeof createConfigurableFixedMinuteR
 }
 
 describe('G10a A3 eligible-original G07b writer permission seam', () => {
+  test('writer wake binding rejects foreign receivers and duplicate binding; a throwing wake cannot roll back release', () => {
+    const control = makeRuntimeControl();
+    const binding = createG10aWriterPermissionBinding(control);
+    const bind = binding.bindWriterWake;
+
+    expect(() => bind.call(Object.freeze({}), () => undefined)).toThrow(TypeError);
+    expect(() => bind.apply(Object.freeze({ bindWriterWake: () => undefined }), [() => undefined])).toThrow(TypeError);
+
+    let calls = 0;
+    binding.bindWriterWake(() => { calls += 1; throw new Error('wake observer failed'); });
+    expect(() => binding.bindWriterWake(() => undefined)).toThrow(TypeError);
+    const held = control.hold({ requestControlId: '55555555-5555-4555-8555-555555555555', epoch: EPOCH, run: RUN, expectedRevision: '0' });
+    expect(() => control.release({ requestControlId: '66666666-6666-4666-8666-666666666666', epoch: EPOCH, run: RUN, expectedRevision: held.revision, controlId: held.controlId as string })).not.toThrow();
+    expect(calls).toBe(1);
+    expect(control.snapshot()).toMatchObject({ manual: { active: false, controlId: null } });
+  });
+
+  test('a held queue has zero issued work, then release starts exactly its FIFO head', async () => {
+    const control = makeRuntimeControl();
+    const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
+    const first = deferred<{ readonly disposition: 'BUSINESS_RESULT_PERSISTED'; readonly response: unknown }>();
+    let calls = 0;
+    const handler = makeHandler(control, {
+      management: () => {
+        calls += 1;
+        return calls === 1
+          ? first.promise as never
+          : Promise.resolve({ disposition: 'BUSINESS_RESULT_PERSISTED', response: plans.business.issue(200, { ordinal: calls }) }) as never;
+      },
+    }, undefined, plans);
+    const held = control.hold({ requestControlId: '66666666-6666-4666-8666-666666666666', epoch: EPOCH, run: RUN, expectedRevision: '0' });
+
+    invoke(handler, '/qualifications');
+    invoke(handler, '/qualifications/qualification-2', undefined, 'PATCH');
+    await flush();
+    // READY work may be registered, but neither G08 nor its issued lease has
+    // started while the manual hold is active.
+    expect(calls).toBe(0);
+    expect(control.snapshot().issuedPersistence).toBe(0);
+
+    control.release({ requestControlId: '77777777-7777-4777-8777-777777777777', epoch: EPOCH, run: RUN, expectedRevision: held.revision, controlId: held.controlId as string });
+    await flush();
+    expect(calls).toBe(1);
+    expect(control.snapshot().issuedPersistence).toBe(1);
+
+    first.resolve({ disposition: 'BUSINESS_RESULT_PERSISTED', response: plans.business.issue(200, { ordinal: 1 }) });
+    await flush();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await flush();
+    expect(calls).toBe(2);
+  });
+
+  test('manual hold blocks READY writers until release, then wakes the FIFO head', async () => {
+    const control = makeRuntimeControl();
+    const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
+    const first = deferred<{ readonly disposition: 'BUSINESS_RESULT_PERSISTED'; readonly response: unknown }>();
+    let calls = 0;
+    const handler = makeHandler(control, {
+      management: () => { calls += 1; return first.promise as never; },
+    }, undefined, plans);
+    const held = control.hold({ requestControlId: '77777777-7777-4777-8777-777777777777', epoch: EPOCH, run: RUN, expectedRevision: '0' });
+    invoke(handler, '/qualifications');
+    await flush();
+    expect(calls).toBe(0);
+    control.release({ requestControlId: '88888888-8888-4888-8888-888888888888', epoch: EPOCH, run: RUN, expectedRevision: held.revision, controlId: held.controlId as string });
+    await flush();
+    expect(calls).toBe(1);
+    first.resolve({ disposition: 'BUSINESS_RESULT_PERSISTED', response: plans.business.issue(200, { ok: true }) });
+    await flush();
+  });
+
+  test('held existing-only recognition uses the established memory path and never enters the writer gate', async () => {
+    const control = makeRuntimeControl();
+    const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
+    let recognitionCalls = 0;
+    const handler = makeHandler(control, {
+      recognition: () => {
+        recognitionCalls += 1;
+        return Promise.resolve({
+          disposition: 'BUSINESS_RESULT_PERSISTED' as const,
+          originalResponse: plans.business.issue(200, { ok: true }),
+          replayResponse: plans.business.issue(200, { ok: true }),
+        });
+      },
+    }, undefined, plans);
+
+    // Establish the canonical recognition operation before the hold.
+    invoke(handler, '/recognition/attempts');
+    await flush();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await flush();
+    expect(recognitionCalls).toBe(1);
+    expect(control.snapshot().issuedPersistence).toBe(0);
+
+    control.hold({ requestControlId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', epoch: EPOCH, run: RUN, expectedRevision: '0' });
+    const response = invoke(handler, '/recognition/attempts', 'existing-only');
+    await flush();
+    expect(response.statusCode).toBe(200);
+    expect(recognitionCalls).toBe(1);
+    expect(control.snapshot()).toMatchObject({
+      manual: { active: true },
+      issuedPersistence: 0,
+    });
+  });
+
+  test('a hold after the first writer started never interrupts it, but blocks the FIFO second writer', async () => {
+    const control = makeRuntimeControl();
+    const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
+    const first = deferred<{ readonly disposition: 'BUSINESS_RESULT_PERSISTED'; readonly response: unknown }>();
+    let calls = 0;
+    const handler = makeHandler(control, {
+      management: () => { calls += 1; return first.promise as never; },
+    }, undefined, plans);
+    invoke(handler, '/qualifications');
+    await flush();
+    expect(calls).toBe(1);
+    const held = control.hold({ requestControlId: '99999999-9999-4999-8999-999999999999', epoch: EPOCH, run: RUN, expectedRevision: '0' });
+    invoke(handler, '/qualifications');
+    await flush();
+    expect(calls).toBe(1);
+    first.resolve({ disposition: 'BUSINESS_RESULT_PERSISTED', response: plans.business.issue(200, { ok: true }) });
+    await flush();
+    expect(calls).toBe(1);
+    control.release({ requestControlId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', epoch: EPOCH, run: RUN, expectedRevision: held.revision, controlId: held.controlId as string });
+    await flush();
+    expect(calls).toBe(2);
+  });
+
+  test('existing-only joins an already-started recognition during a later hold without another G08 invocation or lease', async () => {
+    const control = makeRuntimeControl();
+    const work = deferred<never>();
+    let calls = 0;
+    const handler = makeHandler(control, {
+      recognition: () => { calls += 1; return work.promise; },
+    });
+
+    invoke(handler, '/recognition/attempts');
+    await flush();
+    expect(calls).toBe(1);
+    expect(control.snapshot().issuedPersistence).toBe(1);
+
+    control.hold({ requestControlId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', epoch: EPOCH, run: RUN, expectedRevision: '0' });
+    invoke(handler, '/recognition/attempts', 'existing-only');
+    await flush();
+    expect(calls).toBe(1);
+    expect(control.snapshot().issuedPersistence).toBe(1);
+
+    work.reject(new Error('finish original after join'));
+    await flush();
+    expect(control.snapshot().issuedPersistence).toBe(0);
+  });
+
   test('management holds issued lease while G08 work is pending and releases after resolve', async () => {
     const control = makeRuntimeControl();
     const work = deferred<{ readonly disposition: 'BUSINESS_RESULT_PERSISTED'; readonly response: ReturnType<typeof createHttpResponsePlanBundle> extends never ? never : unknown }>();

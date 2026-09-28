@@ -108,6 +108,10 @@ export interface RuntimeControl {
   readonly snapshot: () => RuntimeControlSnapshot;
   readonly acquireIssuedPersistence: () => IssuedPersistenceLease;
   readonly acquireActiveQueryRead: () => ActiveQueryReadLease;
+  /** Internal writer-start gate.  A manual hold only affects work not yet started. */
+  readonly canStartWriter: () => boolean;
+  /** Internal, one-time coordinator wake binding. */
+  readonly bindWriterWake: (wake: () => void) => void;
   readonly hold: (request: HoldRequest) => RuntimeControlResult;
   readonly release: (request: ReleaseRequest) => RuntimeControlResult;
   readonly drain: (request: DrainRequest) => Promise<RuntimeControlResult>;
@@ -270,6 +274,8 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
   let maintenanceOutcome: RuntimeControlSnapshot['maintenance']['outcome'] = null;
   let issuedPersistence = 0;
   let activeQueryReads = 0;
+  let writerWake: (() => void) | undefined;
+  let writerWakeBound = false;
   let current: MutationRecord | null = null;
   let last: MutationRecord | null = null;
   interface CounterWaiter { readonly wake: () => void; active: boolean; }
@@ -295,6 +301,13 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
     });
   };
   const snapshot = (): RuntimeControlSnapshot => makeSnapshot({ revision, manualControlId, maintenanceControlId, maintenanceOutcome });
+
+  const canStartWriter = (): boolean => manualControlId === null;
+  const bindWriterWake = (wake: () => void): void => {
+    if (typeof wake !== 'function' || writerWakeBound) throw new TypeError('writer wake is invalid or already bound');
+    writerWakeBound = true;
+    writerWake = wake;
+  };
   const notifyCounterWaiters = (): void => {
     const waiters = [...counterWaiters];
     counterWaiters.clear();
@@ -434,6 +447,9 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
       current = { command: 'RELEASE', requestControlId: request.requestControlId, fingerprint, result };
       last = { command: 'RELEASE', requestControlId: request.requestControlId, fingerprint, result };
       current = null;
+      // The terminal transition is fully visible before the coordinator can
+      // synchronously start a writer.  A wake failure must not undo release.
+      try { writerWake?.(); } catch { /* a future write remains fail-closed until another wake */ }
       return result;
     } catch (error) { current = null; throw error; }
   };
@@ -527,7 +543,7 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
     return promise;
   };
 
-  const control: RuntimeControl = Object.freeze({ snapshot, acquireIssuedPersistence, acquireActiveQueryRead, hold, release, drain });
+  const control: RuntimeControl = Object.freeze({ snapshot, acquireIssuedPersistence, acquireActiveQueryRead, canStartWriter, bindWriterWake, hold, release, drain });
   controls.set(control as object, state);
   return control;
 

@@ -194,7 +194,7 @@ describe('G10a A1 runtime identity/control core', () => {
     options.controlIdFactory = () => 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
     expect(Object.isFrozen(control)).toBe(true);
     expect(Object.isFrozen(issuer)).toBe(true);
-    expect(Reflect.ownKeys(control)).toEqual(['snapshot', 'acquireIssuedPersistence', 'acquireActiveQueryRead', 'hold', 'release', 'drain']);
+    expect(Reflect.ownKeys(control)).toEqual(['snapshot', 'acquireIssuedPersistence', 'acquireActiveQueryRead', 'canStartWriter', 'bindWriterWake', 'hold', 'release', 'drain']);
     expect(control.hold(base()).controlId).toBe('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
     expect(control.snapshot()).toMatchObject({ epoch, run });
   });
@@ -264,6 +264,44 @@ describe('G10a A1 runtime identity/control core', () => {
     const released = control.release({ ...base(releaseRequestId, held.revision), controlId: heldControlId });
     expect(control.release({ ...base(releaseRequestId, held.revision), controlId: heldControlId })).toBe(released);
     expect(() => control.release({ ...base(releaseRequestId, '0'), controlId: heldControlId })).toThrow(new RuntimeControlError('REQUEST_CONTROL_CONFLICT'));
+  });
+
+  test('manual hold gates only unstarted writers; release commits before one safe wake', () => {
+    const { control } = makeControl();
+    const wakes: string[] = [];
+    control.bindWriterWake(() => {
+      expect(control.snapshot()).toMatchObject({ revision: '2', manual: { active: false, controlId: null } });
+      wakes.push('wake');
+      throw new Error('observer failure must not undo release');
+    });
+    expect(control.canStartWriter()).toBe(true);
+    const held = control.hold(base());
+    expect(control.canStartWriter()).toBe(false);
+    const release = { ...base('77777777-7777-4777-8777-777777777777', held.revision), controlId: held.controlId as string };
+    const released = control.release(release);
+    expect(released.outcome).toBe('RELEASED');
+    expect(control.canStartWriter()).toBe(true);
+    expect(wakes).toEqual(['wake']);
+    expect(control.release(release)).toBe(released);
+    expect(wakes).toEqual(['wake']);
+    expect(() => control.bindWriterWake(() => undefined)).toThrow(TypeError);
+  });
+
+  test('invalid release and exact release replay never wake a held writer twice', () => {
+    const { control } = makeControl();
+    let wakes = 0;
+    control.bindWriterWake(() => { wakes += 1; });
+    const held = control.hold(base());
+    const release = { ...base('77777777-7777-4777-8777-777777777777', held.revision), controlId: held.controlId as string };
+
+    expect(() => control.release({ ...release, controlId: 'not-a-uuid' })).toThrow(new RuntimeControlError('INVALID_REQUEST'));
+    expect(wakes).toBe(0);
+    expect(control.snapshot()).toMatchObject({ manual: { active: true, controlId: held.controlId } });
+
+    const terminal = control.release(release);
+    expect(wakes).toBe(1);
+    expect(control.release(release)).toBe(terminal);
+    expect(wakes).toBe(1);
   });
 
   test('retains only the exact last terminal and gives epoch/run precedence over replay and conflict', () => {
