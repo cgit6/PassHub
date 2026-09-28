@@ -9,6 +9,7 @@ import {
 import * as publicApi from '../../src/index.js';
 import * as publicCompositionApi from '../../src/composition/index.js';
 import { readFileSync } from 'node:fs';
+import { createWriteOperationCoordinatorBundle } from '../../src/access/application/internal/write-operation-coordinator.js';
 
 const epoch = '11111111-1111-4111-8111-111111111111';
 const run = '22222222-2222-4222-8222-222222222222';
@@ -194,7 +195,7 @@ describe('G10a A1 runtime identity/control core', () => {
     options.controlIdFactory = () => 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
     expect(Object.isFrozen(control)).toBe(true);
     expect(Object.isFrozen(issuer)).toBe(true);
-    expect(Reflect.ownKeys(control)).toEqual(['snapshot', 'acquireIssuedPersistence', 'acquireActiveQueryRead', 'canStartWriter', 'isMaintenanceWriterVeto', 'bindWriterWake', 'hold', 'release', 'drain']);
+    expect(Reflect.ownKeys(control)).toEqual(['snapshot', 'acquireIssuedPersistence', 'acquireActiveQueryRead', 'canStartWriter', 'isMaintenanceWriterVeto', 'bindWriterWake', 'bindMaintenanceReadySettlement', 'hold', 'release', 'drain']);
     expect(control.hold(base()).controlId).toBe('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
     expect(control.snapshot()).toMatchObject({ epoch, run });
   });
@@ -448,6 +449,71 @@ describe('G10a A1 runtime identity/control core', () => {
     });
     await expect(control.drain(drainBase())).resolves.toEqual(drained);
     expect(() => control.drain(drainBase('77777777-7777-4777-8777-777777777777', drained.revision))).toThrow(new RuntimeControlError('MAINTENANCE_HOLD_EXISTS'));
+  });
+
+  test('runs the one-shot READY settlement callback after maintenance mutation and makes callback failure terminal', async () => {
+    const { control } = makeControl();
+    let observed: ReturnType<RuntimeControl['snapshot']> | undefined;
+    control.bindMaintenanceReadySettlement(() => { observed = control.snapshot(); });
+    expect(() => control.bindMaintenanceReadySettlement(() => undefined)).toThrow(TypeError);
+    const drained = await control.drain(drainBase());
+    expect(observed).toMatchObject({
+      revision: '1',
+      phase: 'MAINTENANCE_DRAINING',
+      maintenance: { active: true, outcome: 'WAITING' },
+    });
+    expect(drained.outcome).toBe('DRAINED');
+
+    const second = makeControl().control;
+    second.bindMaintenanceReadySettlement(() => { throw new Error('coordinator unavailable'); });
+    await expect(second.drain(drainBase())).resolves.toMatchObject({
+      outcome: 'INTERNAL_UNAVAILABLE',
+      snapshot: { maintenance: { active: true, outcome: 'INTERNAL_UNAVAILABLE' } },
+    });
+
+    // This command is synchronous.  A thenable would otherwise escape the
+    // drain terminal boundary and turn a later rejection into an unobserved
+    // background failure.
+    const third = makeControl().control;
+    third.bindMaintenanceReadySettlement((() => Promise.resolve()) as unknown as () => void);
+    await expect(third.drain(drainBase())).resolves.toMatchObject({
+      outcome: 'INTERNAL_UNAVAILABLE',
+      snapshot: { maintenance: { active: true, outcome: 'INTERNAL_UNAVAILABLE' } },
+    });
+  });
+
+  test('maintenance settlement finalizes only READY FIFO work as KNOWN_NO_EFFECT', async () => {
+    const lifecycle: string[] = [];
+    const executed = jest.fn();
+    const coordinator = createWriteOperationCoordinatorBundle<string, string, string, string, string, string, string, string>({
+      clock: { nowMs: () => 0 },
+      startGate: () => false,
+      lifecycleObserver: { settled: ({ disposition }) => { lifecycle.push(disposition); } },
+      executors: {
+        managementCreate: (input, _context, settlement) => { executed(input); settlement.businessResultPersisted(input); },
+        managementUpdate: (input, _context, settlement) => { executed(input); settlement.businessResultPersisted(input); },
+        managementRevoke: (input, _context, settlement) => { executed(input); settlement.businessResultPersisted(input); },
+        recognition: (input, _context, settlement) => { executed(input); settlement.businessResultPersisted(input); },
+      },
+    });
+    const validationInFlight = coordinator.managementCreate.registerProvisional();
+    const ready = coordinator.recognition.registerProvisional();
+    const maintenanceError = new Error('maintenance-ready');
+    ready.activate('ready-input');
+    const cleanups: string[] = [];
+
+    coordinator.settleReadyKnownNoEffect(maintenanceError, (input) => { cleanups.push(input as string); });
+    await expect(ready.completion).rejects.toBe(maintenanceError);
+    expect(cleanups).toEqual(['ready-input']);
+    expect(lifecycle).toEqual(['KNOWN_NO_EFFECT']);
+    expect(executed).not.toHaveBeenCalled();
+
+    // WAITING_VALIDATION has not been run, settled, or converted to UNKNOWN;
+    // later A8 owns its cancellation disposition.
+    const cleanupError = new Error('test cleanup');
+    validationInFlight.rejectBeforeStart(cleanupError);
+    await expect(validationInFlight.completion).rejects.toBe(cleanupError);
+    expect(lifecycle).toEqual(['KNOWN_NO_EFFECT', 'PRESTART_REJECTED']);
   });
 
   test.each([

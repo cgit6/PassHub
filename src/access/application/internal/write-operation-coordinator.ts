@@ -136,6 +136,11 @@ export interface WriteOperationCoordinatorBundle<
   readonly recognition: WriteOperationEnqueuePort<TRecognitionInput, TRecognitionResult>;
   /** Wake a drain deferred by the optional start gate. */
   wake(): void;
+  /**
+   * Internal maintenance-only command.  It settles only already validated,
+   * still-queued work; it never touches validation-in-flight or running work.
+   */
+  settleReadyKnownNoEffect(error: unknown, beforeFinalize?: (input: unknown) => void): void;
 }
 
 type Candidate =
@@ -397,6 +402,32 @@ export function createWriteOperationCoordinatorBundle<
     }
   };
 
+  // Maintenance uses a narrower terminal path than ordinary coordinator
+  // failure handling.  A broken lifecycle observer must surface to the caller
+  // (so RuntimeControl can become INTERNAL_UNAVAILABLE), but must not convert
+  // unrelated READY / WAITING_VALIDATION operations into rejected or UNKNOWN
+  // work by invoking the coordinator-wide fail-closed queue path.
+  const finalizeMaintenanceKnownNoEffect = (operation: Operation, error: unknown): void => {
+    if (operation.finalized) return;
+    operation.finalized = true;
+    operation.active = false;
+    if (current === operation) current = null;
+    try {
+      if (lifecycleSettled !== undefined) {
+        const result = lifecycleSettled(Object.freeze({
+          receipt: operation.receipt,
+          disposition: 'KNOWN_NO_EFFECT' as const,
+        }));
+        rejectAsyncLifecycleResult(result);
+        if (result !== undefined) throw new TypeError('write operation lifecycle observer must return undefined');
+      }
+    } catch (lifecycleError: unknown) {
+      operation.reject(lifecycleError);
+      throw lifecycleError;
+    }
+    operation.reject(error);
+  };
+
   async function drain(): Promise<void> {
     if (running || blocked) return;
     running = true;
@@ -578,6 +609,33 @@ export function createWriteOperationCoordinatorBundle<
     value: (): void => {
       deferredByGate = false;
       scheduleDrain();
+    },
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
+  Object.defineProperty(bundleChannels, 'settleReadyKnownNoEffect', {
+    value: (error: unknown, beforeFinalize?: (input: unknown) => void): void => {
+      if (error === undefined || error === null) {
+        throw new TypeError('ready settlement requires an error');
+      }
+      if (beforeFinalize !== undefined && typeof beforeFinalize !== 'function') {
+        throw new TypeError('ready settlement cleanup must be a function');
+      }
+      // Snapshot first.  The cleanup hook can fail the enclosing maintenance
+      // command, so keep its operation in the FIFO until that hook returns.
+      // Removing it first would strand an unfinalized entry if cleanup throws.
+      // Re-check after cleanup because it may synchronously re-enter here.
+      const ready = queue.filter((operation) => !operation.finalized
+        && operation.validationState === 'READY');
+      for (const operation of ready) {
+        if (queue.indexOf(operation) < 0 || operation.finalized || operation.validationState !== 'READY') continue;
+        beforeFinalize?.(operation.input);
+        const position = queue.indexOf(operation);
+        if (position < 0 || operation.finalized || operation.validationState !== 'READY') continue;
+        queue.splice(position, 1);
+        finalizeMaintenanceKnownNoEffect(operation, error);
+      }
     },
     enumerable: false,
     writable: false,

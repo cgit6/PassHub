@@ -58,6 +58,7 @@ function makeHandler(
   rates?: ReturnType<typeof createConfigurableFixedMinuteRateLedger>,
   plansOverride?: ReturnType<typeof createHttpResponsePlanBundle>,
   onValidate?: () => void,
+  releaseReservationOverride?: () => void,
 ): ReturnType<typeof createG07bAdmissionHandler> {
   const plans = plansOverride ?? createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
   const handoff = createAdmissionWorkHandoffBundle();
@@ -75,6 +76,12 @@ function makeHandler(
     assertOwnerCurrent: () => undefined,
     assertContinuationEvidence: () => undefined,
   });
+  // The handler captures registry methods at construction.  This narrow,
+  // non-Proxy forwarding record lets the test inject only release failure
+  // while retaining all real reservation and registry behavior.
+  const handlerRegistry = releaseReservationOverride === undefined
+    ? registry
+    : Object.freeze({ ...registry, releaseReservation: releaseReservationOverride }) as typeof registry;
   const standardValidate = async (input: AdmissionValidationInput): Promise<AdmissionValidationResult> => {
     onValidate?.();
     if (input.routeId === 'QUALIFICATION_CREATE' || input.routeId === 'QUALIFICATION_UPDATE' || input.routeId === 'QUALIFICATION_REVOKE') {
@@ -102,7 +109,7 @@ function makeHandler(
   };
   return createG07bAdmissionHandler({
     currentDatasetEpoch: EPOCH,
-    registry,
+    registry: handlerRegistry,
     registryCapabilities: capabilities,
     responsePlans: plans,
     workHandoff: handoff,
@@ -514,6 +521,118 @@ describe('G10a A3 eligible-original G07b writer permission seam', () => {
 
     lease.release();
     await expect(drain).resolves.toMatchObject({ outcome: 'DRAINED', snapshot: { maintenance: { active: true, outcome: 'DRAINED' } } });
+  });
+
+  test('maintenance settles pre-existing READY FIFO writers as one safe 503 without starting G08', async () => {
+    const control = makeRuntimeControl();
+    const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
+    let managementCalls = 0;
+    let recognitionCalls = 0;
+    const handler = makeHandler(control, {
+      management: () => {
+        managementCalls += 1;
+        return Promise.resolve({ disposition: 'BUSINESS_RESULT_PERSISTED', response: plans.business.issue(200, { ok: true }) });
+      },
+      recognition: () => {
+        recognitionCalls += 1;
+        return Promise.resolve({
+          disposition: 'BUSINESS_RESULT_PERSISTED' as const,
+          originalResponse: plans.business.issue(200, { ok: true }),
+          replayResponse: plans.business.issue(200, { ok: true }),
+        });
+      },
+    }, undefined, plans);
+    const held = control.hold({
+      requestControlId: 'e2e2e2e2-e2e2-42e2-82e2-e2e2e2e2e2e2', epoch: EPOCH, run: RUN, expectedRevision: '0',
+    });
+    const management = invoke(handler, '/qualifications');
+    const recognition = invoke(handler, '/recognition/attempts');
+    await flush();
+    expect(managementCalls).toBe(0);
+    expect(recognitionCalls).toBe(0);
+    expect(control.snapshot().issuedPersistence).toBe(0);
+
+    const drained = await control.drain({
+      requestControlId: 'e3e3e3e3-e3e3-43e3-83e3-e3e3e3e3e3e3', epoch: EPOCH, run: RUN, expectedRevision: held.revision, timeoutMs: 1,
+    });
+    await flush();
+    expect(drained.outcome).toBe('DRAINED');
+    for (const response of [management, recognition]) {
+      expect(response.statusCode).toBe(503);
+      expect(response.bodies).toHaveLength(1);
+      expect(JSON.parse(response.bodies[0] as string)).toMatchObject({ code: 'TECHNICAL_BUSY', currentDatasetEpoch: EPOCH });
+    }
+    expect(managementCalls).toBe(0);
+    expect(recognitionCalls).toBe(0);
+    expect(control.snapshot()).toMatchObject({ maintenance: { active: true, outcome: 'DRAINED' }, issuedPersistence: 0 });
+  });
+
+  test('maintenance leaves an already-issued G08 writer running and drain waits for its full completion', async () => {
+    const control = makeRuntimeControl();
+    const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
+    const work = deferred<{ readonly disposition: 'BUSINESS_RESULT_PERSISTED'; readonly response: unknown }>();
+    let managementCalls = 0;
+    const handler = makeHandler(control, {
+      management: () => {
+        managementCalls += 1;
+        return work.promise as never;
+      },
+    }, undefined, plans);
+
+    const response = invoke(handler, '/qualifications');
+    await flush();
+    expect(managementCalls).toBe(1);
+    expect(control.snapshot().issuedPersistence).toBe(1);
+
+    let terminal: unknown = undefined;
+    const drain = control.drain({
+      requestControlId: 'e3e3e3e3-e3e3-43e3-83e3-e3e3e3e3e3e4', epoch: EPOCH, run: RUN, expectedRevision: '0', timeoutMs: 1_000,
+    });
+    void drain.then((result) => { terminal = result; });
+    await flush();
+    expect(terminal).toBeUndefined();
+    expect(control.snapshot()).toMatchObject({ maintenance: { active: true, outcome: 'WAITING' }, issuedPersistence: 1 });
+    expect(managementCalls).toBe(1);
+
+    work.resolve({ disposition: 'BUSINESS_RESULT_PERSISTED', response: plans.business.issue(200, { completed: true }) });
+    await flush();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await expect(drain).resolves.toMatchObject({ outcome: 'DRAINED', snapshot: { maintenance: { active: true, outcome: 'DRAINED' }, issuedPersistence: 0 } });
+    expect(managementCalls).toBe(1);
+    expect(response.statusCode).toBe(200);
+    expect(response.bodies).toHaveLength(1);
+  });
+
+  test('maintenance release failure is terminal INTERNAL_UNAVAILABLE and never starts G08', async () => {
+    const control = makeRuntimeControl();
+    const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
+    let recognitionCalls = 0;
+    const handler = makeHandler(control, {
+      recognition: () => {
+        recognitionCalls += 1;
+        return Promise.resolve({
+          disposition: 'BUSINESS_RESULT_PERSISTED' as const,
+          originalResponse: plans.business.issue(200, { ok: true }),
+          replayResponse: plans.business.issue(200, { ok: true }),
+        });
+      },
+    }, undefined, plans, undefined, () => { throw new Error('reservation release failed'); });
+    const held = control.hold({
+      requestControlId: 'e4e4e4e4-e4e4-44e4-84e4-e4e4e4e4e4e4', epoch: EPOCH, run: RUN, expectedRevision: '0',
+    });
+    const queued = invoke(handler, '/recognition/attempts');
+    await flush();
+    expect(recognitionCalls).toBe(0);
+
+    const terminal = await control.drain({
+      requestControlId: 'e5e5e5e5-e5e5-45e5-85e5-e5e5e5e5e5e5', epoch: EPOCH, run: RUN, expectedRevision: held.revision, timeoutMs: 1,
+    });
+    await flush();
+    expect(terminal).toMatchObject({ outcome: 'INTERNAL_UNAVAILABLE' });
+    expect(control.snapshot()).toMatchObject({ maintenance: { active: true, outcome: 'INTERNAL_UNAVAILABLE' }, issuedPersistence: 0 });
+    expect(recognitionCalls).toBe(0);
+    expect(queued.statusCode).toBe(0);
+    expect(queued.bodies).toHaveLength(0);
   });
 
   test('maintenance preserves EXISTING_ONLY recognition replay and does not invoke a second writer', async () => {

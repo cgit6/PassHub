@@ -114,6 +114,8 @@ export interface RuntimeControl {
   readonly isMaintenanceWriterVeto: () => boolean;
   /** Internal, one-time coordinator wake binding. */
   readonly bindWriterWake: (wake: () => void) => void;
+  /** Internal, one-time settlement binding for READY writers at drain start. */
+  readonly bindMaintenanceReadySettlement: (settle: () => void) => void;
   readonly hold: (request: HoldRequest) => RuntimeControlResult;
   readonly release: (request: ReleaseRequest) => RuntimeControlResult;
   readonly drain: (request: DrainRequest) => Promise<RuntimeControlResult>;
@@ -278,6 +280,8 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
   let activeQueryReads = 0;
   let writerWake: (() => void) | undefined;
   let writerWakeBound = false;
+  let maintenanceReadySettlement: (() => void) | undefined;
+  let maintenanceReadySettlementBound = false;
   let current: MutationRecord | null = null;
   let last: MutationRecord | null = null;
   interface CounterWaiter { readonly wake: () => void; active: boolean; }
@@ -313,6 +317,13 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
     if (typeof wake !== 'function' || writerWakeBound) throw new TypeError('writer wake is invalid or already bound');
     writerWakeBound = true;
     writerWake = wake;
+  };
+  const bindMaintenanceReadySettlement = (settle: () => void): void => {
+    if (typeof settle !== 'function' || maintenanceReadySettlementBound) {
+      throw new TypeError('maintenance ready settlement is invalid or already bound');
+    }
+    maintenanceReadySettlementBound = true;
+    maintenanceReadySettlement = settle;
   };
   const notifyCounterWaiters = (): void => {
     const waiters = [...counterWaiters];
@@ -501,6 +512,16 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
       resolveResult(result);
       try { cleanupAbort?.(); } catch { /* cleanup cannot change the terminal */ }
     };
+    // The maintenance state is visible before the coordinator receives this
+    // synchronous command.  It may only settle READY queue entries; issued
+    // work and validation-in-flight are deliberately outside this A7 seam.
+    try {
+      const settlementResult: unknown = maintenanceReadySettlement?.();
+      if (settlementResult !== undefined) throw new TypeError('maintenance ready settlement must return undefined');
+    } catch {
+      finish('INTERNAL_UNAVAILABLE');
+      return promise;
+    }
     const observe = async (): Promise<void> => {
       try {
         const started = readClock(clockNowMs);
@@ -549,7 +570,7 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
     return promise;
   };
 
-  const control: RuntimeControl = Object.freeze({ snapshot, acquireIssuedPersistence, acquireActiveQueryRead, canStartWriter, isMaintenanceWriterVeto, bindWriterWake, hold, release, drain });
+  const control: RuntimeControl = Object.freeze({ snapshot, acquireIssuedPersistence, acquireActiveQueryRead, canStartWriter, isMaintenanceWriterVeto, bindWriterWake, bindMaintenanceReadySettlement, hold, release, drain });
   controls.set(control as object, state);
   return control;
 

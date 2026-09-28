@@ -294,6 +294,9 @@ export function createG07bAdmissionHandler(
   const writerPermissionBindWake = writerPermission === undefined
     ? undefined
     : captureConstructionMethod(writerPermission, 'bindWriterWake', 'G10a writer permission').bind(writerPermission) as G10aWriterPermissionBinding['bindWriterWake'];
+  const writerPermissionBindMaintenanceReadySettlement = writerPermission === undefined
+    ? undefined
+    : captureConstructionMethod(writerPermission, 'bindMaintenanceReadySettlement', 'G10a writer permission').bind(writerPermission) as G10aWriterPermissionBinding['bindMaintenanceReadySettlement'];
   assertOptions(options, validator, work, validatorValidate, loginWorkMethod, queryWorkMethod, managementWorkMethod, recognitionWorkMethod);
   const validatorIdentity = getQueryAdmissionIdentity(validatorValidate);
   const workIdentity = getQueryAdmissionIdentity(queryWorkMethod);
@@ -324,6 +327,9 @@ export function createG07bAdmissionHandler(
     rateLimited: issueTechnical('RATE_LIMITED'),
     busy: issueTechnical('TECHNICAL_BUSY'),
   });
+  // Identity, rather than an error code string, prevents an ordinary
+  // KNOWN_NO_EFFECT outcome from being rewritten as a maintenance response.
+  const maintenanceReadySettlement = new AdmissionTechnicalError('MAINTENANCE_READY_SETTLED');
   const sendImmediatePlan = (response: NarrowHttpResponse, plan: HttpResponsePlan): void => {
     writeImmediateResponse(response, plan, renderResponsePlan);
   };
@@ -502,6 +508,16 @@ export function createG07bAdmissionHandler(
   });
   writerQuiescence.bindCoordinatorWake(() => wakeCoordinator());
   writerPermissionBindWake?.(() => wakeCoordinator());
+  writerPermissionBindMaintenanceReadySettlement?.(() => {
+    coordinator.settleReadyKnownNoEffect(maintenanceReadySettlement, (value: unknown) => {
+      const input = value as WriterInput;
+      // This is unlike ordinary best-effort cleanup: maintenance cannot claim
+      // DRAINED while its READY reservations remain unreleased.  Let the
+      // failure escape the synchronous callback so RuntimeControl records the
+      // terminal INTERNAL_UNAVAILABLE outcome.
+      if (input.reservation !== null) releaseReservationForMaintenance(input.reservation);
+    });
+  });
   wakeCoordinator = coordinator.wake;
 
   async function executeManagement(
@@ -872,6 +888,13 @@ export function createG07bAdmissionHandler(
         fallbackPlan: technical.unconfirmed,
         deadlineResponse: deadlineObservation.read,
         clock: monotonicClock,
+      });
+      // A7 may settle this exact READY operation before G08 begins.  The
+      // coordinator owns queue removal and lifecycle cleanup; this observer
+      // owns the one HTTP response and deliberately ignores every other
+      // established completion error.
+      void provisional.completion.catch((error: unknown) => {
+        if (error === maintenanceReadySettlement) respond(owner as HttpResponseOwner, technical.busy);
       });
       void validateWriter(
         accepted,
@@ -1299,6 +1322,9 @@ export function createG07bAdmissionHandler(
 
   function safeReleaseReservation(reservation: OperationRegistryReservation): void {
     try { releaseReservation(reservation); } catch { /* fail closed at caller */ }
+  }
+  function releaseReservationForMaintenance(reservation: OperationRegistryReservation): void {
+    releaseReservation(reservation);
   }
   function safeReleaseValidation(lease: ValidationAdmissionLease): void {
     try { releaseValidation(lease); } catch { /* the fixed ledger remains bounded */ }
