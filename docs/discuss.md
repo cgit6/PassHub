@@ -3397,3 +3397,9 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - 測試與證據：正式命令`npm run test:g10a`；unit每case 10秒／total60秒，socket／integration每case60秒／total300秒；精確環境Node 24.21、MongoDB 8.0.32單成員`rs0`。PC先證manual阻全部READY且未預判rate／registry，再release FIFO；eligible ORIGINAL才G08 exact once，rate reject／JOINED／REPLAY／invalid為0，existing-only join／replay不註冊READY且繞過manual。另驗maintenance入口優先、任意層duplicate在JSON.parse前拒絕、frame-vs-JSON noresponse／INVALID_REQUEST分層、requestControlId保留、manual／maintenance exact nested keys／extra拒絕、slow LOGS_READ FD／mutex，以及CLI 8000ms／`timeoutMs+7000ms`邊界與exit3優先序。
 - evidence：private `output/evidence/g10a/<runId>/`保存manifest、results、socket、rotation、control、mongo、secret及cleanup；tracked只留report與safe summaries。正式證據須有clean source hashes，primary failure優先，cleanup不得蓋原錯。G10a通過也不自動升任何136 requirement；B50、E05、L07–L12、L36、E06、M05、M07等仍跨後續gate而維持U。
 - 停止邊界：本決策沒有修改production、tests、scripts或package。下一步只准開始G10a；完成後仍須依25 STOP提交差異及證據，不可連做G10b。
+
+### D185｜G10a 同 UID 檔案命名空間威脅模型裁決
+
+- 日期：2026-09-28；狀態：使用者確認採用。Gate 10 的 runtime log directory、archive rotation、control directory 與 AF_UNIX socket path，將**同一 Unix UID 視為受信任、唯一的服務主體**。系統仍以 owner、exact mode、regular／directory type、non-symlink、realpath、inode recheck 及 fail-closed 做跨 UID 與意外設定防護。
+- 明確限制：Node 的純 pathname API 沒有可供本專案使用的 dirfd-relative `rename`／`unlink`／socket bind 原語；因此不宣稱能抵禦同 UID 惡意程序在 check-to-use 間替換目錄或路徑的競態。此限制適用於日誌 rotation、control socket startup／cleanup 與後續 `LOGS_READ` 檔案快照。
+- 若日後產品需求改為防禦同 UID 對手，必須另立 gate，採 native／privileged trusted helper 或重設計檔案與 socket 擁有權模型；不得把本裁決誤表述為該威脅模型已獲防護。此裁決只解除 A10.4／A11.2 在既定 demo 威脅模型下的架構阻塞，不降低其既有失敗即 degraded／startup fail 的規則。
