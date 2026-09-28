@@ -6,6 +6,7 @@ import {
   type RuntimeControl,
   type RuntimeControlResult,
 } from '../../src/runtime/internal/runtime-control.js';
+import { RuntimeLogSink } from '../../src/runtime/internal/runtime-log-sink.js';
 import * as publicApi from '../../src/index.js';
 import * as publicCompositionApi from '../../src/composition/index.js';
 import { readFileSync } from 'node:fs';
@@ -47,14 +48,14 @@ function drainBase(requestControlId = request, expectedRevision = '0', timeoutMs
 }
 
 describe('G10a A1 runtime identity/control core', () => {
-  test('remains absent from both public barrels and A1 has no later-unit dependencies', () => {
+  test('remains absent from both public barrels and uses only its private runtime log source', () => {
     for (const api of [publicApi, publicCompositionApi]) {
       expect(Object.keys(api).filter((key) => /runtime|control|identity|operationtoken/iu.test(key))).toEqual([]);
     }
     const source = readFileSync('src/runtime/internal/runtime-control.ts', 'utf8');
     const imports = [...source.matchAll(/^import .* from ['"]([^'"]+)['"];$/gmu)].map((match) => match[1]);
-    expect(imports).toEqual(['node:crypto', 'node:util']);
-    expect(source).not.toMatch(/logger|socket|g07|mongodb|infrastructure/iu);
+    expect(imports).toEqual(['node:crypto', 'node:util', './runtime-log-sink.js']);
+    expect(source).not.toMatch(/socket|g07|mongodb|infrastructure/iu);
   });
 
   test('captures identity facts and emits exact frozen snapshot with decimal revision', () => {
@@ -79,6 +80,40 @@ describe('G10a A1 runtime identity/control core', () => {
     expect(Object.keys(snapshot)).toEqual(['epoch', 'run', 'revision', 'phase', 'manual', 'maintenance', 'writers', 'issuedPersistence', 'activeQueryReads', 'registryUnknown', 'logging']);
   });
 
+  test('projects only a trusted log sink health snapshot and fails closed without changing control semantics', () => {
+    let mode: 'VALID' | 'THROW' | 'INVALID' = 'VALID';
+    const sink = new RuntimeLogSink({ write: async () => undefined });
+    Object.defineProperty(sink, 'snapshot', {
+      configurable: true,
+      value: (): unknown => {
+        if (mode === 'THROW') throw new Error('driver detail must not escape');
+        if (mode === 'INVALID') return Object.freeze({ status: 'HEALTHY', droppedCount: -1, waiting: 0, writing: false, closed: false });
+        return Object.freeze({ status: 'HEALTHY', droppedCount: 4, waiting: 0, writing: false, closed: false });
+      },
+    });
+    const issuer = createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run });
+    const control = createRuntimeControl({
+      epoch, run, identityIssuer: issuer, ...runtimeObservation, controlIdFactory: nextControlId, runtimeLogSink: sink,
+    });
+    expect(control.snapshot().logging).toEqual({ status: 'HEALTHY', droppedCount: 4 });
+
+    mode = 'THROW';
+    expect(control.snapshot().logging).toEqual({ status: 'LOGGING_DEGRADED', droppedCount: 4 });
+    expect(control.hold(base()).outcome).toBe('HELD');
+    expect(control.snapshot().logging).toEqual({ status: 'LOGGING_DEGRADED', droppedCount: 4 });
+
+    const invalidSink = new RuntimeLogSink({ write: async () => undefined });
+    Object.defineProperty(invalidSink, 'snapshot', {
+      configurable: true,
+      value: (): unknown => Object.freeze({ status: 'HEALTHY', droppedCount: -1, waiting: 0, writing: false, closed: false }),
+    });
+    const invalidControl = createRuntimeControl({
+      epoch, run, identityIssuer: createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run }),
+      ...runtimeObservation, controlIdFactory: nextControlId, runtimeLogSink: invalidSink,
+    });
+    expect(invalidControl.snapshot().logging).toEqual({ status: 'LOGGING_DEGRADED', droppedCount: 0 });
+  });
+
   test('rejects foreign/forged identity issuer and control capabilities', () => {
     const first = makeControl();
     const foreign = createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run });
@@ -89,6 +124,10 @@ describe('G10a A1 runtime identity/control core', () => {
     expect(() => first.issuer.read(foreignIdentity)).toThrow(TypeError);
     expect(() => assertRuntimeControl(Object.freeze({ snapshot: first.control.snapshot }))).toThrow(TypeError);
     expect(() => createRuntimeControl({ epoch, run, identityIssuer: Object.freeze({}) as never, ...runtimeObservation })).toThrow(TypeError);
+    expect(() => createRuntimeControl({
+      epoch, run, identityIssuer: first.issuer, ...runtimeObservation,
+      runtimeLogSink: Object.freeze({ snapshot: () => ({}) }) as never,
+    })).toThrow('runtime log sink is not trusted');
   });
 
   test('rejects forged, foreign, reused, and cross-route operation tokens and identities', () => {

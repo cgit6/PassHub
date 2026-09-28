@@ -11,6 +11,7 @@ import {
   type AdmissionWorkPort,
 } from '../../src/composition/internal/index.js';
 import { createG10aAdmissionRuntimeComposition } from '../../src/composition/internal/g10a-admission-runtime-composition.js';
+import { RuntimeLogSink } from '../../src/runtime/internal/runtime-log-sink.js';
 import { createLegacyQueryAdmissionCapability } from '../../src/composition/internal/query-admission-binding.js';
 import { createOperationRegistry, createOperationRegistryCapabilityIssuer } from '../../src/access/application/internal/operation-registry.js';
 import type { NarrowHttpResponse } from '../../src/composition/internal/http-response-owner.js';
@@ -185,6 +186,21 @@ describe('G10a A4 admission runtime composition', () => {
       // smuggle a shadow capability through the composition root.
       admission: { ...fixture.admission, writerPermission: undefined } as never,
     })).toThrow('G10a admission options is invalid');
+  });
+
+  test('accepts only a nominal private runtime log sink and projects its health without expanding the handler surface', () => {
+    const fixture = makeComposition();
+    const sink = new RuntimeLogSink({ write: async () => undefined });
+    const composed = createG10aAdmissionRuntimeComposition({
+      epoch: EPOCH, run: RUN, monotonicClock: { nowMs: () => 0 }, awaitObservation: () => undefined,
+      admission: fixture.admission, runtimeLogSink: sink,
+    });
+    expect(composed.control.snapshot().logging).toEqual({ status: 'HEALTHY', droppedCount: 0 });
+    expect(() => createG10aAdmissionRuntimeComposition({
+      epoch: EPOCH, run: RUN, monotonicClock: { nowMs: () => 0 }, awaitObservation: () => undefined,
+      admission: fixture.admission,
+      runtimeLogSink: Object.freeze({ snapshot: () => ({ status: 'HEALTHY', droppedCount: 0 }) }) as never,
+    })).toThrow('runtime log sink is not trusted');
   });
 
   test('rejects accessor-based construction options rather than reading them twice', () => {

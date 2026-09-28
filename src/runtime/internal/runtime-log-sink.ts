@@ -27,6 +27,11 @@ export interface RuntimeLogSinkOptions {
   readonly settleTimeoutMs?: number;
 }
 
+// A sink is an internal capability, not a structural `{ snapshot() }` input.
+// Keeping its provenance in a WeakSet lets composition reject a caller-made
+// lookalike before it can influence the runtime-control status projection.
+const runtimeLogSinks = new WeakSet<object>();
+
 /**
  * Private composition primitive.  `append` never awaits storage and never
  * throws: logging must not change a business/control decision.  The queue
@@ -50,6 +55,7 @@ export class RuntimeLogSink {
       throw new RangeError('settleTimeoutMs');
     }
     this.settleTimeoutMs = timeout;
+    runtimeLogSinks.add(this);
   }
 
   /** Returns false only when the line was deliberately not accepted. */
@@ -193,4 +199,11 @@ export class RuntimeLogSink {
   }
 
   private markDegraded(): void { this.degraded = true; }
+}
+
+/** Internal nominal assertion for the runtime composition boundary. */
+export function assertRuntimeLogSink(value: unknown): asserts value is RuntimeLogSink {
+  if (typeof value !== 'object' || value === null || runtimeLogSinks.has(value) === false) {
+    throw new TypeError('runtime log sink is not trusted');
+  }
 }

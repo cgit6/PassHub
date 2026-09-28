@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { types as nodeTypes } from 'node:util';
+import { assertRuntimeLogSink, type RuntimeLogSink, type RuntimeLogSinkSnapshot } from './runtime-log-sink.js';
 
 export type RuntimeControlPhase =
   | 'RUNNING'
@@ -102,6 +103,8 @@ export interface RuntimeControlOptions {
   readonly clock: RuntimeClock;
   readonly awaitObservation: (remainingMs: number) => PromiseLike<void> | void;
   readonly controlIdFactory?: () => string;
+  /** Optional private best-effort logger; its health can only affect snapshot. */
+  readonly runtimeLogSink?: RuntimeLogSink;
 }
 export interface RuntimeClock { nowMs(): number; }
 export interface RuntimeControl {
@@ -249,7 +252,7 @@ export function assertRuntimeIdentityIssuer(value: unknown): asserts value is Ru
 }
 
 export function createRuntimeControl(options: RuntimeControlOptions): RuntimeControl {
-  const rawOptions = captureRecord(options, ['epoch', 'run', 'identityIssuer', 'clock', 'awaitObservation'], ['controlIdFactory'], 'runtime control options');
+  const rawOptions = captureRecord(options, ['epoch', 'run', 'identityIssuer', 'clock', 'awaitObservation'], ['controlIdFactory', 'runtimeLogSink'], 'runtime control options');
   const capturedOptions = Object.freeze({
     epoch: rawOptions.epoch,
     run: rawOptions.run,
@@ -257,10 +260,12 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
     clock: rawOptions.clock,
     awaitObservation: rawOptions.awaitObservation,
     controlIdFactory: rawOptions.controlIdFactory,
+    runtimeLogSink: rawOptions.runtimeLogSink,
   });
   assertUuid(capturedOptions.epoch, 'epoch');
   assertUuid(capturedOptions.run, 'run');
   assertRuntimeIdentityIssuer(capturedOptions.identityIssuer);
+  if (capturedOptions.runtimeLogSink !== undefined) assertRuntimeLogSink(capturedOptions.runtimeLogSink);
   const issuerState = identityIssuers.get(capturedOptions.identityIssuer as object);
   if (issuerState === undefined || issuerState.epoch !== capturedOptions.epoch || issuerState.run !== capturedOptions.run) {
     throw new TypeError('runtime identity issuer does not match control epoch/run');
@@ -271,6 +276,12 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
   if (nodeTypes.isProxy(capturedOptions.awaitObservation) || typeof capturedOptions.awaitObservation !== 'function') throw new TypeError('runtime observation awaiter is invalid');
   const clockNowMs = captureDataMethod(capturedOptions.clock, 'nowMs', 'runtime clock');
   const awaitObservation = capturedOptions.awaitObservation;
+  // Capture the trusted method once.  A logging source is deliberately
+  // one-way: any later bad snapshot makes only the projected log health
+  // degraded; it can never throw through a control/business decision.
+  const runtimeLogSnapshot = capturedOptions.runtimeLogSink === undefined
+    ? undefined
+    : captureDataMethod(capturedOptions.runtimeLogSink, 'snapshot', 'runtime log sink');
   const state: ControlState = Object.freeze({ epoch: capturedOptions.epoch, run: capturedOptions.run, issuer: issuerState });
   let nextControlId = reserveControlId(factory);
   let factoryFailure: TypeError | null = null;
@@ -280,6 +291,8 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
   let maintenanceOutcome: RuntimeControlSnapshot['maintenance']['outcome'] = null;
   let issuedPersistence = 0;
   let activeQueryReads = 0;
+  let lastKnownLoggingDroppedCount = 0;
+  let loggingSourceDegraded = false;
   let writerWake: (() => void) | undefined;
   let writerWakeBound = false;
   let maintenanceReadySettlement: (() => void) | undefined;
@@ -295,7 +308,7 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
     const manual = Object.freeze({ active: projection.manualControlId !== null, controlId: projection.manualControlId });
     const maintenance = Object.freeze({ active: projection.maintenanceControlId !== null, controlId: projection.maintenanceControlId, outcome: projection.maintenanceOutcome });
     const writers = Object.freeze({ provisional: 0, queued: 0, running: 0, blocked: 0, unknown: 0 });
-    const logging = Object.freeze({ status: 'HEALTHY' as const, droppedCount: 0 });
+    const logging = projectLogging();
     return Object.freeze({
       epoch: state.epoch,
       run: state.run,
@@ -311,6 +324,23 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
     });
   };
   const snapshot = (): RuntimeControlSnapshot => makeSnapshot({ revision, manualControlId, maintenanceControlId, maintenanceOutcome });
+
+  const projectLogging = (): LoggingSnapshot => {
+    if (runtimeLogSnapshot === undefined) {
+      return Object.freeze({ status: 'HEALTHY' as const, droppedCount: 0 });
+    }
+    if (loggingSourceDegraded) {
+      return Object.freeze({ status: 'LOGGING_DEGRADED' as const, droppedCount: lastKnownLoggingDroppedCount });
+    }
+    try {
+      const source = captureRuntimeLogSinkSnapshot(runtimeLogSnapshot());
+      lastKnownLoggingDroppedCount = source.droppedCount;
+      return Object.freeze({ status: source.status, droppedCount: source.droppedCount });
+    } catch {
+      loggingSourceDegraded = true;
+      return Object.freeze({ status: 'LOGGING_DEGRADED' as const, droppedCount: lastKnownLoggingDroppedCount });
+    }
+  };
 
   const canStartWriter = (): boolean => manualControlId === null;
   // Deliberately distinct from canStartWriter: A6 only rejects a *new*
@@ -655,6 +685,24 @@ function captureIdentityInput(input: RuntimeIdentityInput): RuntimeIdentityInput
     return Object.freeze({ requestUUID: record.requestUUID, operationToken: null, operationUUID: null, ownerRef: null, route: record.route as 'QUERY' | 'LOGIN' });
   }
   throw new TypeError('runtime identity route facts are inconsistent');
+}
+
+function captureRuntimeLogSinkSnapshot(value: RuntimeLogSinkSnapshot): Readonly<{
+  readonly status: LoggingSnapshot['status'];
+  readonly droppedCount: number;
+}> {
+  const record = captureRecord(
+    value,
+    ['status', 'droppedCount', 'waiting', 'writing', 'closed'],
+    [],
+    'runtime log sink snapshot',
+  );
+  if (record.status !== 'HEALTHY' && record.status !== 'LOGGING_DEGRADED') throw new TypeError('runtime log sink snapshot is invalid');
+  for (const key of ['droppedCount', 'waiting'] as const) {
+    if (!Number.isSafeInteger(record[key]) || (record[key] as number) < 0) throw new TypeError('runtime log sink snapshot is invalid');
+  }
+  if (typeof record.writing !== 'boolean' || typeof record.closed !== 'boolean') throw new TypeError('runtime log sink snapshot is invalid');
+  return Object.freeze({ status: record.status, droppedCount: record.droppedCount as number });
 }
 
 function assertCapturedKeySet(record: Record<string, any>, expected: readonly string[]): void {

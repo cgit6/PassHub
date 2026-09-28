@@ -12,6 +12,7 @@ import {
   type RuntimeClock,
   type RuntimeControl,
 } from '../../runtime/internal/runtime-control.js';
+import { assertRuntimeLogSink, type RuntimeLogSink } from '../../runtime/internal/runtime-log-sink.js';
 import type { AcceptedIngressHandler } from '../../shared/internal/http/index.js';
 
 /**
@@ -26,6 +27,8 @@ export interface G10aAdmissionRuntimeCompositionOptions {
   readonly awaitObservation: (remainingMs: number) => PromiseLike<void> | void;
   readonly admission: Omit<G07bAdmissionHandlerOptions, 'writerPermission' | 'queryPermission'>;
   readonly controlIdFactory?: () => string;
+  /** Optional, private best-effort logger. It is not an application input. */
+  readonly runtimeLogSink?: RuntimeLogSink;
 }
 
 export interface G10aAdmissionRuntimeComposition {
@@ -71,6 +74,7 @@ export function createG10aAdmissionRuntimeComposition(
     clock: options.monotonicClock,
     awaitObservation: options.awaitObservation,
     ...(options.controlIdFactory === undefined ? {} : { controlIdFactory: options.controlIdFactory }),
+    ...(options.runtimeLogSink === undefined ? {} : { runtimeLogSink: options.runtimeLogSink }),
   });
   const writerPermission = createG10aWriterPermissionBinding(control);
   const queryPermission = createG10aQueryPermissionBinding(control);
@@ -89,11 +93,12 @@ function captureFactoryOptions(input: unknown): Readonly<{
   readonly awaitObservation: (remainingMs: number) => PromiseLike<void> | void;
   readonly admission: Omit<G07bAdmissionHandlerOptions, 'writerPermission' | 'queryPermission'>;
   readonly controlIdFactory: (() => string) | undefined;
+  readonly runtimeLogSink: RuntimeLogSink | undefined;
 }> {
   const record = capturePlainRecord(
     input,
     ['epoch', 'run', 'monotonicClock', 'awaitObservation', 'admission'],
-    ['controlIdFactory'],
+    ['controlIdFactory', 'runtimeLogSink'],
     'G10a admission runtime options',
   );
   return Object.freeze({
@@ -103,7 +108,14 @@ function captureFactoryOptions(input: unknown): Readonly<{
     awaitObservation: record.awaitObservation as (remainingMs: number) => PromiseLike<void> | void,
     admission: captureAdmissionOptions(record.admission),
     controlIdFactory: record.controlIdFactory as (() => string) | undefined,
+    runtimeLogSink: captureRuntimeLogSink(record.runtimeLogSink),
   });
+}
+
+function captureRuntimeLogSink(value: unknown): RuntimeLogSink | undefined {
+  if (value === undefined) return undefined;
+  assertRuntimeLogSink(value);
+  return value;
 }
 
 function captureAdmissionOptions(value: unknown): Omit<G07bAdmissionHandlerOptions, 'writerPermission' | 'queryPermission'> {
