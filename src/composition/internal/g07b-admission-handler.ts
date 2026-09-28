@@ -288,6 +288,9 @@ export function createG07bAdmissionHandler(
   const writerPermissionCanStart = writerPermission === undefined
     ? undefined
     : captureConstructionMethod(writerPermission, 'canStartWriter', 'G10a writer permission').bind(writerPermission) as G10aWriterPermissionBinding['canStartWriter'];
+  const writerPermissionMaintenanceVeto = writerPermission === undefined
+    ? undefined
+    : captureConstructionMethod(writerPermission, 'isMaintenanceWriterVeto', 'G10a writer permission').bind(writerPermission) as G10aWriterPermissionBinding['isMaintenanceWriterVeto'];
   const writerPermissionBindWake = writerPermission === undefined
     ? undefined
     : captureConstructionMethod(writerPermission, 'bindWriterWake', 'G10a writer permission').bind(writerPermission) as G10aWriterPermissionBinding['bindWriterWake'];
@@ -319,6 +322,7 @@ export function createG07bAdmissionHandler(
     canonicalUnconfirmed: issueTechnical('CANONICAL_RESULT_UNCONFIRMED'),
     conflict: issueTechnical('IDEMPOTENCY_CONFLICT'),
     rateLimited: issueTechnical('RATE_LIMITED'),
+    busy: issueTechnical('TECHNICAL_BUSY'),
   });
   const sendImmediatePlan = (response: NarrowHttpResponse, plan: HttpResponsePlan): void => {
     writeImmediateResponse(response, plan, renderResponsePlan);
@@ -782,6 +786,22 @@ export function createG07bAdmissionHandler(
     if (classification.kind === 'INVALID_RETRY_MODE') {
       sendImmediatePlan(response, technical.invalidRetry);
       return;
+    }
+
+    // This is intentionally before epoch, resource, rate, validation and
+    // registry work.  Maintenance only vetoes NEW writers; exact existing-only
+    // recognition, login and query retain their normal read/replay paths.
+    if (isNewWriteRoute(classification.routeId, classification.retryMode)) {
+      let maintenanceVeto: boolean;
+      try {
+        maintenanceVeto = writerPermissionMaintenanceVeto?.() ?? false;
+      } catch {
+        maintenanceVeto = true;
+      }
+      if (maintenanceVeto) {
+        sendImmediatePlan(response, technical.busy);
+        return;
+      }
     }
 
     const epochRejection = checkEpoch(

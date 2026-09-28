@@ -110,6 +110,8 @@ export interface RuntimeControl {
   readonly acquireActiveQueryRead: () => ActiveQueryReadLease;
   /** Internal writer-start gate.  A manual hold only affects work not yet started. */
   readonly canStartWriter: () => boolean;
+  /** Internal ingress gate for new writers while maintenance is active. */
+  readonly isMaintenanceWriterVeto: () => boolean;
   /** Internal, one-time coordinator wake binding. */
   readonly bindWriterWake: (wake: () => void) => void;
   readonly hold: (request: HoldRequest) => RuntimeControlResult;
@@ -303,6 +305,10 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
   const snapshot = (): RuntimeControlSnapshot => makeSnapshot({ revision, manualControlId, maintenanceControlId, maintenanceOutcome });
 
   const canStartWriter = (): boolean => manualControlId === null;
+  // Deliberately distinct from canStartWriter: A6 only rejects a *new*
+  // writer synchronously at ingress.  Previously admitted work is governed by
+  // its existing coordinator lifecycle and is not retroactively cancelled.
+  const isMaintenanceWriterVeto = (): boolean => maintenanceControlId !== null;
   const bindWriterWake = (wake: () => void): void => {
     if (typeof wake !== 'function' || writerWakeBound) throw new TypeError('writer wake is invalid or already bound');
     writerWakeBound = true;
@@ -543,7 +549,7 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
     return promise;
   };
 
-  const control: RuntimeControl = Object.freeze({ snapshot, acquireIssuedPersistence, acquireActiveQueryRead, canStartWriter, bindWriterWake, hold, release, drain });
+  const control: RuntimeControl = Object.freeze({ snapshot, acquireIssuedPersistence, acquireActiveQueryRead, canStartWriter, isMaintenanceWriterVeto, bindWriterWake, hold, release, drain });
   controls.set(control as object, state);
   return control;
 

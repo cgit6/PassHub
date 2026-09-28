@@ -8,6 +8,7 @@ import {
 export interface G10aWriterPermissionBinding {
   acquireIssuedPersistence(): IssuedPersistenceLease;
   canStartWriter(): boolean;
+  isMaintenanceWriterVeto(): boolean;
   bindWriterWake(wake: () => void): void;
 }
 
@@ -15,6 +16,7 @@ interface BindingState {
   readonly control: RuntimeControl;
   readonly acquire: () => IssuedPersistenceLease;
   readonly canStartWriter: () => boolean;
+  readonly isMaintenanceWriterVeto: () => boolean;
   readonly bindWriterWake: (wake: () => void) => void;
 }
 
@@ -25,6 +27,7 @@ export function createG10aWriterPermissionBinding(value: unknown): G10aWriterPer
   const control = value as RuntimeControl;
   const acquire = control.acquireIssuedPersistence.bind(control);
   const canStartWriter = control.canStartWriter.bind(control);
+  const isMaintenanceWriterVeto = control.isMaintenanceWriterVeto.bind(control);
   const bindWriterWake = control.bindWriterWake.bind(control);
   const binding = Object.freeze({
     acquireIssuedPersistence(this: unknown): IssuedPersistenceLease {
@@ -41,6 +44,12 @@ export function createG10aWriterPermissionBinding(value: unknown): G10aWriterPer
       if (state === undefined) throw new TypeError('writer permission binding is foreign');
       return state.canStartWriter();
     },
+    isMaintenanceWriterVeto(this: unknown): boolean {
+      if ((typeof this !== 'object' && typeof this !== 'function') || this === null) throw new TypeError('writer permission binding receiver is invalid');
+      const state = bindingStates.get(this);
+      if (state === undefined) throw new TypeError('writer permission binding is foreign');
+      return state.isMaintenanceWriterVeto();
+    },
     bindWriterWake(this: unknown, wake: () => void): void {
       if ((typeof this !== 'object' && typeof this !== 'function') || this === null) throw new TypeError('writer permission binding receiver is invalid');
       const state = bindingStates.get(this);
@@ -48,7 +57,7 @@ export function createG10aWriterPermissionBinding(value: unknown): G10aWriterPer
       state.bindWriterWake(wake);
     },
   });
-  bindingStates.set(binding, Object.freeze({ control, acquire, canStartWriter, bindWriterWake }));
+  bindingStates.set(binding, Object.freeze({ control, acquire, canStartWriter, isMaintenanceWriterVeto, bindWriterWake }));
   return binding;
 }
 

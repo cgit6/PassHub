@@ -57,6 +57,7 @@ function makeHandler(
   workOverrides: Partial<AdmissionWorkPort>,
   rates?: ReturnType<typeof createConfigurableFixedMinuteRateLedger>,
   plansOverride?: ReturnType<typeof createHttpResponsePlanBundle>,
+  onValidate?: () => void,
 ): ReturnType<typeof createG07bAdmissionHandler> {
   const plans = plansOverride ?? createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
   const handoff = createAdmissionWorkHandoffBundle();
@@ -75,6 +76,7 @@ function makeHandler(
     assertContinuationEvidence: () => undefined,
   });
   const standardValidate = async (input: AdmissionValidationInput): Promise<AdmissionValidationResult> => {
+    onValidate?.();
     if (input.routeId === 'QUALIFICATION_CREATE' || input.routeId === 'QUALIFICATION_UPDATE' || input.routeId === 'QUALIFICATION_REVOKE') {
       return Object.freeze({ kind: 'MANAGEMENT', accountId: 'account-1', workInput: handoff.issuer.issue(input.routeId) });
     }
@@ -403,5 +405,144 @@ describe('G10a A3 eligible-original G07b writer permission seam', () => {
     await flush();
     expect(rateCalls).toBe(1);
     expect(rateControl.snapshot().issuedPersistence).toBe(0);
+  });
+
+  test('maintenance synchronously rejects NEW writers before epoch, validation, rate, registry reservation, or G08 work', async () => {
+    const control = makeRuntimeControl();
+    const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
+    let validationCalls = 0;
+    let managementCalls = 0;
+    let recognitionCalls = 0;
+    const handler = makeHandler(
+      control,
+      {
+        management: () => {
+          managementCalls += 1;
+          return Promise.resolve({ disposition: 'KNOWN_NO_EFFECT', response: plans.technical.issue('INVALID_REQUEST') });
+        },
+        recognition: () => {
+          recognitionCalls += 1;
+          return Promise.resolve({ disposition: 'KNOWN_NO_EFFECT', response: plans.technical.issue('INVALID_REQUEST') });
+        },
+      },
+      undefined,
+      plans,
+      () => { validationCalls += 1; },
+    );
+    const drained = await control.drain({
+      requestControlId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', epoch: EPOCH, run: RUN, expectedRevision: '0', timeoutMs: 1,
+    });
+    expect(drained.outcome).toBe('DRAINED');
+
+    // An invalid epoch proves the maintenance veto is earlier than epoch
+    // checking; neither route reaches any admission dependency.
+    const management = new FakeResponse();
+    handler(
+      Object.freeze({ method: 'POST', body: null, query: [], headers: { datasetEpoch: RUN } }),
+      { originalUrl: '/qualifications', url: '/qualifications', socket: { remoteAddress: '127.0.0.1' } } as never,
+      management as never,
+      (() => undefined) as never,
+    );
+    const recognition = invoke(handler, '/recognition/attempts');
+    await flush();
+
+    for (const response of [management, recognition]) {
+      expect(response.statusCode).toBe(503);
+      expect(JSON.parse(response.bodies[0] as string)).toMatchObject({ code: 'TECHNICAL_BUSY', currentDatasetEpoch: EPOCH });
+    }
+    expect(validationCalls).toBe(0);
+    expect(managementCalls).toBe(0);
+    expect(recognitionCalls).toBe(0);
+    expect(control.snapshot()).toMatchObject({ maintenance: { active: true, outcome: 'DRAINED' }, issuedPersistence: 0 });
+
+    // Reads and login are deliberately outside the new-writer veto.  This
+    // fixture rejects them in validation, but they must not be rewritten as a
+    // maintenance 503 and must reach the established non-writer path.
+    const query = invoke(handler, '/qualifications', undefined, 'GET');
+    const login = invoke(handler, '/auth/login');
+    await flush();
+    expect(query.statusCode).not.toBe(503);
+    expect(login.statusCode).not.toBe(503);
+    expect(validationCalls).toBe(2);
+  });
+
+  test('maintenance WAITING vetoes new management and recognition before every admission dependency', async () => {
+    const control = makeRuntimeControl();
+    const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
+    const lease = control.acquireIssuedPersistence();
+    const drain = control.drain({
+      requestControlId: 'e1e1e1e1-e1e1-41e1-81e1-e1e1e1e1e1e1', epoch: EPOCH, run: RUN, expectedRevision: '0', timeoutMs: 1_000,
+    });
+    await flush();
+    expect(control.snapshot()).toMatchObject({ maintenance: { active: true, outcome: 'WAITING' }, issuedPersistence: 1 });
+
+    let validationCalls = 0;
+    let managementCalls = 0;
+    let recognitionCalls = 0;
+    const rates = lowRecognitionRates();
+    const handler = makeHandler(control, {
+      management: () => {
+        managementCalls += 1;
+        return Promise.resolve({ disposition: 'KNOWN_NO_EFFECT', response: plans.technical.issue('INVALID_REQUEST') });
+      },
+      recognition: () => {
+        recognitionCalls += 1;
+        return Promise.resolve({ disposition: 'KNOWN_NO_EFFECT', response: plans.technical.issue('INVALID_REQUEST') });
+      },
+    }, rates, plans, () => { validationCalls += 1; });
+
+    // Invalid epochs make the ordering observable: a maintenance 503 proves
+    // neither request got as far as epoch, validation, rate, registry, G08,
+    // reservation, or an issued lease.
+    const management = new FakeResponse();
+    handler(
+      Object.freeze({ method: 'POST', body: null, query: [], headers: { datasetEpoch: RUN } }),
+      { originalUrl: '/qualifications', url: '/qualifications', socket: { remoteAddress: '127.0.0.1' } } as never,
+      management as never,
+      (() => undefined) as never,
+    );
+    const recognition = invoke(handler, '/recognition/attempts');
+    await flush();
+    for (const response of [management, recognition]) {
+      expect(response.statusCode).toBe(503);
+      expect(JSON.parse(response.bodies[0] as string)).toMatchObject({ code: 'TECHNICAL_BUSY', currentDatasetEpoch: EPOCH });
+    }
+    expect(validationCalls).toBe(0);
+    expect(managementCalls).toBe(0);
+    expect(recognitionCalls).toBe(0);
+    expect(control.snapshot().issuedPersistence).toBe(1);
+
+    lease.release();
+    await expect(drain).resolves.toMatchObject({ outcome: 'DRAINED', snapshot: { maintenance: { active: true, outcome: 'DRAINED' } } });
+  });
+
+  test('maintenance preserves EXISTING_ONLY recognition replay and does not invoke a second writer', async () => {
+    const control = makeRuntimeControl();
+    const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
+    let recognitionCalls = 0;
+    const handler = makeHandler(control, {
+      recognition: () => {
+        recognitionCalls += 1;
+        return Promise.resolve({
+          disposition: 'BUSINESS_RESULT_PERSISTED' as const,
+          originalResponse: plans.business.issue(200, { ok: true }),
+          replayResponse: plans.business.issue(200, { ok: true }),
+        });
+      },
+    }, undefined, plans);
+    invoke(handler, '/recognition/attempts');
+    await flush();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await flush();
+    expect(recognitionCalls).toBe(1);
+
+    await control.drain({
+      requestControlId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', epoch: EPOCH, run: RUN, expectedRevision: '0', timeoutMs: 1,
+    });
+    const replay = invoke(handler, '/recognition/attempts', 'existing-only');
+    await flush();
+    expect(replay.statusCode).toBe(200);
+    expect(recognitionCalls).toBe(1);
+    expect(control.snapshot()).toMatchObject({ maintenance: { active: true, outcome: 'DRAINED' }, issuedPersistence: 0 });
   });
 });
