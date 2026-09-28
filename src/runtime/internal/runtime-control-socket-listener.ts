@@ -58,7 +58,9 @@ export async function createRuntimeControlSocketListener(
   await removeOnlyVerifiedStaleSocket(prepared.socketPath);
 
   const handler = captured.onConnection ?? ((socket: Socket): void => { socket.destroy(); });
-  const server = createServer((socket) => {
+  // The protocol is half-close based: a peer's EOF completes its one request,
+  // but the server must still be able to write the one response afterwards.
+  const server = createServer({ allowHalfOpen: true }, (socket) => {
     try {
       handler(socket);
     } catch {
