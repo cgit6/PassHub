@@ -28,6 +28,30 @@ export interface RuntimeLogFileStoreBundle {
   readonly store: RuntimeLogFileStore | null;
 }
 
+/** Internal, already-decoded LOGS_READ input; the control wire is elsewhere. */
+export interface RuntimeLogReadOptions {
+  readonly operationUUID: string;
+  readonly limit?: number;
+  readonly signal?: AbortSignal;
+}
+
+export interface RuntimeLogReadResult {
+  readonly records: readonly ReturnType<typeof validateRuntimeLogRecord>[];
+  readonly truncated: boolean;
+}
+
+/** The control adapter maps this closed failure to LOG_READ_UNAVAILABLE. */
+export class RuntimeLogReadError extends Error {
+  readonly code = 'LOG_READ_UNAVAILABLE' as const;
+  constructor() { super('runtime log read is unavailable'); this.name = 'RuntimeLogReadError'; }
+}
+
+/** Kept separate so a watchdog can suppress its late response. */
+export class RuntimeLogReadAbortedError extends Error {
+  readonly code = 'ABORTED' as const;
+  constructor() { super('runtime log read was aborted'); this.name = 'RuntimeLogReadAbortedError'; }
+}
+
 /**
  * Initializes the closed five-file ring.  All startup faults become a
  * nominal, permanently degraded sink: logs are best effort and cannot alter
@@ -46,45 +70,96 @@ export async function createRuntimeLogFileStore(options: RuntimeLogFileStoreOpti
 }
 
 export class RuntimeLogFileStore implements RuntimeLogDriver {
-  private tail: Promise<void> = Promise.resolve();
+  private readonly mutex = new AbortableMutex();
   private failed = false;
 
   constructor(readonly directory: string) {}
 
   async write(line: string): Promise<void> {
     if (this.failed) throw new Error('runtime log file store is unavailable');
-    // The sink serializes calls too; retaining a store mutex makes the file
-    // boundary correct even if a future internal sink replacement changes.
-    const operation = this.tail.then(async () => {
+    const release = await this.mutex.acquire();
+    try {
       // A preceding queued callback may have failed after this caller entered
       // `write`.  Re-check inside the serialized callback: a B queued behind
       // failed A must never touch the filesystem.
       if (this.failed) throw new Error('runtime log file store is unavailable');
-      try {
-        await this.appendLine(line);
-      } catch (error) {
-        this.failed = true;
-        throw error;
-      }
-    });
-    this.tail = operation.catch(() => undefined);
-    try {
-      await operation;
+      await this.appendLine(line);
     } catch (error) {
       this.failed = true;
       throw error;
+    } finally {
+      release();
     }
   }
 
   async validateStartup(): Promise<void> {
-    for (const path of this.pathsOldestToActive()) await validateExistingLogFile(path, true);
-    if (await exists(this.activePath())) return;
-    const handle = await open(this.activePath(), 'wx', FILE_MODE);
+    // Initialization mutates the active path when it is missing and validates
+    // the five-file ring.  It must therefore share the exact writer/read
+    // snapshot mutex: a direct caller cannot race startup against append,
+    // rotation, or a snapshot acquisition.
+    const release = await this.mutex.acquire();
     try {
-      await handle.chmod(FILE_MODE);
-      await assertOpenFileMatchesPath(this.activePath(), handle);
+      for (const path of this.pathsOldestToActive()) await validateExistingLogFile(path, true);
+      if (await exists(this.activePath())) return;
+      const handle = await open(this.activePath(), 'wx', FILE_MODE);
+      try {
+        await handle.chmod(FILE_MODE);
+        await assertOpenFileMatchesPath(this.activePath(), handle);
+      } finally {
+        await handle.close();
+      }
     } finally {
-      await handle.close();
+      release();
+    }
+  }
+
+  /**
+   * Captures all five log FDs under the writer/rotation mutex, then performs
+   * potentially slow reads without holding it.  A rename or delete after the
+   * snapshot cannot change the already-open inode or its captured length.
+   */
+  async readOperation(options: RuntimeLogReadOptions): Promise<RuntimeLogReadResult> {
+    const captured = captureReadOptions(options);
+    const snapshots: LogSnapshot[] = [];
+    let release: (() => void) | undefined;
+    let primaryError: unknown;
+    try {
+      release = await this.mutex.acquire(captured.signal);
+      try {
+        throwIfAborted(captured.signal);
+        for (const [index, path] of this.pathsOldestToActive().entries()) {
+          const optionalArchive = index !== RUNTIME_LOG_ARCHIVE_COUNT;
+          const snapshot = await openReadSnapshot(path, optionalArchive);
+          if (snapshot !== undefined) snapshots.push(snapshot);
+        }
+      } finally {
+        release();
+        release = undefined;
+      }
+
+      const selected: ReturnType<typeof validateRuntimeLogRecord>[] = [];
+      let matchingCount = 0;
+      for (const snapshot of snapshots) {
+        throwIfAborted(captured.signal);
+        const records = await readSnapshotRecords(snapshot, captured.signal);
+        for (const record of records) {
+          if (record.operationUUID !== captured.operationUUID) continue;
+          matchingCount += 1;
+          if (selected.length === captured.limit) selected.shift();
+          selected.push(record);
+        }
+      }
+      return Object.freeze({ records: Object.freeze(selected), truncated: matchingCount > captured.limit });
+    } catch (error) {
+      primaryError = error instanceof RuntimeLogReadAbortedError ? error : new RuntimeLogReadError();
+      throw primaryError;
+    } finally {
+      if (release !== undefined) release();
+      const closeFailures = await Promise.all(snapshots.map(async (snapshot) => snapshot.handle.close().then(() => false, () => true)));
+      // A close error is an I/O failure too.  Do not conceal it after an
+      // otherwise successful read, but preserve an earlier abort/parse error
+      // as the primary reason for failure.
+      if (primaryError === undefined && closeFailures.some(Boolean)) throw new RuntimeLogReadError();
     }
   }
 
@@ -381,6 +456,148 @@ function validateRuntimeLogLine(input: unknown): Buffer {
     return bytes;
   } catch {
     throw new TypeError('invalid runtime log line');
+  }
+}
+
+const canonicalUuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const READ_CHUNK_BYTES = 64 * 1024;
+
+interface CapturedReadOptions {
+  readonly operationUUID: string;
+  readonly limit: number;
+  readonly signal: AbortSignal | undefined;
+}
+
+interface LogSnapshot {
+  readonly handle: FileHandle;
+  readonly length: number;
+}
+
+function captureReadOptions(input: unknown): CapturedReadOptions {
+  if (typeof input !== 'object' || input === null || nodeTypes.isProxy(input) || Object.getPrototypeOf(input) !== Object.prototype) throw new TypeError('runtime log read options');
+  const descriptors = Object.getOwnPropertyDescriptors(input);
+  const own = Reflect.ownKeys(input);
+  if (own.some((key) => key !== 'operationUUID' && key !== 'limit' && key !== 'signal') || !Object.hasOwn(descriptors, 'operationUUID')) throw new TypeError('runtime log read options');
+  for (const key of own) {
+    const descriptor = descriptors[key as keyof typeof descriptors];
+    if (descriptor === undefined || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) throw new TypeError('runtime log read options');
+  }
+  const operationUUID = descriptors.operationUUID?.value;
+  const limitValue = descriptors.limit?.value;
+  const signal = descriptors.signal?.value;
+  if (typeof operationUUID !== 'string' || !canonicalUuidPattern.test(operationUUID)) throw new TypeError('runtime log operation UUID');
+  const limit = limitValue === undefined ? 20 : limitValue;
+  if (!Number.isSafeInteger(limit) || (limit as number) < 1 || (limit as number) > 100) throw new RangeError('runtime log read limit');
+  if (signal !== undefined && !(signal instanceof AbortSignal)) throw new TypeError('runtime log read signal');
+  return Object.freeze({ operationUUID, limit: limit as number, signal: signal as AbortSignal | undefined });
+}
+
+async function openReadSnapshot(path: string, optional: boolean): Promise<LogSnapshot | undefined> {
+  let listed: Stats;
+  try {
+    listed = await lstat(path);
+  } catch (error) {
+    if (optional && isEnoent(error)) return undefined;
+    throw error;
+  }
+  assertSecureRegular(listed);
+  if (listed.size > RUNTIME_LOG_FILE_MAX_BYTES) throw new Error('runtime log file is oversized');
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    await assertOpenFileMatchesPath(path, handle, listed);
+    const opened = await handle.stat();
+    assertSecureRegular(opened);
+    if (opened.dev !== listed.dev || opened.ino !== listed.ino || opened.size !== listed.size || opened.size > RUNTIME_LOG_FILE_MAX_BYTES) {
+      throw new Error('runtime log file changed while snapshotting');
+    }
+    return Object.freeze({ handle, length: opened.size });
+  } catch (error) {
+    await handle?.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+async function readSnapshotRecords(snapshot: LogSnapshot, signal: AbortSignal | undefined): Promise<readonly ReturnType<typeof validateRuntimeLogRecord>[]> {
+  const bytes = Buffer.allocUnsafe(snapshot.length);
+  let offset = 0;
+  while (offset < bytes.length) {
+    throwIfAborted(signal);
+    const size = Math.min(READ_CHUNK_BYTES, bytes.length - offset);
+    const result = await snapshot.handle.read(bytes, offset, size, offset);
+    throwIfAborted(signal);
+    if (!Number.isSafeInteger(result.bytesRead) || result.bytesRead <= 0) throw new Error('runtime log snapshot became short');
+    offset += result.bytesRead;
+  }
+  return parseRuntimeLogRecords(bytes);
+}
+
+function parseRuntimeLogRecords(bytes: Buffer): readonly ReturnType<typeof validateRuntimeLogRecord>[] {
+  if (bytes.length === 0) return Object.freeze([]);
+  const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+  if (!text.endsWith('\n')) throw new Error('truncated runtime log');
+  const records: ReturnType<typeof validateRuntimeLogRecord>[] = [];
+  for (const line of text.slice(0, -1).split('\n')) {
+    const strictLine = `${line}\n`;
+    validateRuntimeLogLine(strictLine);
+    // validateRuntimeLogLine verifies duplicate keys before JSON.parse.  Keep
+    // the canonical validated record rather than returning the parsed graph.
+    records.push(validateRuntimeLogRecord(JSON.parse(line)));
+  }
+  return Object.freeze(records);
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) throw new RuntimeLogReadAbortedError();
+}
+
+type MutexWaiter = {
+  readonly resolve: (release: () => void) => void;
+  readonly reject: (reason: unknown) => void;
+  readonly signal: AbortSignal | undefined;
+  readonly onAbort: () => void;
+};
+
+/** FIFO async mutex with cancellable waiters; never exported from the adapter. */
+class AbortableMutex {
+  private locked = false;
+  private readonly waiters: MutexWaiter[] = [];
+
+  acquire(signal?: AbortSignal): Promise<() => void> {
+    throwIfAborted(signal);
+    if (!this.locked) {
+      this.locked = true;
+      return Promise.resolve(this.releaseOnce());
+    }
+    return new Promise<() => void>((resolve, reject) => {
+      let waiter: MutexWaiter;
+      const onAbort = (): void => {
+        const index = this.waiters.indexOf(waiter);
+        if (index >= 0) this.waiters.splice(index, 1);
+        reject(new RuntimeLogReadAbortedError());
+      };
+      waiter = { resolve, reject, signal, onAbort };
+      this.waiters.push(waiter);
+      signal?.addEventListener('abort', onAbort, { once: true });
+      // A signal can abort between the first check and listener registration.
+      if (signal?.aborted === true) onAbort();
+    });
+  }
+
+  private releaseOnce(): () => void {
+    let released = false;
+    return (): void => {
+      if (released) return;
+      released = true;
+      for (;;) {
+        const next = this.waiters.shift();
+        if (next === undefined) { this.locked = false; return; }
+        next.signal?.removeEventListener('abort', next.onAbort);
+        if (next.signal?.aborted === true) { next.reject(new RuntimeLogReadAbortedError()); continue; }
+        next.resolve(this.releaseOnce());
+        return;
+      }
+    };
   }
 }
 
