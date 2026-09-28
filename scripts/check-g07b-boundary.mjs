@@ -37,9 +37,18 @@ const manifest = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf
 if (Object.keys(manifest.exports ?? {}).some((key) => /internal|g07b|admission/iu.test(key))) violations.push('package exports an internal/G07b subpath');
 async function walk(dir) { const out = []; for (const entry of await readdir(dir, { withFileTypes: true })) { const file = path.join(dir, entry.name); if (entry.isDirectory()) out.push(...await walk(file)); else if (entry.isFile() && file.endsWith('.ts')) out.push(file); } return out; }
 const all = await walk(path.join(root, 'src'));
-const serverOwners = [];
-for (const file of all) if (/\bcreateServer\s*\(/u.test(await readFile(file, 'utf8'))) serverOwners.push(path.relative(root, file));
-if (serverOwners.length !== 1 || serverOwners[0] !== 'src/composition/internal/http-application.ts') violations.push(`single server violated: ${serverOwners.join(',')}`);
-console.log(`G07b boundary files=${selected.length} edges=${edges} servers=${serverOwners.length} publicLeaks=${publicLeaks} forbidden=${violations.length}`);
+const serverEntries = await Promise.all(all.map(async (file) => ({ file: path.relative(root, file), source: await readFile(file, 'utf8') })));
+const createServerOwners = serverEntries.filter(({ source }) => /\bcreateServer\s*\(/u.test(source));
+const httpServerOwners = createServerOwners.filter(({ source }) => /from\s+['"]node:http['"]/u.test(source));
+const netServerOwners = createServerOwners.filter(({ source }) => /from\s+['"]node:net['"]/u.test(source));
+const runtimeControlSocketListener = 'src/runtime/internal/runtime-control-socket-listener.ts';
+if (httpServerOwners.length !== 1 || httpServerOwners[0]?.file !== 'src/composition/internal/http-application.ts') {
+  violations.push(`single HTTP server violated: ${httpServerOwners.map(({ file }) => file).join(',')}`);
+}
+if (netServerOwners.some(({ file }) => file !== runtimeControlSocketListener)
+  || createServerOwners.some(({ source }) => !/from\s+['"]node:(?:http|net)['"]/u.test(source))) {
+  violations.push(`unexpected server owner: ${createServerOwners.map(({ file }) => file).join(',')}`);
+}
+console.log(`G07b boundary files=${selected.length} edges=${edges} httpServers=${httpServerOwners.length} netServers=${netServerOwners.length} publicLeaks=${publicLeaks} forbidden=${violations.length}`);
 for (const violation of violations) console.error(`boundary violation: ${violation}`);
 if (selected.length !== 8 || violations.length > 0) process.exitCode = 1;

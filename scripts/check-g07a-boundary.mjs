@@ -48,13 +48,24 @@ const allSourceEntries = await Promise.all(allSourceFiles.map(async (file) => ({
   file,
   source: await readFile(file, 'utf8'),
 })));
+// This gate owns *HTTP* server construction, rather than outlawing a later
+// private AF_UNIX control listener.  Keep both dimensions explicit: exactly
+// one node:http owner, and any node:net createServer is allowed only in the
+// private runtime adapter (which remains outside the HTTP ingress graph).
 const createServerOwners = allSourceEntries.filter(({ source }) => /\bcreateServer\s*\(/u.test(source));
+const httpCreateServerOwners = createServerOwners.filter(({ source }) => /from\s+['"]node:http['"]/u.test(source));
+const netCreateServerOwners = createServerOwners.filter(({ source }) => /from\s+['"]node:net['"]/u.test(source));
+const runtimeControlSocketListener = path.join(root, 'src', 'runtime', 'internal', 'runtime-control-socket-listener.ts');
 const listenOwners = allSourceEntries.filter(({ source }) => /\.listen\s*\(/u.test(source));
-if (createServerOwners.length !== 1 || createServerOwners[0]?.file !== httpComposition) {
-  violations.push(`Node HTTP server ownership is not unique: ${createServerOwners.map(({ file }) => path.relative(root, file)).join(', ')}`);
+if (httpCreateServerOwners.length !== 1 || httpCreateServerOwners[0]?.file !== httpComposition) {
+  violations.push(`Node HTTP server ownership is not unique: ${httpCreateServerOwners.map(({ file }) => path.relative(root, file)).join(', ')}`);
 }
-if (listenOwners.length !== 0) {
-  violations.push(`production starts a server directly: ${listenOwners.map(({ file }) => path.relative(root, file)).join(', ')}`);
+if (netCreateServerOwners.some(({ file }) => file !== runtimeControlSocketListener)
+  || createServerOwners.some(({ source }) => !/from\s+['"]node:(?:http|net)['"]/u.test(source))) {
+  violations.push(`unexpected non-HTTP server owner: ${createServerOwners.map(({ file }) => path.relative(root, file)).join(', ')}`);
+}
+if (listenOwners.some(({ file }) => file !== runtimeControlSocketListener)) {
+  violations.push(`production starts a server directly outside private control adapter: ${listenOwners.map(({ file }) => path.relative(root, file)).join(', ')}`);
 }
 
 const compositionSource = await readFile(httpComposition, 'utf8');
@@ -127,7 +138,7 @@ for (const { file, source } of allSourceEntries) {
 }
 
 console.log(
-  `G07a boundary files=${selected.length} edges=${edges} createServers=${createServerOwners.length} directListens=${listenOwners.length} g07b=${g07bViolations} publicLeaks=${publicLeaks} forbidden=${violations.length}`,
+  `G07a boundary files=${selected.length} edges=${edges} httpCreateServers=${httpCreateServerOwners.length} netCreateServers=${netCreateServerOwners.length} directListens=${listenOwners.length} g07b=${g07bViolations} publicLeaks=${publicLeaks} forbidden=${violations.length}`,
 );
 for (const violation of violations) console.error(`boundary violation: ${violation}`);
 if (selected.length !== 4 || violations.length > 0) process.exitCode = 1;
