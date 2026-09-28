@@ -68,6 +68,10 @@ import {
 } from './http-response-plan.js';
 import { getQueryAdmissionIdentity } from './query-admission-binding.js';
 import {
+  assertG10aWriterPermissionBinding,
+  type G10aWriterPermissionBinding,
+} from './g10a-writer-permission-binding.js';
+import {
   captureConstructionMethod,
   captureOptionalConstructionProperty,
   captureConstructionProperty,
@@ -186,6 +190,8 @@ export interface G07bAdmissionHandlerOptions {
   readonly rates?: FixedMinuteRateLedger;
   /** Shared with the G09a query composition when supplied. */
   readonly writerQuiescence?: WriterQuiescencePort;
+  /** Internal G10a bridge; absent preserves the pre-A3 admission harness. */
+  readonly writerPermission?: unknown;
 }
 
 interface WriterInput {
@@ -274,6 +280,11 @@ export function createG07bAdmissionHandler(
   const responsePlanRenderer = renderer as HttpResponseOwnerOptions['responsePlanRenderer'];
   const wallClockNow = options.wallClock === undefined ? undefined : captureConstructionMethod(options.wallClock, 'nowMs', 'G07b wall clock');
   const monotonicClockNow = options.monotonicClock === undefined ? undefined : captureConstructionMethod(options.monotonicClock, 'nowMs', 'G07b monotonic clock');
+  const writerPermission = options.writerPermission;
+  if (writerPermission !== undefined) assertG10aWriterPermissionBinding(writerPermission);
+  const writerPermissionAcquire = writerPermission === undefined
+    ? undefined
+    : captureConstructionMethod(writerPermission, 'acquireIssuedPersistence', 'G10a writer permission').bind(writerPermission) as G10aWriterPermissionBinding['acquireIssuedPersistence'];
   assertOptions(options, validator, work, validatorValidate, loginWorkMethod, queryWorkMethod, managementWorkMethod, recognitionWorkMethod);
   const validatorIdentity = getQueryAdmissionIdentity(validatorValidate);
   const workIdentity = getQueryAdmissionIdentity(queryWorkMethod);
@@ -421,6 +432,17 @@ export function createG07bAdmissionHandler(
     }
   };
 
+  const invokeG08WriterWork = <T>(operation: () => Promise<T>): Promise<T> => {
+    if (writerPermissionAcquire === undefined) return invokeNativePromise(operation);
+    const lease = writerPermissionAcquire();
+    try {
+      return invokeNativePromise(operation).finally(() => lease.release());
+    } catch (error) {
+      try { lease.release(); } catch { /* preserve the original synchronous boundary */ }
+      throw error;
+    }
+  };
+
   let wakeCoordinator = (): void => undefined;
   const lifecycleObserver = Object.freeze({
     registered: writerQuiescence.lifecycle.registered.bind(writerQuiescence.lifecycle),
@@ -494,7 +516,7 @@ export function createG07bAdmissionHandler(
       return;
     }
     try {
-      const outcome = await invokeNativePromise(
+      const outcome = await invokeG08WriterWork(
         () => managementWork(input.workInput, workContext(context)),
       );
       settleWriterOutcome(input.owner, settlement, outcome);
@@ -599,7 +621,7 @@ export function createG07bAdmissionHandler(
     let outcome: AdmissionRecognitionWriterOutcome;
     try {
       outcome = sanitizeRecognitionWriterOutcome(
-        await invokeNativePromise(() => recognitionWork(input.workInput, workContext(context))),
+        await invokeG08WriterWork(() => recognitionWork(input.workInput, workContext(context))),
         renderResponsePlan,
       );
     } catch {
@@ -1575,6 +1597,7 @@ function captureOptions(options: G07bAdmissionHandlerOptions): G07bAdmissionHand
     resources: captureOptionalConstructionProperty(options, 'resources', 'G07b options'),
     rates: captureOptionalConstructionProperty(options, 'rates', 'G07b options'),
     writerQuiescence: captureOptionalConstructionProperty(options, 'writerQuiescence', 'G07b options'),
+    writerPermission: captureOptionalConstructionProperty(options, 'writerPermission', 'G07b options'),
   }) as G07bAdmissionHandlerOptions;
 }
 
