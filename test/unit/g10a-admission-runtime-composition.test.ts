@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 
 import {
   createAdmissionWorkHandoffBundle,
+  createAdmissionResourceLedger,
   createConfigurableFixedMinuteRateLedger,
   createHttpResponsePlanBundle,
   createUnknownRecognitionCoordinatorBundle,
@@ -37,7 +38,10 @@ async function flush(): Promise<void> {
   await Promise.resolve();
 }
 
-function makeComposition(workOverride?: Partial<AdmissionWorkPort>) {
+function makeComposition(
+  workOverride?: Partial<AdmissionWorkPort>,
+  validateOverride?: (input: AdmissionValidationInput) => Promise<AdmissionValidationResult>,
+) {
   const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
   const handoff = createAdmissionWorkHandoffBundle();
   const capabilities = createOperationRegistryCapabilityIssuer({
@@ -53,15 +57,35 @@ function makeComposition(workOverride?: Partial<AdmissionWorkPort>) {
     assertOwnerCurrent: () => undefined,
     assertContinuationEvidence: () => undefined,
   });
-  const validate = async (input: AdmissionValidationInput): Promise<AdmissionValidationResult> => {
+  let validationCalls = 0;
+  const defaultValidate = async (input: AdmissionValidationInput): Promise<AdmissionValidationResult> => {
+    validationCalls += 1;
     if (input.routeId === 'QUALIFICATION_CREATE') {
       return Object.freeze({ kind: 'MANAGEMENT', accountId: 'operator-1', workInput: handoff.issuer.issue(input.routeId) });
     }
+    if (input.routeId === 'QUALIFICATION_LIST') {
+      return Object.freeze({ kind: 'QUERY', accountId: 'viewer-1', workInput: handoff.issuer.issue(input.routeId) });
+    }
     return Object.freeze({ kind: 'REJECTED', response: plans.technical.issue('INVALID_REQUEST') });
   };
+  const validate = validateOverride === undefined
+    ? defaultValidate
+    : async (input: AdmissionValidationInput): Promise<AdmissionValidationResult> => {
+      validationCalls += 1;
+      return validateOverride(input);
+    };
+  const queryDelegate = workOverride?.query
+    ?? (() => Promise.resolve(plans.business.issue(200, { ok: true })));
   const query = createLegacyQueryAdmissionCapability({
     validate,
-    query: () => Promise.resolve(plans.business.issue(200, { ok: true })),
+    query: queryDelegate,
+  });
+  const resources = createAdmissionResourceLedger();
+  const rates = createConfigurableFixedMinuteRateLedger({ clock: { nowMs: () => 0 } }, {
+    login: { perKey: 10, global: 10, maxKeys: 2 },
+    query: { perKey: 10, global: 10 },
+    recognition: { perKey: 10, global: 10 },
+    management: { perKey: 10, global: 10 },
   });
   const defaults: AdmissionWorkPort = {
     login: () => Promise.resolve(plans.business.issue(200, { ok: true })),
@@ -76,17 +100,18 @@ function makeComposition(workOverride?: Partial<AdmissionWorkPort>) {
     responsePlans: plans,
     workHandoff: handoff,
     validator: query.validator,
-    work: { ...defaults, ...workOverride },
+    // Query provenance is nominal: overrides must be wrapped before G07 sees
+    // them, rather than replacing the trusted capability method afterward.
+    work: { ...defaults, ...workOverride, query: query.work.query },
     unknownRecognition: createUnknownRecognitionCoordinatorBundle().handler,
-    rates: createConfigurableFixedMinuteRateLedger({ clock: { nowMs: () => 0 } }, {
-      login: { perKey: 10, global: 10, maxKeys: 2 },
-      query: { perKey: 10, global: 10 },
-      recognition: { perKey: 10, global: 10 },
-      management: { perKey: 10, global: 10 },
-    }),
+    resources,
+    rates,
   };
   return {
     plans,
+    resources,
+    rates,
+    validationCalls: () => validationCalls,
     admission,
     composition: createG10aAdmissionRuntimeComposition({
       epoch: EPOCH,
@@ -105,6 +130,17 @@ function invoke(handler: ReturnType<typeof createG10aAdmissionRuntimeComposition
     new FakeResponse() as never,
     (() => undefined) as never,
   );
+}
+
+function invokeQuery(handler: ReturnType<typeof createG10aAdmissionRuntimeComposition>['handler']): FakeResponse {
+  const response = new FakeResponse();
+  handler(
+    Object.freeze({ method: 'GET', body: null, query: [], headers: { datasetEpoch: EPOCH } }),
+    { originalUrl: '/qualifications', url: '/qualifications', socket: { remoteAddress: '127.0.0.1' } } as never,
+    response as never,
+    (() => undefined) as never,
+  );
+  return response;
 }
 
 describe('G10a A4 admission runtime composition', () => {
@@ -199,5 +235,108 @@ describe('G10a A4 admission runtime composition', () => {
         admission: shadow as never,
       })).toThrow('G10a admission options is invalid');
     }
+  });
+
+  test('injects a private query permission, counts the native query work, and drain waits for it', async () => {
+    const pending = deferred<unknown>();
+    const fixture = makeComposition({ query: () => pending.promise as never });
+
+    invokeQuery(fixture.composition.handler);
+    await flush();
+    expect(fixture.composition.control.snapshot().activeQueryReads).toBe(1);
+
+    const drain = fixture.composition.control.drain({
+      epoch: EPOCH,
+      run: RUN,
+      requestControlId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      expectedRevision: '0',
+      timeoutMs: 1_000,
+    });
+    await flush();
+    expect(fixture.composition.control.snapshot().maintenance.active).toBe(true);
+
+    pending.resolve(fixture.plans.business.issue(200, { ok: true }));
+    await expect(drain).resolves.toMatchObject({ outcome: 'DRAINED' });
+    expect(fixture.composition.control.snapshot().activeQueryReads).toBe(0);
+  });
+
+  test('drain does not wait for validation already in flight, but a later query work lease is vetoed', async () => {
+    const validation = deferred<AdmissionValidationResult>();
+    let workCalls = 0;
+    const fixture = makeComposition({ query: () => {
+      workCalls += 1;
+      return Promise.resolve(fixture.plans.business.issue(200, { ok: true }));
+    } }, () => validation.promise);
+
+    const response = invokeQuery(fixture.composition.handler);
+    await flush();
+    expect(fixture.composition.control.snapshot().activeQueryReads).toBe(0);
+    await expect(fixture.composition.control.drain({
+      epoch: EPOCH,
+      run: RUN,
+      requestControlId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      expectedRevision: '0',
+      timeoutMs: 1_000,
+    })).resolves.toMatchObject({ outcome: 'DRAINED' });
+
+    validation.resolve(Object.freeze({ kind: 'QUERY', accountId: 'viewer-1', workInput: fixture.admission.workHandoff.issuer.issue('QUALIFICATION_LIST') }));
+    await flush();
+    expect(fixture.composition.control.snapshot().activeQueryReads).toBe(0);
+    expect(workCalls).toBe(0);
+    expect(response.statusCode).toBe(503);
+    expect(fixture.rates.snapshot().query.globalCount).toBe(0);
+    expect(fixture.resources.snapshot().queryDb.used).toBe(0);
+  });
+
+  test('maintenance rejects a new query before query work and caller query permission cannot shadow the private binding', async () => {
+    let calls = 0;
+    const fixture = makeComposition({ query: () => { calls += 1; return Promise.resolve(fixture.plans.business.issue(200, { ok: true })); } });
+    await expect(fixture.composition.control.drain({
+      epoch: EPOCH,
+      run: RUN,
+      requestControlId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      expectedRevision: '0',
+      timeoutMs: 1_000,
+    })).resolves.toMatchObject({ outcome: 'DRAINED' });
+    const response = invokeQuery(fixture.composition.handler);
+    await flush();
+    expect(calls).toBe(0);
+    expect(response.statusCode).toBe(503);
+    expect(fixture.validationCalls()).toBe(0);
+    expect(fixture.rates.snapshot().query.globalCount).toBe(0);
+    expect(fixture.resources.snapshot().queryDb.used).toBe(0);
+
+    expect(() => createG10aAdmissionRuntimeComposition({
+      epoch: EPOCH, run: RUN, monotonicClock: { nowMs: () => 0 }, awaitObservation: () => undefined,
+      admission: { ...fixture.admission, queryPermission: undefined } as never,
+    })).toThrow('G10a admission options is invalid');
+  });
+
+  test('releases the query lease after database exhaustion, synchronous throw, rejection, and rate rejection', async () => {
+    const databaseExhausted = makeComposition();
+    const heldDb = databaseExhausted.resources.ancillary.queryDb.tryAcquire();
+    expect(heldDb).not.toBeNull();
+    invokeQuery(databaseExhausted.composition.handler);
+    await flush();
+    expect(databaseExhausted.composition.control.snapshot().activeQueryReads).toBe(0);
+    databaseExhausted.resources.ancillary.queryDb.release(heldDb!);
+
+    const synchronousThrow = makeComposition({ query: () => { throw new Error('sync'); } });
+    invokeQuery(synchronousThrow.composition.handler);
+    await flush();
+    expect(synchronousThrow.composition.control.snapshot().activeQueryReads).toBe(0);
+
+    const rejected = makeComposition({ query: () => Promise.reject(new Error('reject')) as never });
+    invokeQuery(rejected.composition.handler);
+    await flush();
+    expect(rejected.composition.control.snapshot().activeQueryReads).toBe(0);
+
+    const rateLimited = makeComposition();
+    for (let index = 0; index < 11; index += 1) {
+      invokeQuery(rateLimited.composition.handler);
+      await flush();
+    }
+    expect(rateLimited.rates.snapshot().query.globalCount).toBe(10);
+    expect(rateLimited.composition.control.snapshot().activeQueryReads).toBe(0);
   });
 });

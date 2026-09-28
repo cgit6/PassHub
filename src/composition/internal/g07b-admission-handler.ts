@@ -72,6 +72,10 @@ import {
   type G10aWriterPermissionBinding,
 } from './g10a-writer-permission-binding.js';
 import {
+  assertG10aQueryPermissionBinding,
+  type G10aQueryPermissionBinding,
+} from './g10a-query-permission-binding.js';
+import {
   captureConstructionMethod,
   captureOptionalConstructionProperty,
   captureConstructionProperty,
@@ -192,6 +196,8 @@ export interface G07bAdmissionHandlerOptions {
   readonly writerQuiescence?: WriterQuiescencePort;
   /** Internal G10a bridge; absent preserves the pre-A3 admission harness. */
   readonly writerPermission?: unknown;
+  /** Internal G10a bridge; absent preserves the pre-A9 query harness. */
+  readonly queryPermission?: unknown;
 }
 
 interface WriterInput {
@@ -300,6 +306,14 @@ export function createG07bAdmissionHandler(
   const writerPermissionBindMaintenanceValidationCancellation = writerPermission === undefined
     ? undefined
     : captureConstructionMethod(writerPermission, 'bindMaintenanceValidationCancellation', 'G10a writer permission').bind(writerPermission) as G10aWriterPermissionBinding['bindMaintenanceValidationCancellation'];
+  const queryPermission = options.queryPermission;
+  if (queryPermission !== undefined) assertG10aQueryPermissionBinding(queryPermission);
+  const queryPermissionAcquire = queryPermission === undefined
+    ? undefined
+    : captureConstructionMethod(queryPermission, 'acquireActiveQueryRead', 'G10a query permission').bind(queryPermission) as G10aQueryPermissionBinding['acquireActiveQueryRead'];
+  const queryPermissionMaintenanceVeto = queryPermission === undefined
+    ? undefined
+    : captureConstructionMethod(queryPermission, 'isMaintenanceQueryVeto', 'G10a query permission').bind(queryPermission) as G10aQueryPermissionBinding['isMaintenanceQueryVeto'];
   assertOptions(options, validator, work, validatorValidate, loginWorkMethod, queryWorkMethod, managementWorkMethod, recognitionWorkMethod);
   const validatorIdentity = getQueryAdmissionIdentity(validatorValidate);
   const workIdentity = getQueryAdmissionIdentity(queryWorkMethod);
@@ -1178,6 +1192,19 @@ export function createG07bAdmissionHandler(
     owner: HttpResponseOwner,
     validationLease: ValidationAdmissionLease,
   ): Promise<void> {
+    try {
+      // This is a pure current-state check. It deliberately does not join the
+      // drain: validation in flight is not a query read.
+      if (queryPermissionMaintenanceVeto?.() === true) {
+        safeReleaseValidation(validationLease);
+        respond(owner, technical.busy);
+        return;
+      }
+    } catch {
+      safeReleaseValidation(validationLease);
+      respond(owner, technical.busy);
+      return;
+    }
     let validation: CanonicalAdmissionValidationResult;
     try {
       validation = sanitizeValidationResult(
@@ -1203,6 +1230,20 @@ export function createG07bAdmissionHandler(
       return;
     }
     try {
+      // Validation may have started before maintenance. Its successful result
+      // is nevertheless new query work, so no rate/DB side effect may follow
+      // without a second pure current-state check.
+      if (queryPermissionMaintenanceVeto?.() === true) {
+        safeReleaseValidation(validationLease);
+        respond(owner, technical.busy);
+        return;
+      }
+    } catch {
+      safeReleaseValidation(validationLease);
+      respond(owner, technical.busy);
+      return;
+    }
+    try {
       if (allowQuery(validation.accountId).kind === 'RATE_LIMITED') {
         safeReleaseValidation(validationLease);
         respond(owner, technical.rateLimited);
@@ -1219,11 +1260,24 @@ export function createG07bAdmissionHandler(
       respond(owner, technical.unavailable);
       return;
     }
+    let queryLease: ReturnType<G10aQueryPermissionBinding['acquireActiveQueryRead']> | undefined;
     try {
-      respond(owner, await invokeNativePromise(() => queryWork(validation.workInput)));
+      // The counter begins at the exact native work invocation seam; drain
+      // waits on database/query work, not authentication or validation.
+      queryLease = queryPermissionAcquire?.();
+    } catch {
+      safeReleaseAncillary(releaseQueryDb, queryDb);
+      safeReleaseValidation(validationLease);
+      respond(owner, technical.busy);
+      return;
+    }
+    try {
+      const queryPromise = invokeNativePromise(() => queryWork(validation.workInput));
+      respond(owner, await queryPromise);
     } catch {
       respond(owner, technical.unconfirmed);
     } finally {
+      if (queryLease !== undefined) safeReleaseQueryLease(queryLease);
       safeReleaseAncillary(releaseQueryDb, queryDb);
       safeReleaseValidation(validationLease);
     }
@@ -1382,6 +1436,11 @@ export function createG07bAdmissionHandler(
     lease: AncillaryAdmissionLease,
   ): void {
     try { release(lease); } catch { /* the fixed ledger remains bounded */ }
+  }
+  function safeReleaseQueryLease(
+    lease: ReturnType<G10aQueryPermissionBinding['acquireActiveQueryRead']>,
+  ): void {
+    try { lease.release(); } catch { /* query admission remains fail-closed */ }
   }
 
   return handler;
@@ -1682,6 +1741,7 @@ function captureOptions(options: G07bAdmissionHandlerOptions): G07bAdmissionHand
     rates: captureOptionalConstructionProperty(options, 'rates', 'G07b options'),
     writerQuiescence: captureOptionalConstructionProperty(options, 'writerQuiescence', 'G07b options'),
     writerPermission: captureOptionalConstructionProperty(options, 'writerPermission', 'G07b options'),
+    queryPermission: captureOptionalConstructionProperty(options, 'queryPermission', 'G07b options'),
   }) as G07bAdmissionHandlerOptions;
 }
 

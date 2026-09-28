@@ -5,6 +5,7 @@ import {
   type G07bAdmissionHandlerOptions,
 } from './g07b-admission-handler.js';
 import { createG10aWriterPermissionBinding } from './g10a-writer-permission-binding.js';
+import { createG10aQueryPermissionBinding } from './g10a-query-permission-binding.js';
 import {
   createRuntimeControl,
   createRuntimeIdentityIssuer,
@@ -23,7 +24,7 @@ export interface G10aAdmissionRuntimeCompositionOptions {
   readonly run: string;
   readonly monotonicClock: RuntimeClock;
   readonly awaitObservation: (remainingMs: number) => PromiseLike<void> | void;
-  readonly admission: Omit<G07bAdmissionHandlerOptions, 'writerPermission'>;
+  readonly admission: Omit<G07bAdmissionHandlerOptions, 'writerPermission' | 'queryPermission'>;
   readonly controlIdFactory?: () => string;
 }
 
@@ -72,9 +73,11 @@ export function createG10aAdmissionRuntimeComposition(
     ...(options.controlIdFactory === undefined ? {} : { controlIdFactory: options.controlIdFactory }),
   });
   const writerPermission = createG10aWriterPermissionBinding(control);
+  const queryPermission = createG10aQueryPermissionBinding(control);
   const handler = createG07bAdmissionHandler({
     ...options.admission,
     writerPermission,
+    queryPermission,
   });
   return Object.freeze({ handler, control });
 }
@@ -84,7 +87,7 @@ function captureFactoryOptions(input: unknown): Readonly<{
   readonly run: string;
   readonly monotonicClock: RuntimeClock;
   readonly awaitObservation: (remainingMs: number) => PromiseLike<void> | void;
-  readonly admission: Omit<G07bAdmissionHandlerOptions, 'writerPermission'>;
+  readonly admission: Omit<G07bAdmissionHandlerOptions, 'writerPermission' | 'queryPermission'>;
   readonly controlIdFactory: (() => string) | undefined;
 }> {
   const record = capturePlainRecord(
@@ -103,7 +106,7 @@ function captureFactoryOptions(input: unknown): Readonly<{
   });
 }
 
-function captureAdmissionOptions(value: unknown): Omit<G07bAdmissionHandlerOptions, 'writerPermission'> {
+function captureAdmissionOptions(value: unknown): Omit<G07bAdmissionHandlerOptions, 'writerPermission' | 'queryPermission'> {
   const record = capturePlainRecord(value, ADMISSION_REQUIRED, ADMISSION_OPTIONAL, 'G10a admission options');
   return Object.freeze({
     currentDatasetEpoch: record.currentDatasetEpoch,
@@ -119,7 +122,7 @@ function captureAdmissionOptions(value: unknown): Omit<G07bAdmissionHandlerOptio
     ...(Object.hasOwn(record, 'resources') ? { resources: record.resources } : {}),
     ...(Object.hasOwn(record, 'rates') ? { rates: record.rates } : {}),
     ...(Object.hasOwn(record, 'writerQuiescence') ? { writerQuiescence: record.writerQuiescence } : {}),
-  }) as Omit<G07bAdmissionHandlerOptions, 'writerPermission'>;
+  }) as Omit<G07bAdmissionHandlerOptions, 'writerPermission' | 'queryPermission'>;
 }
 
 function capturePlainRecord(
