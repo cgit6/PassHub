@@ -163,4 +163,41 @@ describe('G10a A4 admission runtime composition', () => {
       admission: admission as never,
     })).toThrow('G10a admission options is invalid');
   });
+
+  test('rejects proxy and accessor construction envelopes before a handler can be built', () => {
+    const fixture = makeComposition();
+    const rootProxy = new Proxy({
+      epoch: EPOCH, run: RUN, monotonicClock: { nowMs: () => 0 }, awaitObservation: () => undefined,
+      admission: fixture.admission,
+    }, {});
+    expect(() => createG10aAdmissionRuntimeComposition(rootProxy as never)).toThrow('G10a admission runtime options is invalid');
+
+    const admissionProxy = new Proxy({ ...fixture.admission }, {});
+    expect(() => createG10aAdmissionRuntimeComposition({
+      epoch: EPOCH, run: RUN, monotonicClock: { nowMs: () => 0 }, awaitObservation: () => undefined,
+      admission: admissionProxy as never,
+    })).toThrow('G10a admission options is invalid');
+
+    const rootAccessor = {
+      epoch: EPOCH, run: RUN, monotonicClock: { nowMs: () => 0 }, admission: fixture.admission,
+      get awaitObservation(): () => void { return () => undefined; },
+    };
+    expect(() => createG10aAdmissionRuntimeComposition(rootAccessor as never)).toThrow('G10a admission runtime options is invalid');
+  });
+
+  test('rejects every writer permission shadow shape before it reaches G07b', () => {
+    const fixture = makeComposition();
+    const accessorShadow = { ...fixture.admission } as Record<string, unknown>;
+    Object.defineProperty(accessorShadow, 'writerPermission', {
+      enumerable: true,
+      get(): unknown { throw new Error('must not be read'); },
+    });
+    const dataShadow = { ...fixture.admission, writerPermission: Object.freeze({}) };
+    for (const shadow of [dataShadow, accessorShadow]) {
+      expect(() => createG10aAdmissionRuntimeComposition({
+        epoch: EPOCH, run: RUN, monotonicClock: { nowMs: () => 0 }, awaitObservation: () => undefined,
+        admission: shadow as never,
+      })).toThrow('G10a admission options is invalid');
+    }
+  });
 });
