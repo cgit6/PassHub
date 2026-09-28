@@ -118,6 +118,13 @@ export interface WriteOperationProvisional<TInput, TResult> {
   readonly completion: Promise<TResult>;
   activate(validatedInput: TInput): void;
   rejectBeforeStart(error: unknown): void;
+  /**
+   * Returns a one-shot maintenance marker set only while this operation was
+   * awaiting validation.  It deliberately does not cancel validation itself.
+   */
+  consumeMaintenanceValidationCancellation(): boolean;
+  /** Finalize a marked, successfully validated operation without writer work. */
+  settleMaintenanceKnownNoEffect(error: unknown): void;
 }
 
 export interface WriteOperationCoordinatorBundle<
@@ -141,6 +148,8 @@ export interface WriteOperationCoordinatorBundle<
    * still-queued work; it never touches validation-in-flight or running work.
    */
   settleReadyKnownNoEffect(error: unknown, beforeFinalize?: (input: unknown) => void): void;
+  /** Mark only operations that were already awaiting validation. */
+  markWaitingValidationMaintenanceCanceled(): void;
 }
 
 type Candidate =
@@ -166,6 +175,7 @@ interface Operation {
   validationState: 'WAITING_VALIDATION' | 'READY' | 'REJECTED';
   input: unknown;
   prestartError: unknown;
+  maintenanceValidationCanceled: boolean;
 }
 
 const allowedKinds = new Set<WriteOperationKind>([
@@ -513,6 +523,7 @@ export function createWriteOperationCoordinatorBundle<
       finalized: false,
       validationState: 'WAITING_VALIDATION',
       prestartError: undefined,
+      maintenanceValidationCanceled: false,
     };
     queue.push(operation);
     issuedOperationIds.add(operationId);
@@ -555,6 +566,24 @@ export function createWriteOperationCoordinatorBundle<
         }
         queue.splice(position, 1);
         finalize(operation, { kind: 'PRESTART_REJECTED', error });
+        const head = queue[0];
+        if (!blocked && head?.validationState === 'READY') scheduleDrain();
+      },
+      consumeMaintenanceValidationCancellation(): boolean {
+        if (!operation.maintenanceValidationCanceled) return false;
+        operation.maintenanceValidationCanceled = false;
+        return true;
+      },
+      settleMaintenanceKnownNoEffect(error: unknown): void {
+        if (decided) throw new Error('provisional write operation was already decided');
+        if (error === undefined || error === null) throw new TypeError('maintenance settlement requires an error');
+        decided = true;
+        const position = queue.indexOf(operation);
+        if (position < 0 || operation.finalized || operation.validationState !== 'WAITING_VALIDATION') {
+          throw new Error('provisional write operation is no longer awaiting validation');
+        }
+        queue.splice(position, 1);
+        finalizeMaintenanceKnownNoEffect(operation, error);
         const head = queue[0];
         if (!blocked && head?.validationState === 'READY') scheduleDrain();
       },
@@ -635,6 +664,18 @@ export function createWriteOperationCoordinatorBundle<
         if (position < 0 || operation.finalized || operation.validationState !== 'READY') continue;
         queue.splice(position, 1);
         finalizeMaintenanceKnownNoEffect(operation, error);
+      }
+    },
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
+  Object.defineProperty(bundleChannels, 'markWaitingValidationMaintenanceCanceled', {
+    value: (): void => {
+      for (const operation of queue) {
+        if (!operation.finalized && operation.validationState === 'WAITING_VALIDATION') {
+          operation.maintenanceValidationCanceled = true;
+        }
       }
     },
     enumerable: false,

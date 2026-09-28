@@ -11,6 +11,7 @@ export interface G10aWriterPermissionBinding {
   isMaintenanceWriterVeto(): boolean;
   bindWriterWake(wake: () => void): void;
   bindMaintenanceReadySettlement(settle: () => void): void;
+  bindMaintenanceValidationCancellation(mark: () => void): void;
 }
 
 interface BindingState {
@@ -20,6 +21,7 @@ interface BindingState {
   readonly isMaintenanceWriterVeto: () => boolean;
   readonly bindWriterWake: (wake: () => void) => void;
   readonly bindMaintenanceReadySettlement: (settle: () => void) => void;
+  readonly bindMaintenanceValidationCancellation: (mark: () => void) => void;
 }
 
 const bindingStates = new WeakMap<object, BindingState>();
@@ -32,6 +34,7 @@ export function createG10aWriterPermissionBinding(value: unknown): G10aWriterPer
   const isMaintenanceWriterVeto = control.isMaintenanceWriterVeto.bind(control);
   const bindWriterWake = control.bindWriterWake.bind(control);
   const bindMaintenanceReadySettlement = control.bindMaintenanceReadySettlement.bind(control);
+  const bindMaintenanceValidationCancellation = control.bindMaintenanceValidationCancellation.bind(control);
   const binding = Object.freeze({
     acquireIssuedPersistence(this: unknown): IssuedPersistenceLease {
       if ((typeof this !== 'object' && typeof this !== 'function') || this === null) {
@@ -65,8 +68,14 @@ export function createG10aWriterPermissionBinding(value: unknown): G10aWriterPer
       if (state === undefined) throw new TypeError('writer permission binding is foreign');
       state.bindMaintenanceReadySettlement(settle);
     },
+    bindMaintenanceValidationCancellation(this: unknown, mark: () => void): void {
+      if ((typeof this !== 'object' && typeof this !== 'function') || this === null) throw new TypeError('writer permission binding receiver is invalid');
+      const state = bindingStates.get(this);
+      if (state === undefined) throw new TypeError('writer permission binding is foreign');
+      state.bindMaintenanceValidationCancellation(mark);
+    },
   });
-  bindingStates.set(binding, Object.freeze({ control, acquire, canStartWriter, isMaintenanceWriterVeto, bindWriterWake, bindMaintenanceReadySettlement }));
+  bindingStates.set(binding, Object.freeze({ control, acquire, canStartWriter, isMaintenanceWriterVeto, bindWriterWake, bindMaintenanceReadySettlement, bindMaintenanceValidationCancellation }));
   return binding;
 }
 

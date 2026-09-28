@@ -297,6 +297,9 @@ export function createG07bAdmissionHandler(
   const writerPermissionBindMaintenanceReadySettlement = writerPermission === undefined
     ? undefined
     : captureConstructionMethod(writerPermission, 'bindMaintenanceReadySettlement', 'G10a writer permission').bind(writerPermission) as G10aWriterPermissionBinding['bindMaintenanceReadySettlement'];
+  const writerPermissionBindMaintenanceValidationCancellation = writerPermission === undefined
+    ? undefined
+    : captureConstructionMethod(writerPermission, 'bindMaintenanceValidationCancellation', 'G10a writer permission').bind(writerPermission) as G10aWriterPermissionBinding['bindMaintenanceValidationCancellation'];
   assertOptions(options, validator, work, validatorValidate, loginWorkMethod, queryWorkMethod, managementWorkMethod, recognitionWorkMethod);
   const validatorIdentity = getQueryAdmissionIdentity(validatorValidate);
   const workIdentity = getQueryAdmissionIdentity(queryWorkMethod);
@@ -330,6 +333,7 @@ export function createG07bAdmissionHandler(
   // Identity, rather than an error code string, prevents an ordinary
   // KNOWN_NO_EFFECT outcome from being rewritten as a maintenance response.
   const maintenanceReadySettlement = new AdmissionTechnicalError('MAINTENANCE_READY_SETTLED');
+  const maintenanceValidationSettlement = new AdmissionTechnicalError('MAINTENANCE_VALIDATION_SETTLED');
   const sendImmediatePlan = (response: NarrowHttpResponse, plan: HttpResponsePlan): void => {
     writeImmediateResponse(response, plan, renderResponsePlan);
   };
@@ -517,6 +521,9 @@ export function createG07bAdmissionHandler(
       // terminal INTERNAL_UNAVAILABLE outcome.
       if (input.reservation !== null) releaseReservationForMaintenance(input.reservation);
     });
+  });
+  writerPermissionBindMaintenanceValidationCancellation?.(() => {
+    coordinator.markWaitingValidationMaintenanceCanceled();
   });
   wakeCoordinator = coordinator.wake;
 
@@ -894,7 +901,9 @@ export function createG07bAdmissionHandler(
       // owns the one HTTP response and deliberately ignores every other
       // established completion error.
       void provisional.completion.catch((error: unknown) => {
-        if (error === maintenanceReadySettlement) respond(owner as HttpResponseOwner, technical.busy);
+        if (error === maintenanceReadySettlement || error === maintenanceValidationSettlement) {
+          respond(owner as HttpResponseOwner, technical.busy);
+        }
       });
       void validateWriter(
         accepted,
@@ -958,6 +967,28 @@ export function createG07bAdmissionHandler(
       respond(owner, validation.response);
       safeRejectProvisional(provisional, 'VALIDATION_REJECTED');
       void provisional.completion.catch(() => undefined);
+      return;
+    }
+
+    // A8 intentionally checks this only after a *valid* validator result.
+    // A normal validator rejection retains its ordinary response.  The marker
+    // is set synchronously by maintenance but it neither aborts validation nor
+    // participates in drain observation.  It is consumed exactly once before
+    // constructing WriterInput, registry/rate work, or G08 issuance.
+    if (provisional.consumeMaintenanceValidationCancellation()) {
+      try {
+        if (reservation !== null) releaseReservationForMaintenance(reservation);
+        provisional.settleMaintenanceKnownNoEffect(maintenanceValidationSettlement);
+        void provisional.completion.catch(() => undefined);
+      } catch {
+        // The drain result may already be DRAINED and must remain immutable.
+        // This request, however, cannot claim maintenance success when its
+        // mandatory reservation cleanup failed, so fail closed as internal.
+        if (reservation !== null) safeReleaseReservation(reservation);
+        respond(owner, technical.unavailable);
+        safeRejectProvisional(provisional, 'MAINTENANCE_VALIDATION_CLEANUP_FAILED');
+        void provisional.completion.catch(() => undefined);
+      }
       return;
     }
 

@@ -116,6 +116,8 @@ export interface RuntimeControl {
   readonly bindWriterWake: (wake: () => void) => void;
   /** Internal, one-time settlement binding for READY writers at drain start. */
   readonly bindMaintenanceReadySettlement: (settle: () => void) => void;
+  /** Internal, one-time marker binding for validation already in flight. */
+  readonly bindMaintenanceValidationCancellation: (mark: () => void) => void;
   readonly hold: (request: HoldRequest) => RuntimeControlResult;
   readonly release: (request: ReleaseRequest) => RuntimeControlResult;
   readonly drain: (request: DrainRequest) => Promise<RuntimeControlResult>;
@@ -282,6 +284,8 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
   let writerWakeBound = false;
   let maintenanceReadySettlement: (() => void) | undefined;
   let maintenanceReadySettlementBound = false;
+  let maintenanceValidationCancellation: (() => void) | undefined;
+  let maintenanceValidationCancellationBound = false;
   let current: MutationRecord | null = null;
   let last: MutationRecord | null = null;
   interface CounterWaiter { readonly wake: () => void; active: boolean; }
@@ -324,6 +328,13 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
     }
     maintenanceReadySettlementBound = true;
     maintenanceReadySettlement = settle;
+  };
+  const bindMaintenanceValidationCancellation = (mark: () => void): void => {
+    if (typeof mark !== 'function' || maintenanceValidationCancellationBound) {
+      throw new TypeError('maintenance validation cancellation is invalid or already bound');
+    }
+    maintenanceValidationCancellationBound = true;
+    maintenanceValidationCancellation = mark;
   };
   const notifyCounterWaiters = (): void => {
     const waiters = [...counterWaiters];
@@ -512,10 +523,13 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
       resolveResult(result);
       try { cleanupAbort?.(); } catch { /* cleanup cannot change the terminal */ }
     };
-    // The maintenance state is visible before the coordinator receives this
-    // synchronous command.  It may only settle READY queue entries; issued
-    // work and validation-in-flight are deliberately outside this A7 seam.
+    // The maintenance state is visible before the coordinator receives these
+    // synchronous commands.  Validation already in flight is only *marked*;
+    // its eventual cleanup is not part of this drain observation and must
+    // never rewrite this terminal result.  READY work is then settled.
     try {
+      const markerResult: unknown = maintenanceValidationCancellation?.();
+      if (markerResult !== undefined) throw new TypeError('maintenance validation cancellation must return undefined');
       const settlementResult: unknown = maintenanceReadySettlement?.();
       if (settlementResult !== undefined) throw new TypeError('maintenance ready settlement must return undefined');
     } catch {
@@ -570,7 +584,7 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
     return promise;
   };
 
-  const control: RuntimeControl = Object.freeze({ snapshot, acquireIssuedPersistence, acquireActiveQueryRead, canStartWriter, isMaintenanceWriterVeto, bindWriterWake, bindMaintenanceReadySettlement, hold, release, drain });
+  const control: RuntimeControl = Object.freeze({ snapshot, acquireIssuedPersistence, acquireActiveQueryRead, canStartWriter, isMaintenanceWriterVeto, bindWriterWake, bindMaintenanceReadySettlement, bindMaintenanceValidationCancellation, hold, release, drain });
   controls.set(control as object, state);
   return control;
 

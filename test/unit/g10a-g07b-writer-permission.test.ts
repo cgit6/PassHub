@@ -59,6 +59,8 @@ function makeHandler(
   plansOverride?: ReturnType<typeof createHttpResponsePlanBundle>,
   onValidate?: () => void,
   releaseReservationOverride?: () => void,
+  validationGate?: Promise<void>,
+  validationOverride?: (input: AdmissionValidationInput) => Promise<AdmissionValidationResult>,
 ): ReturnType<typeof createG07bAdmissionHandler> {
   const plans = plansOverride ?? createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
   const handoff = createAdmissionWorkHandoffBundle();
@@ -84,6 +86,8 @@ function makeHandler(
     : Object.freeze({ ...registry, releaseReservation: releaseReservationOverride }) as typeof registry;
   const standardValidate = async (input: AdmissionValidationInput): Promise<AdmissionValidationResult> => {
     onValidate?.();
+    if (validationGate !== undefined) await validationGate;
+    if (validationOverride !== undefined) return validationOverride(input);
     if (input.routeId === 'QUALIFICATION_CREATE' || input.routeId === 'QUALIFICATION_UPDATE' || input.routeId === 'QUALIFICATION_REVOKE') {
       return Object.freeze({ kind: 'MANAGEMENT', accountId: 'account-1', workInput: handoff.issuer.issue(input.routeId) });
     }
@@ -565,6 +569,89 @@ describe('G10a A3 eligible-original G07b writer permission seam', () => {
     expect(managementCalls).toBe(0);
     expect(recognitionCalls).toBe(0);
     expect(control.snapshot()).toMatchObject({ maintenance: { active: true, outcome: 'DRAINED' }, issuedPersistence: 0 });
+  });
+
+  test('maintenance marks a valid validation-in-flight recognition, drains without waiting, then returns safe 503 before registry, rate, or G08', async () => {
+    const control = makeRuntimeControl();
+    const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
+    const validation = deferred<void>();
+    let validationCalls = 0;
+    let recognitionCalls = 0;
+    const handler = makeHandler(control, {
+      recognition: () => {
+        recognitionCalls += 1;
+        return Promise.resolve({
+          disposition: 'BUSINESS_RESULT_PERSISTED' as const,
+          originalResponse: plans.business.issue(200, { ok: true }),
+          replayResponse: plans.business.issue(200, { ok: true }),
+        });
+      },
+    }, undefined, plans, () => { validationCalls += 1; }, undefined, validation.promise);
+
+    const response = invoke(handler, '/recognition/attempts');
+    await flush();
+    expect(validationCalls).toBe(1);
+    expect(recognitionCalls).toBe(0);
+    expect(control.snapshot().issuedPersistence).toBe(0);
+
+    const terminal = await control.drain({
+      requestControlId: 'e6e6e6e6-e6e6-46e6-86e6-e6e6e6e6e6e6', epoch: EPOCH, run: RUN, expectedRevision: '0', timeoutMs: 1,
+    });
+    expect(terminal).toMatchObject({ outcome: 'DRAINED', snapshot: { maintenance: { outcome: 'DRAINED' } } });
+
+    validation.resolve();
+    await flush();
+    expect(response.statusCode).toBe(503);
+    expect(JSON.parse(response.bodies[0] as string)).toMatchObject({ code: 'TECHNICAL_BUSY' });
+    expect(recognitionCalls).toBe(0);
+    expect(control.snapshot()).toMatchObject({ maintenance: { outcome: 'DRAINED' }, issuedPersistence: 0 });
+  });
+
+  test('a marked validator rejection keeps its ordinary validation response rather than becoming a maintenance 503', async () => {
+    const control = makeRuntimeControl();
+    const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
+    const validation = deferred<void>();
+    let recognitionCalls = 0;
+    const handler = makeHandler(control, {
+      recognition: () => { recognitionCalls += 1; return Promise.reject(new Error('must not run')); },
+    }, undefined, plans, undefined, undefined, validation.promise, async () => Object.freeze({
+      kind: 'REJECTED' as const,
+      response: plans.technical.issue('INVALID_REQUEST'),
+    }));
+    const response = invoke(handler, '/recognition/attempts');
+    await flush();
+    await control.drain({
+      requestControlId: 'e7e7e7e7-e7e7-47e7-87e7-e7e7e7e7e7e7', epoch: EPOCH, run: RUN, expectedRevision: '0', timeoutMs: 1,
+    });
+    validation.resolve();
+    await flush();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await flush();
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.bodies[0] as string)).toMatchObject({ code: 'INVALID_REQUEST' });
+    expect(recognitionCalls).toBe(0);
+  });
+
+  test('late strict reservation cleanup failure cannot rewrite DRAINED and fails its validation request closed as internal', async () => {
+    const control = makeRuntimeControl();
+    const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
+    const validation = deferred<void>();
+    let recognitionCalls = 0;
+    const handler = makeHandler(control, {
+      recognition: () => { recognitionCalls += 1; return Promise.reject(new Error('must not run')); },
+    }, undefined, plans, undefined, () => { throw new Error('release failed'); }, validation.promise);
+    const response = invoke(handler, '/recognition/attempts');
+    await flush();
+    const terminal = await control.drain({
+      requestControlId: 'e8e8e8e8-e8e8-48e8-88e8-e8e8e8e8e8e8', epoch: EPOCH, run: RUN, expectedRevision: '0', timeoutMs: 1,
+    });
+    expect(terminal.outcome).toBe('DRAINED');
+    validation.resolve();
+    await flush();
+    expect(response.statusCode).toBe(503);
+    expect(JSON.parse(response.bodies[0] as string)).toMatchObject({ code: 'REQUEST_ADMISSION_UNAVAILABLE' });
+    expect(recognitionCalls).toBe(0);
+    expect(control.snapshot()).toMatchObject({ maintenance: { outcome: 'DRAINED' } });
   });
 
   test('maintenance leaves an already-issued G08 writer running and drain waits for its full completion', async () => {

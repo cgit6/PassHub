@@ -195,7 +195,7 @@ describe('G10a A1 runtime identity/control core', () => {
     options.controlIdFactory = () => 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
     expect(Object.isFrozen(control)).toBe(true);
     expect(Object.isFrozen(issuer)).toBe(true);
-    expect(Reflect.ownKeys(control)).toEqual(['snapshot', 'acquireIssuedPersistence', 'acquireActiveQueryRead', 'canStartWriter', 'isMaintenanceWriterVeto', 'bindWriterWake', 'bindMaintenanceReadySettlement', 'hold', 'release', 'drain']);
+    expect(Reflect.ownKeys(control)).toEqual(['snapshot', 'acquireIssuedPersistence', 'acquireActiveQueryRead', 'canStartWriter', 'isMaintenanceWriterVeto', 'bindWriterWake', 'bindMaintenanceReadySettlement', 'bindMaintenanceValidationCancellation', 'hold', 'release', 'drain']);
     expect(control.hold(base()).controlId).toBe('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
     expect(control.snapshot()).toMatchObject({ epoch, run });
   });
