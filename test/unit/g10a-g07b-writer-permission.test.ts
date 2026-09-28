@@ -159,10 +159,17 @@ describe('G10a A3 eligible-original G07b writer permission seam', () => {
     expect(control.snapshot().issuedPersistence).toBe(0);
 
     const rejectedControl = makeRuntimeControl();
-    const rejectedHandler = makeHandler(rejectedControl, {});
+    let validationRejectedCalls = 0;
+    const rejectedHandler = makeHandler(rejectedControl, {
+      management: () => {
+        validationRejectedCalls += 1;
+        return Promise.resolve({ disposition: 'KNOWN_NO_EFFECT', response: createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH }).technical.issue('INVALID_REQUEST') });
+      },
+    });
     invoke(rejectedHandler, '/events');
     await flush();
     expect(rejectedControl.snapshot().issuedPersistence).toBe(0);
+    expect(validationRejectedCalls).toBe(0);
 
     const throwingControl = makeRuntimeControl();
     const throwingHandler = makeHandler(throwingControl, {

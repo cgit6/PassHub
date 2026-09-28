@@ -1,7 +1,7 @@
 /** @type {import('jest').Config} */
 module.exports = {
   rootDir: 'dist',
-  testMatch: ['<rootDir>/test/unit/g10a-runtime-control.test.js'],
+  testMatch: ['<rootDir>/test/unit/g10a-*.test.js'],
   testEnvironment: 'node',
   maxWorkers: 1,
   detectOpenHandles: true,
