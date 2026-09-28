@@ -58,6 +58,19 @@ export class RuntimeLogSink {
     runtimeLogSinks.add(this);
   }
 
+  /**
+   * Filesystem startup is deliberately fail-closed for observability, but it
+   * must never stop the application from starting.  This internal factory is
+   * the only way an adapter may hand composition an already-degraded nominal
+   * sink after its own safe initialization has failed.
+   */
+  static createInitiallyDegraded(): RuntimeLogSink {
+    const sink = new RuntimeLogSink({ write: async () => undefined });
+    sink.abandoned = true;
+    sink.markDegraded();
+    return sink;
+  }
+
   /** Returns false only when the line was deliberately not accepted. */
   append(record: RuntimeLogRecord): boolean {
     // Closing is an explicit lifecycle refusal, not a logging fault.  In
