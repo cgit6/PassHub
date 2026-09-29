@@ -9,6 +9,7 @@ import {
   readG10aIngressIdentity,
 } from '../../src/composition/internal/g10a-ingress-identity.js';
 import { createG10aRuntimeHttpApplication } from '../../src/composition/internal/g10a-runtime-http-application.js';
+import { createG10aOperationIdentityBinding } from '../../src/composition/internal/g10a-operation-identity-binding.js';
 import { createG10aRuntimeOwner } from '../../src/composition/internal/g10a-runtime-owner.js';
 import { RUNTIME_CONTROL_SOCKET_FILE_NAME } from '../../src/runtime/internal/runtime-control-socket-path.js';
 import { validateRuntimeLogRecord } from '../../src/runtime/internal/runtime-log-schema.js';
@@ -226,6 +227,51 @@ describe('G10a runtime-owned strict ingress logging', () => {
       });
     }
 
+    await owner.close();
+  });
+
+  test('binds one pending writer ingress to its coordinator operation and records OPERATION_REGISTERED', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'passhub-g10a-runtime-operation-'));
+    parents.push(parent);
+    const owner = createG10aRuntimeOwner({
+      epoch,
+      run,
+      logDirectory: join(parent, 'logs'),
+      controlDirectory: join(parent, 'control'),
+      controlSocketPath: join(parent, 'control', RUNTIME_CONTROL_SOCKET_FILE_NAME),
+      monotonicClock: Object.freeze({ nowMs: () => performance.now() }),
+      awaitObservation: () => undefined,
+    });
+    const runtime = await owner.start();
+    const accepted: unknown[] = [];
+    const ingress = createG10aIngressIdentityHandler({
+      runtime,
+      handler: (value) => { accepted.push(value); },
+    });
+    ingress(
+      Object.freeze({ method: 'POST', body: null, query: Object.freeze([]), headers: Object.freeze({}) }),
+      { originalUrl: '/qualifications' } as never, {} as never, (() => undefined) as never,
+    );
+    const receipt = Object.freeze({
+      operationId: '33333333-3333-4333-8333-333333333333', receivedAtMs: 0, registeredAtMonotonicMs: 0, sequence: 0n,
+    });
+    const binding = createG10aOperationIdentityBinding(runtime);
+    const identity = binding.bind(accepted[0] as never, receipt);
+    expect(runtime.identityIssuer.read(identity)).toMatchObject({
+      requestUUID: readG10aIngressIdentity(getG10aIngressIdentity(accepted[0] as never)!).requestUUID,
+      operationUUID: receipt.operationId, route: 'MANAGEMENT_CREATE', datasetEpoch: epoch, processRunId: run,
+    });
+    expect(() => binding.bind(accepted[0] as never, receipt)).toThrow('G10a writer ingress identity is already bound');
+
+    await runtime.runtimeLogSink.flush();
+    const records = (await readFile(join(parent, 'logs', 'runtime.log'), 'utf8'))
+      .split('\n').filter((line) => line.length > 0)
+      .map((line) => validateRuntimeLogRecord(JSON.parse(line) as unknown));
+    expect(records.map((record) => record.code)).toEqual(['REQUEST_ACCEPTED', 'OPERATION_REGISTERED']);
+    expect(records[1]).toMatchObject({
+      requestUUID: records[0]?.requestUUID, operationUUID: receipt.operationId,
+      route: 'MANAGEMENT_CREATE', phase: 'ADMISSION', ownerRef: expect.any(String),
+    });
     await owner.close();
   });
 });

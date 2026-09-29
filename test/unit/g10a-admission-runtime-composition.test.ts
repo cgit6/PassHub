@@ -1,4 +1,7 @@
 import { EventEmitter } from 'node:events';
+import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
   createAdmissionWorkHandoffBundle,
@@ -11,6 +14,9 @@ import {
   type AdmissionWorkPort,
 } from '../../src/composition/internal/index.js';
 import { createG10aAdmissionRuntimeComposition } from '../../src/composition/internal/g10a-admission-runtime-composition.js';
+import { createG10aRuntimeOwner } from '../../src/composition/internal/g10a-runtime-owner.js';
+import { RUNTIME_CONTROL_SOCKET_FILE_NAME } from '../../src/runtime/internal/runtime-control-socket-path.js';
+import { validateRuntimeLogRecord } from '../../src/runtime/internal/runtime-log-schema.js';
 import { RuntimeLogSink } from '../../src/runtime/internal/runtime-log-sink.js';
 import { createLegacyQueryAdmissionCapability } from '../../src/composition/internal/query-admission-binding.js';
 import { createOperationRegistry, createOperationRegistryCapabilityIssuer } from '../../src/access/application/internal/operation-registry.js';
@@ -156,6 +162,38 @@ describe('G10a A4 admission runtime composition', () => {
     pending.resolve({ disposition: 'KNOWN_NO_EFFECT', response: fixture.plans.technical.issue('INVALID_REQUEST') });
     await flush();
     expect(fixture.composition.control.snapshot().issuedPersistence).toBe(0);
+  });
+
+  test('binds the real G07b provisional receipt to an ingress identity when an owner runtime is supplied', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'passhub-g10a-admission-operation-'));
+    const owner = createG10aRuntimeOwner({
+      epoch: EPOCH, run: RUN,
+      logDirectory: join(parent, 'logs'), controlDirectory: join(parent, 'control'),
+      controlSocketPath: join(parent, 'control', RUNTIME_CONTROL_SOCKET_FILE_NAME),
+      monotonicClock: { nowMs: () => performance.now() }, awaitObservation: () => undefined,
+    });
+    try {
+      const runtime = await owner.start();
+      const fixture = makeComposition();
+      const composed = createG10aAdmissionRuntimeComposition({
+        epoch: EPOCH, run: RUN, monotonicClock: { nowMs: () => performance.now() }, awaitObservation: () => undefined,
+        admission: fixture.admission, runtime,
+      });
+      invoke(composed.handler);
+      await flush();
+      await runtime.runtimeLogSink.flush();
+      const records = (await readFile(join(parent, 'logs', 'runtime.log'), 'utf8'))
+        .split('\n').filter((line) => line.length > 0)
+        .map((line) => validateRuntimeLogRecord(JSON.parse(line) as unknown));
+      expect(records.map((record) => record.code)).toEqual(['REQUEST_ACCEPTED', 'OPERATION_REGISTERED']);
+      expect(records[1]).toMatchObject({
+        requestUUID: records[0]?.requestUUID, route: 'MANAGEMENT_CREATE', phase: 'ADMISSION',
+        operationUUID: expect.stringMatching(/^[0-9a-f-]{36}$/u), ownerRef: expect.stringMatching(/^[0-9a-f-]{36}$/u),
+      });
+    } finally {
+      await owner.close().catch(() => undefined);
+      await rm(parent, { recursive: true, force: true });
+    }
   });
 
   test('separate factories do not share runtime leases', async () => {
