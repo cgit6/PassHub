@@ -1,4 +1,5 @@
 import { types as nodeTypes } from 'node:util';
+import { validateRuntimeLogRecord, type RuntimeLogRecord } from './runtime-log-schema.js';
 import {
   assertRuntimeControl,
   RuntimeControlError,
@@ -22,12 +23,12 @@ export interface RuntimeControlProtocolFrame {
   readonly byteLength: number;
 }
 
-export type RuntimeControlProtocolCommand = 'STATUS' | 'HOLD' | 'RELEASE' | 'DRAIN';
-export type RuntimeControlProtocolOutcome = 'STATUS' | 'HELD' | 'RELEASED' | 'DRAINED' | 'NOT_DRAINED';
+export type RuntimeControlProtocolCommand = 'STATUS' | 'HOLD' | 'RELEASE' | 'DRAIN' | 'LOGS_READ';
+export type RuntimeControlProtocolOutcome = 'STATUS' | 'HELD' | 'RELEASED' | 'DRAINED' | 'NOT_DRAINED' | 'LOGS_READ';
 export type RuntimeControlProtocolErrorCode =
   | 'INVALID_REQUEST' | 'STALE_EPOCH' | 'STALE_RUN' | 'STALE_REVISION' | 'REQUEST_CONTROL_CONFLICT'
   | 'CONTROL_BUSY' | 'MANUAL_HOLD_EXISTS' | 'NO_MANUAL_HOLD' | 'CONTROL_ID_MISMATCH'
-  | 'MAINTENANCE_HOLD_EXISTS' | 'INTERNAL_UNAVAILABLE';
+  | 'MAINTENANCE_HOLD_EXISTS' | 'LOG_READ_UNAVAILABLE' | 'INTERNAL_UNAVAILABLE';
 
 export interface RuntimeControlProtocolSuccess {
   readonly v: 'c1';
@@ -38,8 +39,8 @@ export interface RuntimeControlProtocolSuccess {
   readonly revision: string;
   readonly controlId: string | null;
   readonly snapshot: RuntimeControlSnapshot | null;
-  readonly records: null;
-  readonly truncated: null;
+  readonly records: readonly RuntimeLogRecord[] | null;
+  readonly truncated: boolean | null;
 }
 export interface RuntimeControlProtocolError {
   readonly v: 'c1';
@@ -57,6 +58,23 @@ export type RuntimeControlProtocolResponse = RuntimeControlProtocolSuccess | Run
 export interface RuntimeControlProtocolDispatchOptions {
   readonly signal?: AbortSignal;
   readonly abortOutcome?: 'INTERNAL_UNAVAILABLE';
+  /** Internal capability: the protocol never receives a file path or driver. */
+  readonly logReader?: RuntimeControlLogReader;
+}
+
+/**
+ * Narrow, internal capability used only by the private socket composition.
+ * It deliberately exposes neither the log directory nor writer/rotation APIs.
+ */
+export interface RuntimeControlLogReader {
+  readOperation(input: {
+    readonly operationUUID: string;
+    readonly limit?: number;
+    readonly signal?: AbortSignal;
+  }): Promise<{
+    readonly records: readonly RuntimeLogRecord[];
+    readonly truncated: boolean;
+  }>;
 }
 
 /**
@@ -72,9 +90,15 @@ export interface RuntimeControlProtocolDrainPending {
   readonly timeoutMs: number;
 }
 
+/** A valid LOGS_READ is asynchronous and must receive the service watchdog. */
+export interface RuntimeControlProtocolLogsReadPending {
+  readonly kind: 'LOGS_READ_PENDING';
+}
+
 export type RuntimeControlProtocolSynchronousDispatch =
   | RuntimeControlProtocolResponse
   | RuntimeControlProtocolDrainPending
+  | RuntimeControlProtocolLogsReadPending
   | undefined;
 
 const frameKeys = ['text', 'utf8Valid', 'hasBom', 'singleFinalLf', 'byteLength'] as const;
@@ -83,7 +107,7 @@ const revisionPattern = /^(?:0|[1-9][0-9]*)$/;
 const controlErrorCodes = new Set<RuntimeControlProtocolErrorCode>([
   'INVALID_REQUEST', 'STALE_EPOCH', 'STALE_RUN', 'STALE_REVISION', 'REQUEST_CONTROL_CONFLICT',
   'CONTROL_BUSY', 'MANUAL_HOLD_EXISTS', 'NO_MANUAL_HOLD', 'CONTROL_ID_MISMATCH',
-  'MAINTENANCE_HOLD_EXISTS', 'INTERNAL_UNAVAILABLE',
+  'MAINTENANCE_HOLD_EXISTS', 'LOG_READ_UNAVAILABLE', 'INTERNAL_UNAVAILABLE',
 ]);
 
 /**
@@ -113,6 +137,8 @@ export async function dispatchRuntimeControlProtocol(
         const result = await control.drain(toControlMutation(request, options));
         return resultEnvelope(request, result);
       }
+      case 'LOGS_READ':
+        return await dispatchLogsRead(control, request, requestControlId, options);
     }
   } catch (error) {
     if (error instanceof RuntimeControlError && controlErrorCodes.has(error.code)) {
@@ -139,6 +165,9 @@ export function dispatchRuntimeControlProtocolSynchronously(
   if (prepared.kind === 'ERROR') return prepared.response;
   if (prepared.request.command === 'DRAIN') {
     return Object.freeze({ kind: 'DRAIN_PENDING' as const, timeoutMs: prepared.request.timeoutMs });
+  }
+  if (prepared.request.command === 'LOGS_READ') {
+    return Object.freeze({ kind: 'LOGS_READ_PENDING' as const });
   }
   return dispatchSynchronousRequest(control, prepared.request, prepared.requestControlId);
 }
@@ -210,7 +239,14 @@ interface CapturedStatus extends CapturedBase { readonly command: 'STATUS'; }
 interface CapturedHold extends CapturedBase { readonly command: 'HOLD'; readonly expectedRevision: string; }
 interface CapturedRelease extends CapturedBase { readonly command: 'RELEASE'; readonly expectedRevision: string; readonly controlId: string; }
 interface CapturedDrain extends CapturedBase { readonly command: 'DRAIN'; readonly expectedRevision: string; readonly timeoutMs: number; }
-type CapturedRequest = CapturedStatus | CapturedHold | CapturedRelease | CapturedDrain;
+interface CapturedLogsRead {
+  readonly v: 'c1';
+  readonly requestControlId: string;
+  readonly command: 'LOGS_READ';
+  readonly operationUUID: string;
+  readonly limit?: number;
+}
+type CapturedRequest = CapturedStatus | CapturedHold | CapturedRelease | CapturedDrain | CapturedLogsRead;
 
 class ProtocolInvalidRequest extends Error {}
 
@@ -229,13 +265,28 @@ function captureFrame(input: unknown): Readonly<RuntimeControlProtocolFrame> | u
 }
 
 function captureRequest(input: unknown): CapturedRequest {
-  const base = captureExactRecord(input, ['v', 'requestControlId', 'command', 'epoch', 'run'], [
+  const base = captureExactRecord(input, ['v', 'requestControlId', 'command'], [
     ['v', 'requestControlId', 'command', 'epoch', 'run'],
     ['v', 'requestControlId', 'command', 'epoch', 'run', 'expectedRevision'],
     ['v', 'requestControlId', 'command', 'epoch', 'run', 'expectedRevision', 'controlId'],
     ['v', 'requestControlId', 'command', 'epoch', 'run', 'expectedRevision', 'timeoutMs'],
+    ['v', 'requestControlId', 'command', 'operationUUID'],
+    ['v', 'requestControlId', 'command', 'operationUUID', 'limit'],
   ]);
-  if (base.v !== 'c1' || !isUuid(base.requestControlId) || !isUuid(base.epoch) || !isUuid(base.run) || typeof base.command !== 'string') throw new ProtocolInvalidRequest();
+  if (base.v !== 'c1' || !isUuid(base.requestControlId) || typeof base.command !== 'string') throw new ProtocolInvalidRequest();
+  if (base.command === 'LOGS_READ') {
+    requireKeySet(base, base.limit === undefined
+      ? ['v', 'requestControlId', 'command', 'operationUUID']
+      : ['v', 'requestControlId', 'command', 'operationUUID', 'limit']);
+    if (!isUuid(base.operationUUID) || (base.limit !== undefined && (!Number.isSafeInteger(base.limit) || base.limit < 1 || base.limit > 100))) {
+      throw new ProtocolInvalidRequest();
+    }
+    return Object.freeze({
+      v: 'c1' as const, requestControlId: base.requestControlId, command: 'LOGS_READ' as const,
+      operationUUID: base.operationUUID, ...(base.limit === undefined ? {} : { limit: base.limit }),
+    });
+  }
+  if (!isUuid(base.epoch) || !isUuid(base.run)) throw new ProtocolInvalidRequest();
   const common = Object.freeze({ v: 'c1' as const, requestControlId: base.requestControlId, epoch: base.epoch, run: base.run });
   if (base.command === 'STATUS') {
     requireKeySet(base, ['v', 'requestControlId', 'command', 'epoch', 'run']);
@@ -297,6 +348,139 @@ function successEnvelope(
   return Object.freeze({
     v: 'c1', requestControlId: request.requestControlId, ok: true, command: request.command, outcome,
     revision, controlId, snapshot, records: null, truncated: null,
+  });
+}
+
+async function dispatchLogsRead(
+  control: RuntimeControl,
+  request: CapturedLogsRead,
+  requestControlId: string | null,
+  options: RuntimeControlProtocolDispatchOptions | undefined,
+): Promise<RuntimeControlProtocolResponse> {
+  // Capture before beginning the external read.  LOGS_READ never mutates
+  // control state and does not carry epoch/run or occupy replay history.
+  const revision = control.snapshot().revision;
+  const signal = options?.signal;
+  try {
+    if (isAborted(signal)) throw new Error('log read aborted');
+    const reader = options?.logReader;
+    if (reader === undefined) throw new Error('log reader unavailable');
+    const result = await awaitAbortableRead(reader.readOperation(Object.freeze({
+      operationUUID: request.operationUUID,
+      ...(request.limit === undefined ? {} : { limit: request.limit }),
+      ...(signal === undefined ? {} : { signal }),
+    })), signal);
+    if (isAborted(signal)) throw new Error('log read aborted');
+    // The injected reader is an external capability.  Capture its completed
+    // result before constructing a wire response: do not retain a reader
+    // owned object, invoke a getter, traverse an inherited property, or
+    // serialize a proxy.  A malformed result is one unavailable read, never
+    // a partially successful response.
+    const captured = captureLogReadResult(result, request.limit ?? 20);
+    const records = captured.records;
+    if (records.length > (request.limit ?? 20) || records.some((record) => record.operationUUID !== request.operationUUID)) {
+      throw new Error('log reader returned an invalid selection');
+    }
+    return Object.freeze({
+      v: 'c1', requestControlId: request.requestControlId, ok: true, command: 'LOGS_READ', outcome: 'LOGS_READ',
+      revision, controlId: null, snapshot: null, records, truncated: captured.truncated,
+    });
+  } catch {
+    return errorEnvelope(requestControlId, 'LOG_READ_UNAVAILABLE');
+  }
+}
+
+/**
+ * Captures exactly the narrow reader DTO, including its array contents.  This
+ * is intentionally stricter than a TypeScript structural cast: the socket
+ * response must contain only validated, owned data and must not expose a
+ * later-mutated adapter object graph.
+ */
+function captureLogReadResult(input: unknown, maxRecords: number): Readonly<{
+  readonly records: readonly RuntimeLogRecord[];
+  readonly truncated: boolean;
+}> {
+  if (typeof input !== 'object' || input === null || nodeTypes.isProxy(input)
+    || Object.getPrototypeOf(input) !== Object.prototype) {
+    throw new Error('invalid log read result');
+  }
+  const ownKeys = Reflect.ownKeys(input);
+  if (ownKeys.length !== 2 || !ownKeys.includes('records') || !ownKeys.includes('truncated')) {
+    throw new Error('invalid log read result');
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(input);
+  const recordsDescriptor = descriptors.records;
+  const truncatedDescriptor = descriptors.truncated;
+  if (!isEnumerableOwnDataDescriptor(recordsDescriptor) || !isEnumerableOwnDataDescriptor(truncatedDescriptor)
+    || typeof truncatedDescriptor.value !== 'boolean') {
+    throw new Error('invalid log read result');
+  }
+  return Object.freeze({
+    records: captureLogReadRecords(recordsDescriptor.value, maxRecords),
+    truncated: truncatedDescriptor.value,
+  });
+}
+
+function isEnumerableOwnDataDescriptor(
+  descriptor: PropertyDescriptor | undefined,
+): descriptor is PropertyDescriptor & { readonly value: unknown } {
+  return descriptor !== undefined && descriptor.enumerable === true && Object.hasOwn(descriptor, 'value');
+}
+
+/** Reject sparse arrays, accessors, inherited elements, extra keys, and proxies. */
+function captureLogReadRecords(input: unknown, maxRecords: number): readonly RuntimeLogRecord[] {
+  if (!Array.isArray(input) || nodeTypes.isProxy(input) || Object.getPrototypeOf(input) !== Array.prototype) {
+    throw new Error('invalid log read result');
+  }
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(input, 'length');
+  if (lengthDescriptor === undefined || !Object.hasOwn(lengthDescriptor, 'value')
+    || !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0) {
+    throw new Error('invalid log read result');
+  }
+  const length = lengthDescriptor.value;
+  if (length > maxRecords) throw new Error('log reader returned an invalid selection');
+  const ownKeys = Reflect.ownKeys(input);
+  if (ownKeys.length !== length + 1 || !ownKeys.includes('length')) {
+    throw new Error('invalid log read result');
+  }
+  const records: RuntimeLogRecord[] = [];
+  for (let index = 0; index < length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(input, String(index));
+    if (!isEnumerableOwnDataDescriptor(descriptor)) throw new Error('invalid log read result');
+    // validateRuntimeLogRecord makes a canonical frozen clone.  Never return
+    // the reader's record object, even when it already happens to be valid.
+    records.push(validateRuntimeLogRecord(descriptor.value));
+  }
+  return Object.freeze(records);
+}
+
+function isAborted(signal: AbortSignal | undefined): boolean { return signal?.aborted === true; }
+
+/**
+ * A correct file-store reader observes the signal while waiting/reading, but
+ * the socket boundary also has to remain terminal if an injected adapter is
+ * buggy and ignores it.  Racing here means the late adapter settlement has no
+ * protocol response or control-state effect; its handlers remain attached so
+ * it cannot become an unhandled rejection.
+ */
+function awaitAbortableRead<T>(task: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (isAborted(signal)) return Promise.reject(new Error('log read aborted'));
+  if (signal === undefined) return task;
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const settle = (callback: () => void): void => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      callback();
+    };
+    const onAbort = (): void => settle(() => reject(new Error('log read aborted')));
+    signal.addEventListener('abort', onAbort, { once: true });
+    task.then(
+      (value) => settle(() => resolve(value)),
+      (error: unknown) => settle(() => reject(error)),
+    );
+    if (isAborted(signal)) onAbort();
   });
 }
 
