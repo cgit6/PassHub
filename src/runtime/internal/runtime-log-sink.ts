@@ -27,6 +27,9 @@ export interface RuntimeLogSinkOptions {
   readonly settleTimeoutMs?: number;
 }
 
+/** A sink-owned health publication for consumers that must not pull state. */
+export type RuntimeLogSinkHealthListener = (snapshot: RuntimeLogSinkSnapshot) => void;
+
 // A sink is an internal capability, not a structural `{ snapshot() }` input.
 // Keeping its provenance in a WeakSet lets composition reject a caller-made
 // lookalike before it can influence the runtime-control status projection.
@@ -48,6 +51,7 @@ export class RuntimeLogSink {
   private droppedCount = 0;
   private generation = 0;
   private readonly idleWaiters = new Set<() => void>();
+  private readonly healthListeners = new Set<RuntimeLogSinkHealthListener>();
 
   constructor(private readonly driver: RuntimeLogDriver, options: RuntimeLogSinkOptions = {}) {
     const timeout = options.settleTimeoutMs ?? RUNTIME_LOG_MAX_SETTLE_MS;
@@ -95,6 +99,10 @@ export class RuntimeLogSink {
   }
 
   snapshot(): RuntimeLogSinkSnapshot {
+    return this.#healthSnapshot();
+  }
+
+  #healthSnapshot(): RuntimeLogSinkSnapshot {
     return Object.freeze({
       status: this.degraded ? 'LOGGING_DEGRADED' : 'HEALTHY',
       droppedCount: this.droppedCount,
@@ -102,6 +110,18 @@ export class RuntimeLogSink {
       writing: this.writing,
       closed: this.closed,
     });
+  }
+
+  /**
+   * This is registered only during runtime composition.  Its consumer keeps
+   * the received value locally and never calls back into a sink while serving
+   * a control command.
+   */
+  subscribeHealth(listener: RuntimeLogSinkHealthListener): () => void {
+    if (typeof listener !== 'function') throw new TypeError('runtime log health listener is invalid');
+    this.healthListeners.add(listener);
+    try { listener(this.#healthSnapshot()); } catch { /* observers cannot affect logging */ }
+    return (): void => { this.healthListeners.delete(listener); };
   }
 
   /** Bounded observation only; it never propagates logging failures. */
@@ -209,9 +229,17 @@ export class RuntimeLogSink {
   private drop(): void {
     this.markDegraded();
     if (this.droppedCount < Number.MAX_SAFE_INTEGER) this.droppedCount += 1;
+    this.publishHealth();
   }
 
   private markDegraded(): void { this.degraded = true; }
+
+  private publishHealth(): void {
+    const snapshot = this.#healthSnapshot();
+    for (const listener of this.healthListeners) {
+      try { listener(snapshot); } catch { /* health publication is observational */ }
+    }
+  }
 }
 
 /** Internal nominal assertion for the runtime composition boundary. */
@@ -219,4 +247,13 @@ export function assertRuntimeLogSink(value: unknown): asserts value is RuntimeLo
   if (typeof value !== 'object' || value === null || runtimeLogSinks.has(value) === false) {
     throw new TypeError('runtime log sink is not trusted');
   }
+}
+
+/** Nominal adapter used at runtime composition, never by a request path. */
+export function subscribeRuntimeLogSinkHealth(
+  sink: RuntimeLogSink,
+  listener: RuntimeLogSinkHealthListener,
+): () => void {
+  assertRuntimeLogSink(sink);
+  return sink.subscribeHealth(listener);
 }

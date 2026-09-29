@@ -4,6 +4,7 @@ import { TextDecoder } from 'node:util';
 import {
   dispatchRuntimeControlProtocol,
   type RuntimeControlProtocolFrame,
+  type RuntimeControlProtocolResponse,
 } from './runtime-control-protocol.js';
 import { assertRuntimeControl, type RuntimeControl } from './runtime-control.js';
 
@@ -17,6 +18,11 @@ export interface RuntimeControlSocketFramingAdapter {
   readonly onConnection: (socket: Socket) => void;
 }
 
+/** Private composition seam for processing watchdog ownership. */
+export interface RuntimeControlSocketFrameDispatcher {
+  dispatch(frame: RuntimeControlProtocolFrame): Promise<RuntimeControlProtocolResponse | undefined>;
+}
+
 /**
  * Binds the transport-free control protocol to already accepted AF_UNIX
  * sockets.  Listener lifecycle/path ownership deliberately remains in
@@ -25,8 +31,10 @@ export interface RuntimeControlSocketFramingAdapter {
  */
 export function createRuntimeControlSocketFramingAdapter(
   control: RuntimeControl,
+  suppliedDispatcher?: RuntimeControlSocketFrameDispatcher,
 ): RuntimeControlSocketFramingAdapter {
   assertRuntimeControl(control);
+  const dispatcher = captureDispatcher(suppliedDispatcher, control);
   let activeConnections = 0;
 
   const onConnection = (socket: Socket): void => {
@@ -95,7 +103,7 @@ export function createRuntimeControlSocketFramingAdapter(
         fatalDestroy();
         return;
       }
-      void dispatchAndRespond(control, frame, socket, fatalDestroy);
+      void dispatchAndRespond(dispatcher, frame, socket, fatalDestroy);
     });
   };
 
@@ -103,13 +111,13 @@ export function createRuntimeControlSocketFramingAdapter(
 }
 
 async function dispatchAndRespond(
-  control: RuntimeControl,
+  dispatcher: RuntimeControlSocketFrameDispatcher,
   frame: RuntimeControlProtocolFrame,
   socket: Socket,
   fatalDestroy: () => void,
 ): Promise<void> {
   try {
-    const response = await dispatchRuntimeControlProtocol(control, frame);
+    const response = await dispatcher.dispatch(frame);
     if (response === undefined) {
       fatalDestroy();
       return;
@@ -127,6 +135,19 @@ async function dispatchAndRespond(
     // This final guard is solely callback containment, never an effect retry.
     fatalDestroy();
   }
+}
+
+function captureDispatcher(
+  supplied: RuntimeControlSocketFrameDispatcher | undefined,
+  control: RuntimeControl,
+): RuntimeControlSocketFrameDispatcher {
+  if (supplied === undefined) {
+    return Object.freeze({ dispatch: (frame: RuntimeControlProtocolFrame) => dispatchRuntimeControlProtocol(control, frame) });
+  }
+  if (typeof supplied !== 'object' || supplied === null || typeof supplied.dispatch !== 'function') {
+    throw new TypeError('runtime control socket dispatcher is invalid');
+  }
+  return Object.freeze({ dispatch: supplied.dispatch.bind(supplied) });
 }
 
 function decodeCompleteFrame(bytes: Buffer): RuntimeControlProtocolFrame | undefined {

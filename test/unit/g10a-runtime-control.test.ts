@@ -4,9 +4,9 @@ import {
   createRuntimeIdentityIssuer,
   RuntimeControlError,
   type RuntimeControl,
-  type RuntimeControlResult,
 } from '../../src/runtime/internal/runtime-control.js';
 import { RuntimeLogSink } from '../../src/runtime/internal/runtime-log-sink.js';
+import { RUNTIME_LOG_SCHEMA_VERSION, createRuntimeLogRecord } from '../../src/runtime/internal/runtime-log-schema.js';
 import * as publicApi from '../../src/index.js';
 import * as publicCompositionApi from '../../src/composition/index.js';
 import { readFileSync } from 'node:fs';
@@ -47,6 +47,26 @@ function drainBase(requestControlId = request, expectedRevision = '0', timeoutMs
   return { ...base(requestControlId, expectedRevision), timeoutMs, ...(signal === undefined ? {} : { signal }) } as const;
 }
 
+function runtimeLogRecord() {
+  return createRuntimeLogRecord({
+    schemaVersion: RUNTIME_LOG_SCHEMA_VERSION,
+    timestamp: '2026-09-29T00:00:00.000Z',
+    kind: 'RUNTIME', code: 'REQUEST_ACCEPTED',
+    requestUUID: request, operationUUID: null, datasetEpoch: epoch, processRunId: run, ownerRef: null,
+    route: 'QUERY', phase: 'INGRESS', round: null, group: null,
+    budgetRemainingMs: null, budgetRemainingUnits: null, commandName: null, driverRequestId: null,
+    requestControlId: null, controlId: null, revision: null,
+  });
+}
+
+async function microtasks(): Promise<void> {
+  // The sink calls a driver through one promise boundary, then observes its
+  // rejection through a second.  Keep this deterministic without fake timers.
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 describe('G10a A1 runtime identity/control core', () => {
   test('remains absent from both public barrels and uses only its private runtime log source', () => {
     for (const api of [publicApi, publicCompositionApi]) {
@@ -80,38 +100,33 @@ describe('G10a A1 runtime identity/control core', () => {
     expect(Object.keys(snapshot)).toEqual(['epoch', 'run', 'revision', 'phase', 'manual', 'maintenance', 'writers', 'issuedPersistence', 'activeQueryReads', 'registryUnknown', 'logging']);
   });
 
-  test('projects only a trusted log sink health snapshot and fails closed without changing control semantics', () => {
-    let mode: 'VALID' | 'THROW' | 'INVALID' = 'VALID';
-    const sink = new RuntimeLogSink({ write: async () => undefined });
-    Object.defineProperty(sink, 'snapshot', {
-      configurable: true,
-      value: (): unknown => {
-        if (mode === 'THROW') throw new Error('driver detail must not escape');
-        if (mode === 'INVALID') return Object.freeze({ status: 'HEALTHY', droppedCount: -1, waiting: 0, writing: false, closed: false });
-        return Object.freeze({ status: 'HEALTHY', droppedCount: 4, waiting: 0, writing: false, closed: false });
-      },
-    });
+  test('accepts pushed log degradation after composition, then STATUS/HOLD/RELEASE use only the cached health', async () => {
+    const sink = new RuntimeLogSink({ write: async () => { throw new Error('deterministic logging failure'); } });
     const issuer = createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run });
     const control = createRuntimeControl({
       epoch, run, identityIssuer: issuer, ...runtimeObservation, controlIdFactory: nextControlId, runtimeLogSink: sink,
     });
-    expect(control.snapshot().logging).toEqual({ status: 'HEALTHY', droppedCount: 4 });
+    expect(control.snapshot().logging).toEqual({ status: 'HEALTHY', droppedCount: 0 });
 
-    mode = 'THROW';
-    expect(control.snapshot().logging).toEqual({ status: 'LOGGING_DEGRADED', droppedCount: 4 });
-    expect(control.hold(base()).outcome).toBe('HELD');
-    expect(control.snapshot().logging).toEqual({ status: 'LOGGING_DEGRADED', droppedCount: 4 });
+    // The sink is healthy when composed, then its asynchronous driver rejects
+    // one accepted record.  The published update, not any later snapshot pull,
+    // must make RuntimeControl report the sticky degradation and its drop.
+    expect(sink.append(runtimeLogRecord())).toBe(true);
+    await microtasks();
+    expect(control.snapshot().logging).toEqual({ status: 'LOGGING_DEGRADED', droppedCount: 1 });
 
-    const invalidSink = new RuntimeLogSink({ write: async () => undefined });
-    Object.defineProperty(invalidSink, 'snapshot', {
-      configurable: true,
-      value: (): unknown => Object.freeze({ status: 'HEALTHY', droppedCount: -1, waiting: 0, writing: false, closed: false }),
-    });
-    const invalidControl = createRuntimeControl({
-      epoch, run, identityIssuer: createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run }),
-      ...runtimeObservation, controlIdFactory: nextControlId, runtimeLogSink: invalidSink,
-    });
-    expect(invalidControl.snapshot().logging).toEqual({ status: 'LOGGING_DEGRADED', droppedCount: 0 });
+    // A later hostile replacement cannot be reached by STATUS/HOLD/RELEASE.
+    Object.defineProperty(sink, 'snapshot', { configurable: true, value: (): never => { throw new Error('must not be pulled'); } });
+    expect(control.snapshot().logging).toEqual({ status: 'LOGGING_DEGRADED', droppedCount: 1 }); // STATUS
+    const held = control.hold(base()); // HOLD
+    expect(held.outcome).toBe('HELD');
+    expect(held.snapshot.logging).toEqual({ status: 'LOGGING_DEGRADED', droppedCount: 1 });
+    const released = control.release({
+      ...base('66666666-6666-4666-8666-666666666666', held.revision),
+      controlId: held.controlId as string,
+    }); // RELEASE
+    expect(released.outcome).toBe('RELEASED');
+    expect(released.snapshot.logging).toEqual({ status: 'LOGGING_DEGRADED', droppedCount: 1 });
   });
 
   test('rejects foreign/forged identity issuer and control capabilities', () => {
@@ -235,7 +250,7 @@ describe('G10a A1 runtime identity/control core', () => {
     expect(Object.isFrozen(control)).toBe(true);
     expect(Object.isFrozen(issuer)).toBe(true);
     expect(Reflect.ownKeys(control)).toEqual(['snapshot', 'acquireIssuedPersistence', 'acquireActiveQueryRead', 'canStartWriter', 'isMaintenanceWriterVeto', 'bindWriterWake', 'bindMaintenanceReadySettlement', 'bindMaintenanceValidationCancellation', 'hold', 'release', 'drain']);
-    expect(control.hold(base()).controlId).toBe('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+    expect(control.hold(base()).controlId).toMatch(/^[0-9a-f-]+$/u);
     expect(control.snapshot()).toMatchObject({ epoch, run });
   });
 
@@ -306,7 +321,7 @@ describe('G10a A1 runtime identity/control core', () => {
     expect(() => control.release({ ...base(releaseRequestId, '0'), controlId: heldControlId })).toThrow(new RuntimeControlError('REQUEST_CONTROL_CONFLICT'));
   });
 
-  test('manual hold gates only unstarted writers; release commits before one safe wake', () => {
+  test('manual hold gates only unstarted writers; release commits before one deferred safe wake', async () => {
     const { control } = makeControl();
     const wakes: string[] = [];
     control.bindWriterWake(() => {
@@ -321,13 +336,15 @@ describe('G10a A1 runtime identity/control core', () => {
     const released = control.release(release);
     expect(released.outcome).toBe('RELEASED');
     expect(control.canStartWriter()).toBe(true);
+    expect(wakes).toEqual([]);
+    await Promise.resolve();
     expect(wakes).toEqual(['wake']);
     expect(control.release(release)).toBe(released);
     expect(wakes).toEqual(['wake']);
     expect(() => control.bindWriterWake(() => undefined)).toThrow(TypeError);
   });
 
-  test('invalid release and exact release replay never wake a held writer twice', () => {
+  test('invalid release and exact release replay never wake a held writer twice', async () => {
     const { control } = makeControl();
     let wakes = 0;
     control.bindWriterWake(() => { wakes += 1; });
@@ -339,6 +356,8 @@ describe('G10a A1 runtime identity/control core', () => {
     expect(control.snapshot()).toMatchObject({ manual: { active: true, controlId: held.controlId } });
 
     const terminal = control.release(release);
+    expect(wakes).toBe(0);
+    await Promise.resolve();
     expect(wakes).toBe(1);
     expect(control.release(release)).toBe(terminal);
     expect(wakes).toBe(1);
@@ -355,124 +374,45 @@ describe('G10a A1 runtime identity/control core', () => {
     expect(() => control.hold(base())).toThrow(new RuntimeControlError('STALE_REVISION'));
   });
 
-  test('current transition has a terminal cached before the next factory observation can re-enter', () => {
-    const issuer = createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run });
-    const ids = [nextControlId(), nextControlId()];
-    let factoryCalls = 0;
-    let control!: RuntimeControl;
-    let reentered: ReturnType<RuntimeControl['hold']> | undefined;
-    let reentrySnapshot: ReturnType<RuntimeControl['snapshot']> | undefined;
-    let reentryReadError: unknown;
-    control = createRuntimeControl({ epoch, run, identityIssuer: issuer, ...runtimeObservation, controlIdFactory: () => {
-      const value = ids[factoryCalls];
-      factoryCalls += 1;
-      if (factoryCalls === 2) {
-        reentered = control.hold(base());
-        reentrySnapshot = control.snapshot();
-        try { void reentered.outcome; } catch (error) { reentryReadError = error; }
-      }
-      if (value === undefined) throw new Error('test factory exhausted');
-      return value;
-    } });
-    const terminal = control.hold(base());
-    expect(reentered).toBe(terminal);
-    expect(reentryReadError).toEqual(new RuntimeControlError('CONTROL_BUSY'));
-    expect(reentrySnapshot).toMatchObject({ revision: '0', phase: 'RUNNING' });
-    expect(factoryCalls).toBe(2);
-  });
-
-  test('drain exact reentry joins the same projected terminal while reservation is active', async () => {
-    const issuer = createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run });
-    const ids = [nextControlId(), nextControlId()];
-    let factoryCalls = 0;
-    let control!: RuntimeControl;
-    let reentered: ReturnType<RuntimeControl['drain']> | undefined;
-    let reentrySnapshot: ReturnType<RuntimeControl['snapshot']> | undefined;
-    let reentryReadError: unknown;
-    control = createRuntimeControl({ epoch, run, identityIssuer: issuer, ...runtimeObservation, controlIdFactory: () => {
-      const value = ids[factoryCalls];
-      factoryCalls += 1;
-      if (factoryCalls === 2) {
-        reentered = control.drain(drainBase());
-        reentrySnapshot = control.snapshot();
-      }
-      if (value === undefined) throw new Error('test factory exhausted');
-      return value;
-    } });
-    const terminal = control.drain(drainBase());
-    expect(reentered).toBe(terminal);
-    expect(reentryReadError).toBeUndefined();
-    expect(reentrySnapshot).toMatchObject({ revision: '0', phase: 'RUNNING' });
-    expect((await terminal).snapshot.revision).toBe('1');
-  });
-
-  test.each([
-    ['throws', () => { throw new Error('factory failure'); }],
-    ['invalid', () => 'INVALID'],
-  ])('factory %s leaves hold state/cache/revision untouched', (_label, factory) => {
-    const issuer = createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run });
+  test('never invokes an injected legacy ID callback from a control command', async () => {
     let calls = 0;
-    const control = createRuntimeControl({ epoch, run, identityIssuer: issuer, ...runtimeObservation, controlIdFactory: () => {
-      calls += 1;
-      if (calls === 1) return nextControlId();
-      return factory();
-    } });
-    expect(() => control.hold(base())).toThrow(TypeError);
-    expect(control.snapshot()).toMatchObject({ revision: '0', phase: 'RUNNING', manual: { active: false, controlId: null }, maintenance: { active: false, controlId: null, outcome: null } });
-    // A failed pre-reservation is neither current nor last: exact and different
-    // request IDs both encounter only the captured factory failure, and the
-    // failing factory is never called again to consume another candidate ID.
-    expect(() => control.hold(base())).toThrow(TypeError);
-    expect(() => control.hold({ ...base('77777777-7777-4777-8777-777777777777', '0') })).toThrow(TypeError);
-    expect(calls).toBe(2);
-  });
-
-  test('keeps a terminal current while post-mutation id reservation rejects a different reentrant mutation as busy', () => {
-    const issuer = createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run });
-    const ids = [
-      'f1000001-f100-4100-8100-f10000000001',
-      'f1000002-f100-4100-8100-f10000000002',
-      'f1000003-f100-4100-8100-f10000000003',
-    ];
-    let factoryCalls = 0;
-    let control!: RuntimeControl;
-    let reentryError: unknown;
-    control = createRuntimeControl({ epoch, run, identityIssuer: issuer, ...runtimeObservation, controlIdFactory: () => {
-      const value = ids[factoryCalls];
-      factoryCalls += 1;
-      if (factoryCalls === 2) {
-        try {
-          void control.drain(drainBase('77777777-7777-4777-8777-777777777777', '1')).catch((error) => { reentryError = error; });
-        } catch (error) {
-          reentryError = error;
-        }
-      }
-      if (value === undefined) throw new Error('test factory exhausted');
-      return value;
-    } });
-
-    const terminal = control.hold(base());
-    expect(terminal).toMatchObject({ outcome: 'HELD', revision: '1', controlId: ids[0] });
-    expect(reentryError).toEqual(new RuntimeControlError('CONTROL_BUSY'));
-    expect(factoryCalls).toBe(2);
-    expect(control.snapshot()).toMatchObject({
-      revision: '1',
-      phase: 'MANUAL_HOLD',
-      manual: { active: true, controlId: ids[0] },
-      maintenance: { active: false, controlId: null, outcome: null },
-    });
-  });
-
-  test('protects the current mutation before caching its terminal result', () => {
-    const issuer = createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run });
     const control = createRuntimeControl({
-      epoch,
-      run,
-      identityIssuer: issuer,
-      ...runtimeObservation,
-      controlIdFactory: nextControlId,
+      epoch, run, identityIssuer: createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run }), ...runtimeObservation,
+      controlIdFactory: (): never => { calls += 1; throw new Error('must not run'); },
     });
-    expect(control.hold(base()).outcome).toBe('HELD');
+    const held = control.hold(base());
+    expect(held.controlId).toMatch(/^[0-9a-f-]+$/u);
+    control.release({ ...base('77777777-7777-4777-8777-777777777777', held.revision), controlId: held.controlId as string });
+    await expect(control.drain(drainBase('88888888-8888-4888-8888-888888888888', '2'))).resolves.toMatchObject({ outcome: 'DRAINED' });
+    expect(calls).toBe(0);
+  });
+
+  test('STATUS, HOLD, and RELEASE do not synchronously invoke hostile or reentrant callbacks', async () => {
+    let factoryCalls = 0;
+    let wakeCalls = 0;
+    let reentrantResult: ReturnType<RuntimeControl['hold']> | undefined;
+    const control = createRuntimeControl({
+      epoch, run, identityIssuer: createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run }), ...runtimeObservation,
+      controlIdFactory: (): never => { factoryCalls += 1; throw new Error('factory must not run'); },
+    });
+    control.bindWriterWake(() => {
+      wakeCalls += 1;
+      reentrantResult = control.hold(base('99999999-9999-4999-8999-999999999999', '2'));
+      throw new Error('wake failure must stay outside RELEASE');
+    });
+
+    expect(control.snapshot().revision).toBe('0'); // STATUS-equivalent read
+    const held = control.hold(base());
+    const released = control.release({ ...base('77777777-7777-4777-8777-777777777777', held.revision), controlId: held.controlId as string });
+    expect(released.revision).toBe('2');
+    expect(factoryCalls).toBe(0);
+    expect(wakeCalls).toBe(0);
+    expect(reentrantResult).toBeUndefined();
+
+    await Promise.resolve();
+    expect(wakeCalls).toBe(1);
+    expect(reentrantResult).toMatchObject({ outcome: 'HELD', revision: '3' });
+    expect(factoryCalls).toBe(0);
   });
 
   test('drain is an immediate terminal mutation and remains a maintenance veto', async () => {
@@ -555,51 +495,6 @@ describe('G10a A1 runtime identity/control core', () => {
     expect(lifecycle).toEqual(['KNOWN_NO_EFFECT', 'PRESTART_REJECTED']);
   });
 
-  test.each([
-    ['HOLD', 'throws', (candidate: string) => { throw new Error(`factory failure ${candidate}`); }],
-    ['HOLD', 'invalid', () => 'INVALID'],
-    ['HOLD', 'duplicate', (candidate: string) => candidate],
-    ['DRAIN', 'throws', (candidate: string) => { throw new Error(`factory failure ${candidate}`); }],
-    ['DRAIN', 'invalid', () => 'INVALID'],
-    ['DRAIN', 'duplicate', (candidate: string) => candidate],
-  ] as const)('%s exact reentry cannot observe success when following factory %s fails', async (command, _label, failure) => {
-    const issuer = createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run });
-    const candidate = nextControlId();
-    let calls = 0;
-    let control!: RuntimeControl;
-    let inner: ReturnType<RuntimeControl['hold']> | ReturnType<RuntimeControl['drain']> | undefined;
-    let callbackSnapshot: ReturnType<RuntimeControl['snapshot']> | undefined;
-    control = createRuntimeControl({ epoch, run, identityIssuer: issuer, ...runtimeObservation, controlIdFactory: () => {
-      calls += 1;
-      if (calls === 1) return candidate;
-      inner = command === 'HOLD' ? control.hold(base()) : control.drain(drainBase());
-      callbackSnapshot = control.snapshot();
-      return failure(candidate);
-    } });
-    const invoke = (): ReturnType<RuntimeControl['hold']> | ReturnType<RuntimeControl['drain']> => command === 'HOLD' ? control.hold(base()) : control.drain(drainBase());
-    if (command === 'HOLD') expect(invoke).toThrow(TypeError);
-    else await expect(invoke() as Promise<unknown>).rejects.toThrow(TypeError);
-    expect(inner).toBeDefined();
-    if (command === 'HOLD') {
-      for (const read of [
-        () => (inner as RuntimeControlResult | undefined)?.outcome,
-        () => (inner as RuntimeControlResult | undefined)?.revision,
-        () => (inner as RuntimeControlResult | undefined)?.controlId,
-        () => (inner as RuntimeControlResult | undefined)?.snapshot,
-      ]) expect(read).toThrow(TypeError);
-    } else await expect(inner as Promise<unknown>).rejects.toThrow(TypeError);
-    expect(callbackSnapshot).toMatchObject({ revision: '0', phase: 'RUNNING', manual: { active: false }, maintenance: { active: false } });
-    expect(control.snapshot()).toMatchObject({ revision: '0', phase: 'RUNNING', manual: { active: false, controlId: null }, maintenance: { active: false, controlId: null, outcome: null } });
-    if (command === 'HOLD') expect(invoke).toThrow(TypeError);
-    else await expect(invoke() as Promise<unknown>).rejects.toThrow(TypeError);
-    const invokeDifferent = (): ReturnType<RuntimeControl['hold']> | ReturnType<RuntimeControl['drain']> => command === 'HOLD'
-      ? control.hold({ ...base('77777777-7777-4777-8777-777777777777', '0') })
-      : control.drain(drainBase('77777777-7777-4777-8777-777777777777', '0'));
-    if (command === 'HOLD') expect(invokeDifferent).toThrow(TypeError);
-    else await expect(invokeDifferent() as unknown as Promise<unknown>).rejects.toThrow(TypeError);
-    expect(calls).toBe(2);
-  });
-
   test('returns deeply frozen exact results for each reachable phase and preserves maintenance after release', async () => {
     const { control } = makeControl();
     const held = control.hold(base());
@@ -622,22 +517,6 @@ describe('G10a A1 runtime identity/control core', () => {
     expect(drained.snapshot.phase).toBe('MANUAL_AND_MAINTENANCE_HELD');
     expect(released.snapshot.phase).toBe('MAINTENANCE_HELD');
     expect(released.snapshot.maintenance).toEqual({ active: true, controlId: drained.controlId, outcome: 'DRAINED' });
-  });
-
-  test('fails closed when a captured control-id factory repeats an issued value', async () => {
-    const issuer = createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run });
-    const duplicate = nextControlId();
-    let calls = 0;
-    const control = createRuntimeControl({ epoch, run, identityIssuer: issuer, ...runtimeObservation, controlIdFactory: () => { calls += 1; return duplicate; } });
-    expect(() => control.hold(base())).toThrow(TypeError);
-    expect(control.snapshot()).toMatchObject({
-      revision: '0', phase: 'RUNNING',
-      manual: { active: false, controlId: null },
-      maintenance: { active: false, controlId: null, outcome: null },
-    });
-    expect(() => control.hold(base())).toThrow(TypeError);
-    await expect(control.drain(drainBase('77777777-7777-4777-8777-777777777777'))).rejects.toThrow(TypeError);
-    expect(calls).toBe(2);
   });
 
   test('tracks issued persistence through the full work promise and rejects reuse', async () => {

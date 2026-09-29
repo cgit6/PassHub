@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
 import {
   dispatchRuntimeControlProtocol,
+  dispatchRuntimeControlProtocolSynchronously,
   type RuntimeControlProtocolFrame,
 } from '../../src/runtime/internal/runtime-control-protocol.js';
 import {
@@ -73,6 +74,34 @@ describe('G10a A11.1 runtime control protocol core', () => {
       .resolves.toMatchObject({ ok: true, command: 'RELEASE', outcome: 'RELEASED', revision: '2', controlId });
     await expect(dispatchRuntimeControlProtocol(instance, line({ v: 'c1', requestControlId: '55555555-5555-4555-8555-555555555555', command: 'DRAIN', epoch, run, expectedRevision: '2', timeoutMs: 10 })))
       .resolves.toMatchObject({ ok: true, command: 'DRAIN', outcome: 'DRAINED', revision: '3' });
+  });
+
+  test('keeps STATUS/HOLD/RELEASE inside a non-thenable, callback-free synchronous boundary and returns DRAIN as data', () => {
+    let observationCalls = 0;
+    const instance = createRuntimeControl({
+      epoch, run,
+      identityIssuer: createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run }),
+      clock: Object.freeze({ nowMs: () => 0 }),
+      awaitObservation: () => { observationCalls += 1; return Promise.resolve(); },
+      controlIdFactory: randomUUID,
+    });
+
+    const statusResponse = dispatchRuntimeControlProtocolSynchronously(instance, status());
+    expect(statusResponse).toMatchObject({ ok: true, command: 'STATUS', outcome: 'STATUS' });
+    expect(statusResponse).not.toHaveProperty('then');
+    expect(observationCalls).toBe(0);
+
+    const holdResponse = dispatchRuntimeControlProtocolSynchronously(instance, hold(requestTwo));
+    expect(holdResponse).toMatchObject({ ok: true, command: 'HOLD', outcome: 'HELD', revision: '1' });
+    expect(holdResponse).not.toHaveProperty('then');
+    expect(observationCalls).toBe(0);
+
+    const pending = dispatchRuntimeControlProtocolSynchronously(instance, line({
+      v: 'c1', requestControlId: '55555555-5555-4555-8555-555555555555', command: 'DRAIN', epoch, run,
+      expectedRevision: '1', timeoutMs: 10,
+    }));
+    expect(pending).toEqual({ kind: 'DRAIN_PENDING', timeoutMs: 10 });
+    expect(observationCalls).toBe(0);
   });
 
   test('rejects unknown/missing/extra DTO fields and preserves only a safely parsed canonical request id', async () => {

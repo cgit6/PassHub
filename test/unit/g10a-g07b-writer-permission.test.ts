@@ -146,7 +146,7 @@ function lowRecognitionRates(): ReturnType<typeof createConfigurableFixedMinuteR
 }
 
 describe('G10a A3 eligible-original G07b writer permission seam', () => {
-  test('writer wake binding rejects foreign receivers and duplicate binding; a throwing wake cannot roll back release', () => {
+  test('writer wake binding rejects foreign receivers and duplicate binding; a deferred throwing wake cannot roll back release', async () => {
     const control = makeRuntimeControl();
     const binding = createG10aWriterPermissionBinding(control);
     const bind = binding.bindWriterWake;
@@ -159,6 +159,8 @@ describe('G10a A3 eligible-original G07b writer permission seam', () => {
     expect(() => binding.bindWriterWake(() => undefined)).toThrow(TypeError);
     const held = control.hold({ requestControlId: '55555555-5555-4555-8555-555555555555', epoch: EPOCH, run: RUN, expectedRevision: '0' });
     expect(() => control.release({ requestControlId: '66666666-6666-4666-8666-666666666666', epoch: EPOCH, run: RUN, expectedRevision: held.revision, controlId: held.controlId as string })).not.toThrow();
+    expect(calls).toBe(0);
+    await Promise.resolve();
     expect(calls).toBe(1);
     expect(control.snapshot()).toMatchObject({ manual: { active: false, controlId: null } });
   });

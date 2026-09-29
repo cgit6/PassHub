@@ -49,6 +49,34 @@ export interface RuntimeControlProtocolError {
 }
 export type RuntimeControlProtocolResponse = RuntimeControlProtocolSuccess | RuntimeControlProtocolError;
 
+/**
+ * Private transport context.  The protocol keeps its direct, deterministic
+ * API for unit callers; the AF_UNIX composition alone supplies a signal when
+ * its processing watchdog expires.
+ */
+export interface RuntimeControlProtocolDispatchOptions {
+  readonly signal?: AbortSignal;
+  readonly abortOutcome?: 'INTERNAL_UNAVAILABLE';
+}
+
+/**
+ * The only non-response produced by the synchronous control boundary.
+ *
+ * It is intentionally data-only.  In particular, it contains neither a
+ * callback nor a Promise: the socket service may use it solely to install
+ * DRAIN's cancellable observation watchdog before it invokes the async
+ * dispatch path.  STATUS, HOLD, and RELEASE never cross that path.
+ */
+export interface RuntimeControlProtocolDrainPending {
+  readonly kind: 'DRAIN_PENDING';
+  readonly timeoutMs: number;
+}
+
+export type RuntimeControlProtocolSynchronousDispatch =
+  | RuntimeControlProtocolResponse
+  | RuntimeControlProtocolDrainPending
+  | undefined;
+
 const frameKeys = ['text', 'utf8Valid', 'hasBom', 'singleFinalLf', 'byteLength'] as const;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const revisionPattern = /^(?:0|[1-9][0-9]*)$/;
@@ -66,11 +94,63 @@ const controlErrorCodes = new Set<RuntimeControlProtocolErrorCode>([
 export async function dispatchRuntimeControlProtocol(
   control: RuntimeControl,
   frame: RuntimeControlProtocolFrame,
+  options?: RuntimeControlProtocolDispatchOptions,
 ): Promise<RuntimeControlProtocolResponse | undefined> {
   assertRuntimeControl(control);
-  const capturedFrame = captureFrame(frame);
-  if (capturedFrame === undefined) return undefined;
+  const prepared = prepareDispatch(frame);
+  if (prepared.kind === 'NO_RESPONSE') return undefined;
+  if (prepared.kind === 'ERROR') return prepared.response;
 
+  const requestControlId = prepared.requestControlId;
+  try {
+    const { request } = prepared;
+    switch (request.command) {
+      case 'STATUS':
+      case 'HOLD':
+      case 'RELEASE':
+        return dispatchSynchronousRequest(control, request, requestControlId);
+      case 'DRAIN': {
+        const result = await control.drain(toControlMutation(request, options));
+        return resultEnvelope(request, result);
+      }
+    }
+  } catch (error) {
+    if (error instanceof RuntimeControlError && controlErrorCodes.has(error.code)) {
+      return errorEnvelope(requestControlId, error.code);
+    }
+    if (error instanceof ProtocolInvalidRequest) return errorEnvelope(requestControlId, 'INVALID_REQUEST');
+    return errorEnvelope(requestControlId, 'INTERNAL_UNAVAILABLE');
+  }
+}
+
+/**
+ * Executes the three D186 synchronous critical-section commands without
+ * accepting a transport context, callback, signal, or Promise.  A valid
+ * DRAIN is deliberately returned as data instead; only the service may turn
+ * that marker into the separately cancellable asynchronous observation.
+ */
+export function dispatchRuntimeControlProtocolSynchronously(
+  control: RuntimeControl,
+  frame: RuntimeControlProtocolFrame,
+): RuntimeControlProtocolSynchronousDispatch {
+  assertRuntimeControl(control);
+  const prepared = prepareDispatch(frame);
+  if (prepared.kind === 'NO_RESPONSE') return undefined;
+  if (prepared.kind === 'ERROR') return prepared.response;
+  if (prepared.request.command === 'DRAIN') {
+    return Object.freeze({ kind: 'DRAIN_PENDING' as const, timeoutMs: prepared.request.timeoutMs });
+  }
+  return dispatchSynchronousRequest(control, prepared.request, prepared.requestControlId);
+}
+
+type PreparedDispatch =
+  | Readonly<{ readonly kind: 'NO_RESPONSE' }>
+  | Readonly<{ readonly kind: 'ERROR'; readonly response: RuntimeControlProtocolError }>
+  | Readonly<{ readonly kind: 'REQUEST'; readonly request: CapturedRequest; readonly requestControlId: string | null }>;
+
+function prepareDispatch(frame: RuntimeControlProtocolFrame): PreparedDispatch {
+  const capturedFrame = captureFrame(frame);
+  if (capturedFrame === undefined) return Object.freeze({ kind: 'NO_RESPONSE' as const });
   let parsed: unknown;
   try {
     // This scanner runs before JSON.parse by contract.  It compares decoded
@@ -78,28 +158,37 @@ export async function dispatchRuntimeControlProtocol(
     if (hasArbitraryDepthDuplicateKey(capturedFrame.text.slice(0, -1))) throw new ProtocolInvalidRequest();
     parsed = JSON.parse(capturedFrame.text);
   } catch {
-    return errorEnvelope(null, 'INVALID_REQUEST');
+    return Object.freeze({ kind: 'ERROR' as const, response: errorEnvelope(null, 'INVALID_REQUEST') });
   }
   const requestControlId = extractCanonicalRequestControlId(parsed);
-
   try {
-    const request = captureRequest(parsed);
+    return Object.freeze({ kind: 'REQUEST' as const, request: captureRequest(parsed), requestControlId });
+  } catch (error) {
+    if (error instanceof ProtocolInvalidRequest) {
+      return Object.freeze({ kind: 'ERROR' as const, response: errorEnvelope(requestControlId, 'INVALID_REQUEST') });
+    }
+    return Object.freeze({ kind: 'ERROR' as const, response: errorEnvelope(requestControlId, 'INTERNAL_UNAVAILABLE') });
+  }
+}
+
+function dispatchSynchronousRequest(
+  control: RuntimeControl,
+  request: CapturedStatus | CapturedHold | CapturedRelease,
+  requestControlId: string | null,
+): RuntimeControlProtocolResponse {
+  try {
     switch (request.command) {
-      case 'STATUS':
-        assertEpochRun(request, control.snapshot());
-        return successEnvelope(request, 'STATUS', control.snapshot().revision, null, control.snapshot());
-      case 'HOLD': {
-        const result = control.hold(toControlMutation(request));
-        return resultEnvelope(request, result);
+      case 'STATUS': {
+        // Capture once.  A STATUS response is a single immutable view, rather
+        // than three independently sampled views of mutable runtime state.
+        const snapshot = control.snapshot();
+        assertEpochRun(request, snapshot);
+        return successEnvelope(request, 'STATUS', snapshot.revision, null, snapshot);
       }
-      case 'RELEASE': {
-        const result = control.release(toControlMutation(request));
-        return resultEnvelope(request, result);
-      }
-      case 'DRAIN': {
-        const result = await control.drain(toControlMutation(request));
-        return resultEnvelope(request, result);
-      }
+      case 'HOLD':
+        return resultEnvelope(request, control.hold(toControlMutation(request)));
+      case 'RELEASE':
+        return resultEnvelope(request, control.release(toControlMutation(request)));
     }
   } catch (error) {
     if (error instanceof RuntimeControlError && controlErrorCodes.has(error.code)) {
@@ -177,11 +266,16 @@ function assertEpochRun(request: CapturedBase, snapshot: RuntimeControlSnapshot)
 
 function toControlMutation(request: CapturedHold): { readonly requestControlId: string; readonly epoch: string; readonly run: string; readonly expectedRevision: string };
 function toControlMutation(request: CapturedRelease): { readonly requestControlId: string; readonly epoch: string; readonly run: string; readonly expectedRevision: string; readonly controlId: string };
-function toControlMutation(request: CapturedDrain): { readonly requestControlId: string; readonly epoch: string; readonly run: string; readonly expectedRevision: string; readonly timeoutMs: number };
-function toControlMutation(request: CapturedHold | CapturedRelease | CapturedDrain): object {
+function toControlMutation(request: CapturedDrain, options?: RuntimeControlProtocolDispatchOptions): { readonly requestControlId: string; readonly epoch: string; readonly run: string; readonly expectedRevision: string; readonly timeoutMs: number; readonly signal?: AbortSignal; readonly abortOutcome?: 'INTERNAL_UNAVAILABLE' };
+function toControlMutation(request: CapturedHold | CapturedRelease | CapturedDrain, options?: RuntimeControlProtocolDispatchOptions): object {
   const base = { requestControlId: request.requestControlId, epoch: request.epoch, run: request.run, expectedRevision: request.expectedRevision };
   if (request.command === 'RELEASE') return Object.freeze({ ...base, controlId: request.controlId });
-  if (request.command === 'DRAIN') return Object.freeze({ ...base, timeoutMs: request.timeoutMs });
+  if (request.command === 'DRAIN') return Object.freeze({
+    ...base,
+    timeoutMs: request.timeoutMs,
+    ...(options?.signal === undefined ? {} : { signal: options.signal }),
+    ...(options?.abortOutcome === undefined ? {} : { abortOutcome: options.abortOutcome }),
+  });
   return Object.freeze(base);
 }
 

@@ -138,7 +138,7 @@ describe('G10a A11.1 adversarial protocol contract', () => {
     lease.release();
   });
 
-  test('maps unexpected control failures to the single closed INTERNAL_UNAVAILABLE error', async () => {
+  test('does not invoke an injected ID callback while dispatching a HOLD command', async () => {
     let calls = 0;
     const control = makeControl({ ids: () => {
       calls += 1;
@@ -146,6 +146,7 @@ describe('G10a A11.1 adversarial protocol contract', () => {
       throw new Error('secret factory diagnostic');
     } });
     await expect(dispatchRuntimeControlProtocol(control, hold()))
-      .resolves.toEqual({ v: 'c1', requestControlId: idA, ok: false, code: 'INTERNAL_UNAVAILABLE' });
+      .resolves.toMatchObject({ v: 'c1', requestControlId: idA, ok: true, command: 'HOLD', outcome: 'HELD' });
+    expect(calls).toBe(0);
   });
 });
