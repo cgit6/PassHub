@@ -25,6 +25,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "clean": "node scripts/clean.mjs",
+    "runtime:control": "node dist/src/runtime/internal/runtime-control-cli.js",
     "test:unit": "npm run build && NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs",
     "test:g05a": "npm run build && NODE_OPTIONS=--experimental-vm-modules jest --config jest.g05a.unit.config.cjs",
     "test:g05b": "npm run build && NODE_OPTIONS=--experimental-vm-modules jest --config jest.g05b.unit.config.cjs",
@@ -74,7 +75,9 @@
     "test:perf": "node scripts/test-perf.mjs",
     "test:g09b:perf:smoke": "node scripts/test-perf.mjs --gate g09b --smoke",
     "test:g09b:fixture": "npm run build && NODE_OPTIONS=--experimental-vm-modules jest --config jest.g09b.fixture.config.cjs",
-    "test:g10a:unit": "npm run build && NODE_OPTIONS=--experimental-vm-modules jest --config jest.g10a.unit.config.cjs",
+    "test:g10a:unit": "npm run clean && npm run build && timeout --foreground 60s env NODE_OPTIONS=--experimental-vm-modules jest --config jest.g10a.unit.config.cjs",
+    "test:g10a:socket": "npm run clean && npm run build && timeout --foreground 300s env NODE_OPTIONS=--experimental-vm-modules jest --config jest.g10a.socket.config.cjs",
+    "test:g10a": "npm run test:g10a:unit && npm run test:g10a:socket",
     "test:integration": "npm run build && NODE_OPTIONS=--experimental-vm-modules jest --config jest.integration.config.cjs",
     "test:g04a": "node scripts/test-g04a-integration.mjs",
     "test:g04b": "node scripts/test-g04b-integration.mjs",
