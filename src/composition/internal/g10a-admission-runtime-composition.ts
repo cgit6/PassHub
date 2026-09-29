@@ -14,6 +14,11 @@ import {
 } from '../../runtime/internal/runtime-control.js';
 import { assertRuntimeLogSink, type RuntimeLogSink } from '../../runtime/internal/runtime-log-sink.js';
 import type { AcceptedIngressHandler } from '../../shared/internal/http/index.js';
+import { createG10aIngressIdentityHandler } from './g10a-ingress-identity.js';
+import {
+  assertG10aRuntimeCapabilities,
+  type G10aRuntimeCapabilities,
+} from './g10a-runtime-owner.js';
 
 /**
  * Private composition seam for the G10a runtime and the existing G07b writer
@@ -29,6 +34,8 @@ export interface G10aAdmissionRuntimeCompositionOptions {
   readonly controlIdFactory?: () => string;
   /** Optional, private best-effort logger. It is not an application input. */
   readonly runtimeLogSink?: RuntimeLogSink;
+  /** A started, nominal runtime owner may inject its single process capabilities. */
+  readonly runtime?: G10aRuntimeCapabilities;
 }
 
 export interface G10aAdmissionRuntimeComposition {
@@ -63,11 +70,15 @@ export function createG10aAdmissionRuntimeComposition(
     throw new TypeError('G10a runtime epoch does not match G07b admission epoch');
   }
 
-  const identityIssuer = createRuntimeIdentityIssuer({
+  const runtime = options.runtime;
+  if (runtime !== undefined && (options.controlIdFactory !== undefined || options.runtimeLogSink !== undefined)) {
+    throw new TypeError('G10a runtime owner cannot be combined with local control options');
+  }
+  const identityIssuer = runtime?.identityIssuer ?? createRuntimeIdentityIssuer({
     datasetEpoch: options.epoch,
     processRunId: options.run,
   });
-  const control = createRuntimeControl({
+  const control = runtime?.control ?? createRuntimeControl({
     epoch: options.epoch,
     run: options.run,
     identityIssuer,
@@ -76,13 +87,28 @@ export function createG10aAdmissionRuntimeComposition(
     ...(options.controlIdFactory === undefined ? {} : { controlIdFactory: options.controlIdFactory }),
     ...(options.runtimeLogSink === undefined ? {} : { runtimeLogSink: options.runtimeLogSink }),
   });
+  if (runtime !== undefined) {
+    const snapshot = control.snapshot();
+    if (snapshot.epoch !== options.epoch || snapshot.run !== options.run) {
+      throw new TypeError('G10a runtime owner identity does not match admission runtime');
+    }
+  }
   const writerPermission = createG10aWriterPermissionBinding(control);
   const queryPermission = createG10aQueryPermissionBinding(control);
-  const handler = createG07bAdmissionHandler({
+  const admissionHandler = createG07bAdmissionHandler({
     ...options.admission,
     writerPermission,
     queryPermission,
   });
+  const handler = runtime === undefined
+    ? admissionHandler
+    : createG10aIngressIdentityHandler({
+      handler: admissionHandler,
+      // Only an owner-issued capability bundle may drive ingress logging.
+      // Local standalone compositions intentionally retain their old handler
+      // until a real process owner supplies the indivisible runtime.
+      runtime,
+    });
   return Object.freeze({ handler, control });
 }
 
@@ -94,11 +120,12 @@ function captureFactoryOptions(input: unknown): Readonly<{
   readonly admission: Omit<G07bAdmissionHandlerOptions, 'writerPermission' | 'queryPermission'>;
   readonly controlIdFactory: (() => string) | undefined;
   readonly runtimeLogSink: RuntimeLogSink | undefined;
+  readonly runtime: G10aRuntimeCapabilities | undefined;
 }> {
   const record = capturePlainRecord(
     input,
     ['epoch', 'run', 'monotonicClock', 'awaitObservation', 'admission'],
-    ['controlIdFactory', 'runtimeLogSink'],
+    ['controlIdFactory', 'runtimeLogSink', 'runtime'],
     'G10a admission runtime options',
   );
   return Object.freeze({
@@ -109,7 +136,14 @@ function captureFactoryOptions(input: unknown): Readonly<{
     admission: captureAdmissionOptions(record.admission),
     controlIdFactory: record.controlIdFactory as (() => string) | undefined,
     runtimeLogSink: captureRuntimeLogSink(record.runtimeLogSink),
+    runtime: captureRuntime(record.runtime),
   });
+}
+
+function captureRuntime(value: unknown): G10aRuntimeCapabilities | undefined {
+  if (value === undefined) return undefined;
+  assertG10aRuntimeCapabilities(value);
+  return value;
 }
 
 function captureRuntimeLogSink(value: unknown): RuntimeLogSink | undefined {

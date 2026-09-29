@@ -42,6 +42,12 @@ export interface G10aRuntimeOwnerOptions {
  * parallel issuer with the same strings.
  */
 export interface G10aRuntimeCapabilities {
+  /**
+   * Compile-time nominal marker.  The matching runtime WeakSet check below is
+   * the authority at the JavaScript boundary; together they stop a caller
+   * from assembling an ingress runtime out of independently acquired parts.
+   */
+  readonly __g10aRuntimeCapabilities: unique symbol;
   readonly control: RuntimeControl;
   readonly identityIssuer: RuntimeIdentityIssuer;
   readonly runtimeLogSink: RuntimeLogSink;
@@ -60,6 +66,24 @@ export interface G10aRuntimeOwner {
   close(): Promise<void>;
 }
 
+// These are internal capabilities, not structural configuration objects.  The
+// later HTTP composition must only consume the bundle created by this owner;
+// otherwise a caller could splice an unrelated issuer or sink into one run.
+const runtimeOwners = new WeakSet<object>();
+const runtimeCapabilities = new WeakSet<object>();
+
+export function assertG10aRuntimeOwner(value: unknown): asserts value is G10aRuntimeOwner {
+  if (typeof value !== 'object' || value === null || !runtimeOwners.has(value)) {
+    throw new TypeError('G10a runtime owner is not trusted');
+  }
+}
+
+export function assertG10aRuntimeCapabilities(value: unknown): asserts value is G10aRuntimeCapabilities {
+  if (typeof value !== 'object' || value === null || !runtimeCapabilities.has(value)) {
+    throw new TypeError('G10a runtime capabilities are not trusted');
+  }
+}
+
 export class G10aRuntimeOwnerError extends Error {
   constructor(message: string) {
     super(message);
@@ -75,7 +99,9 @@ export class G10aRuntimeOwnerError extends Error {
  * control-socket startup failure rejects and closes that sink.
  */
 export function createG10aRuntimeOwner(input: G10aRuntimeOwnerOptions): G10aRuntimeOwner {
-  return new PrivateG10aRuntimeOwner(captureOptions(input));
+  const owner = new PrivateG10aRuntimeOwner(captureOptions(input));
+  runtimeOwners.add(owner);
+  return owner;
 }
 
 type OwnerState = 'NEW' | 'STARTING' | 'RUNNING' | 'FAILED' | 'CLOSING' | 'CLOSED';
@@ -134,7 +160,8 @@ class PrivateG10aRuntimeOwner implements G10aRuntimeOwner {
         runtimeLogSink: logs.sink,
         socketPath: service.socketPath,
         loggingAvailable: logs.store !== null,
-      });
+      }) as G10aRuntimeCapabilities;
+      runtimeCapabilities.add(runtime);
       if (this.state === 'CLOSING' || this.state === 'CLOSED') {
         // A concurrent close awaits this start and performs the canonical
         // listener-then-sink shutdown.  Do not create a second cleanup path.

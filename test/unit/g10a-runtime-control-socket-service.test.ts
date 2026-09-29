@@ -33,12 +33,15 @@ function operationRecord(second: number): RuntimeLogRecord {
   });
 }
 
-function control(awaitObservation: (remainingMs: number) => PromiseLike<void> | void = () => undefined): RuntimeControl {
+function control(
+  awaitObservation: (remainingMs: number) => PromiseLike<void> | void = () => undefined,
+  nowMs: () => number = () => performance.now(),
+): RuntimeControl {
   return createRuntimeControl({
     epoch,
     run,
     identityIssuer: createRuntimeIdentityIssuer({ datasetEpoch: epoch, processRunId: run }),
-    clock: Object.freeze({ nowMs: () => performance.now() }),
+    clock: Object.freeze({ nowMs }),
     awaitObservation,
     controlIdFactory: randomUUID,
   });
@@ -164,7 +167,12 @@ describe('G10a A11.4 private runtime-control service composition', () => {
     const directory = join(parent, 'control');
     let releaseLateObservation!: () => void;
     const lateObservation = new Promise<void>((resolve) => { releaseLateObservation = resolve; });
-    const instance = control(() => lateObservation);
+    // Freeze the *business* monotonic clock.  This test is specifically about
+    // the transport's post-mutation watchdog; a real 1ms business deadline
+    // races the event loop when the unit tier is parallel and can legitimately
+    // yield NOT_DRAINED before that watchdog fires.  Keeping the business
+    // clock at zero makes this a deterministic watchdog-only scenario.
+    const instance = control(() => lateObservation, () => 0);
     const issued = instance.acquireIssuedPersistence();
     const service = await createRuntimeControlSocketService({
       control: instance,
