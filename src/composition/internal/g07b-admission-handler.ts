@@ -175,6 +175,8 @@ export interface AdmissionWorkContext {
   readonly operationId: string;
   readonly receivedAtMs: number;
   readonly sequence: bigint;
+  /** Private G10a provenance; null for legacy composition harnesses. */
+  readonly runtimeIdentity?: RuntimeIdentity | null;
 }
 
 export interface AdmissionWorkPort {
@@ -578,7 +580,7 @@ export function createG07bAdmissionHandler(
     }
     try {
       const outcome = await invokeG08WriterWork(
-        () => managementWork(input.workInput, workContext(context)),
+        () => managementWork(input.workInput, workContext(context, input.runtimeIdentity)),
       );
       settleWriterOutcome(input.owner, settlement, outcome);
     } catch {
@@ -651,7 +653,7 @@ export function createG07bAdmissionHandler(
 
       if (input.runningPlan === null) throw new AdmissionTechnicalError('RUNNING_PLAN_REQUIRED');
       observations.set(registration.observationReference, {
-        original: workContext(context),
+        original: workContext(context, input.runtimeIdentity),
         progressPlan: input.runningPlan,
       });
       input.deadlineObservation.useProgress(input.runningPlan);
@@ -682,7 +684,7 @@ export function createG07bAdmissionHandler(
     let outcome: AdmissionRecognitionWriterOutcome;
     try {
       outcome = sanitizeRecognitionWriterOutcome(
-        await invokeG08WriterWork(() => recognitionWork(input.workInput, workContext(context))),
+        await invokeG08WriterWork(() => recognitionWork(input.workInput, workContext(context, input.runtimeIdentity))),
         renderResponsePlan,
       );
     } catch {
@@ -775,7 +777,7 @@ export function createG07bAdmissionHandler(
       });
       const receipt = offerUnknownRecognition(Object.freeze({
         confirmationLease: confirmation,
-        operation: workContext(context),
+        operation: workContext(context, input.runtimeIdentity),
         observationReference,
         recovery,
       }));
@@ -1659,11 +1661,12 @@ function isRelatedWrite(routeId: BusinessRouteId): boolean {
   return isManagementRoute(routeId) || routeId === 'RECOGNITION_ATTEMPT';
 }
 
-function workContext(context: WriteOperationContext): AdmissionWorkContext {
+function workContext(context: WriteOperationContext, runtimeIdentity: RuntimeIdentity | null): AdmissionWorkContext {
   return Object.freeze({
     operationId: context.operationId,
     receivedAtMs: context.receivedAtMs,
     sequence: context.sequence,
+    runtimeIdentity,
   });
 }
 

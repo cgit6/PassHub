@@ -48,6 +48,7 @@ async function flush(): Promise<void> {
 function makeComposition(
   workOverride?: Partial<AdmissionWorkPort>,
   validateOverride?: (input: AdmissionValidationInput) => Promise<AdmissionValidationResult>,
+  onManagementContext?: (context: Parameters<AdmissionWorkPort['management']>[1]) => void,
 ) {
   const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
   const handoff = createAdmissionWorkHandoffBundle();
@@ -97,7 +98,10 @@ function makeComposition(
   const defaults: AdmissionWorkPort = {
     login: () => Promise.resolve(plans.business.issue(200, { ok: true })),
     query: query.work.query,
-    management: () => Promise.resolve({ disposition: 'KNOWN_NO_EFFECT', response: plans.technical.issue('INVALID_REQUEST') }),
+    management: (_input, context) => {
+      onManagementContext?.(context);
+      return Promise.resolve({ disposition: 'KNOWN_NO_EFFECT', response: plans.technical.issue('INVALID_REQUEST') });
+    },
     recognition: () => Promise.resolve({ disposition: 'KNOWN_NO_EFFECT', response: plans.technical.issue('INVALID_REQUEST') }),
   };
   const admission = {
@@ -174,13 +178,18 @@ describe('G10a A4 admission runtime composition', () => {
     });
     try {
       const runtime = await owner.start();
-      const fixture = makeComposition();
+      let observedContext: Parameters<AdmissionWorkPort['management']>[1] | undefined;
+      const fixture = makeComposition(undefined, undefined, (context) => { observedContext = context; });
       const composed = createG10aAdmissionRuntimeComposition({
         epoch: EPOCH, run: RUN, monotonicClock: { nowMs: () => performance.now() }, awaitObservation: () => undefined,
         admission: fixture.admission, runtime,
       });
       invoke(composed.handler);
       await flush();
+      expect(observedContext?.runtimeIdentity).not.toBeNull();
+      expect(runtime.identityIssuer.read(observedContext?.runtimeIdentity!)).toMatchObject({
+        operationUUID: expect.any(String), route: 'MANAGEMENT_CREATE', datasetEpoch: EPOCH, processRunId: RUN,
+      });
       await runtime.runtimeLogSink.flush();
       const records = (await readFile(join(parent, 'logs', 'runtime.log'), 'utf8'))
         .split('\n').filter((line) => line.length > 0)
