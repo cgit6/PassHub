@@ -76,6 +76,11 @@ import {
   type G10aQueryPermissionBinding,
 } from './g10a-query-permission-binding.js';
 import {
+  assertG10aOperationIdentityBinding,
+  type G10aOperationIdentityBinding,
+} from './g10a-operation-identity-binding.js';
+import type { RuntimeIdentity } from '../../runtime/internal/runtime-control.js';
+import {
   captureConstructionMethod,
   captureOptionalConstructionProperty,
   captureConstructionProperty,
@@ -198,6 +203,8 @@ export interface G07bAdmissionHandlerOptions {
   readonly writerPermission?: unknown;
   /** Internal G10a bridge; absent preserves the pre-A9 query harness. */
   readonly queryPermission?: unknown;
+  /** Internal G10a bridge; binds a registered writer to its ingress identity. */
+  readonly operationIdentityBinding?: unknown;
 }
 
 interface WriterInput {
@@ -213,6 +220,7 @@ interface WriterInput {
   readonly runningPlan: HttpResponsePlan | null;
   readonly pausedUnknownPlan: HttpResponsePlan | null;
   readonly deadlineObservation: DeadlineObservationController;
+  readonly runtimeIdentity: RuntimeIdentity | null;
 }
 
 interface ObservationState {
@@ -314,6 +322,11 @@ export function createG07bAdmissionHandler(
   const queryPermissionMaintenanceVeto = queryPermission === undefined
     ? undefined
     : captureConstructionMethod(queryPermission, 'isMaintenanceQueryVeto', 'G10a query permission').bind(queryPermission) as G10aQueryPermissionBinding['isMaintenanceQueryVeto'];
+  const operationIdentityBinding = options.operationIdentityBinding;
+  if (operationIdentityBinding !== undefined) assertG10aOperationIdentityBinding(operationIdentityBinding);
+  const bindOperationIdentity = operationIdentityBinding === undefined
+    ? undefined
+    : captureConstructionMethod(operationIdentityBinding, 'bind', 'G10a operation identity binding').bind(operationIdentityBinding) as G10aOperationIdentityBinding['bind'];
   assertOptions(options, validator, work, validatorValidate, loginWorkMethod, queryWorkMethod, managementWorkMethod, recognitionWorkMethod);
   const validatorIdentity = getQueryAdmissionIdentity(validatorValidate);
   const workIdentity = getQueryAdmissionIdentity(queryWorkMethod);
@@ -899,6 +912,11 @@ export function createG07bAdmissionHandler(
     try {
       if (classification.routeId === 'RECOGNITION_ATTEMPT') reservation = reserveCandidate();
       provisional = provisionalFor(classification.routeId);
+      // Registration is the unique point at which the coordinator has a real
+      // operation UUID.  Bind it to the already accepted ingress before any
+      // validation or G08 work can begin; a later slice carries this opaque
+      // identity into persistence and driver producers.
+      const runtimeIdentity = bindOperationIdentity?.(accepted, provisional.receipt) ?? null;
       if (bundle.origin === null) throw new AdmissionTechnicalError('ORIGIN_LEASE_REQUIRED');
       originByOperation.set(provisional.receipt.operationId, bundle.origin);
       owner = createHttpResponseOwner({
@@ -927,6 +945,7 @@ export function createG07bAdmissionHandler(
         bundle.validation,
         reservation,
         deadlineObservation,
+        runtimeIdentity,
       ).catch(() => undefined);
     } catch {
       if (reservation !== null) safeReleaseReservation(reservation);
@@ -957,6 +976,7 @@ export function createG07bAdmissionHandler(
     validationLease: ValidationAdmissionLease,
     reservation: OperationRegistryReservation | null,
     deadlineObservation: DeadlineObservationController,
+    runtimeIdentity: RuntimeIdentity | null,
   ): Promise<void> {
     let validation: CanonicalAdmissionValidationResult;
     try {
@@ -1022,6 +1042,7 @@ export function createG07bAdmissionHandler(
           runningPlan: null,
           pausedUnknownPlan: null,
           deadlineObservation,
+          runtimeIdentity,
         });
       } else if (validation.kind === 'RECOGNITION' && reservation !== null) {
         const runningPlan = recognitionProgressPlan(
@@ -1049,6 +1070,7 @@ export function createG07bAdmissionHandler(
           runningPlan,
           pausedUnknownPlan,
           deadlineObservation,
+          runtimeIdentity,
         });
       } else {
         throw new AdmissionTechnicalError('VALIDATION_KIND_MISMATCH');
@@ -1742,6 +1764,7 @@ function captureOptions(options: G07bAdmissionHandlerOptions): G07bAdmissionHand
     writerQuiescence: captureOptionalConstructionProperty(options, 'writerQuiescence', 'G07b options'),
     writerPermission: captureOptionalConstructionProperty(options, 'writerPermission', 'G07b options'),
     queryPermission: captureOptionalConstructionProperty(options, 'queryPermission', 'G07b options'),
+    operationIdentityBinding: captureOptionalConstructionProperty(options, 'operationIdentityBinding', 'G07b options'),
   }) as G07bAdmissionHandlerOptions;
 }
 

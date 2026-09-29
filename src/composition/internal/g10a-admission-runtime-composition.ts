@@ -15,6 +15,7 @@ import {
 import { assertRuntimeLogSink, type RuntimeLogSink } from '../../runtime/internal/runtime-log-sink.js';
 import type { AcceptedIngressHandler } from '../../shared/internal/http/index.js';
 import { createG10aIngressIdentityHandler } from './g10a-ingress-identity.js';
+import { createG10aOperationIdentityBinding } from './g10a-operation-identity-binding.js';
 import {
   assertG10aRuntimeCapabilities,
   type G10aRuntimeCapabilities,
@@ -99,6 +100,7 @@ export function createG10aAdmissionRuntimeComposition(
     ...options.admission,
     writerPermission,
     queryPermission,
+    ...(runtime === undefined ? {} : { operationIdentityBinding: createG10aOperationIdentityBinding(runtime) }),
   });
   const handler = runtime === undefined
     ? admissionHandler
