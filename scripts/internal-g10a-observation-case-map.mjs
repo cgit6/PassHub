@@ -6,8 +6,6 @@ const PHASES = Object.freeze(['test:g10a:unit', 'test:g10a:socket', 'test:g10a:i
 // must see every entry for its phase exactly once; it never derives case IDs
 // from Jest titles.  Paths are Jest's compiled `dist` paths, not source paths.
 //
-// G10A_SECRET_LOG_REDACTION is deliberately absent.  It needs an explicitly
-// approved direct observation mapping before this boundary may report it.
 const CASES = [
   ['G10A_SOCKET_PATH', 'test:g10a:unit', 'dist/test/unit/g10a-runtime-control-socket-path.test.js', 'G10a A11.2 private runtime-control socket path is private and creates only a missing direct child directory at 0700'],
   ['G10A_SOCKET_LISTENER', 'test:g10a:unit', 'dist/test/unit/g10a-runtime-control-socket-listener.test.js', 'G10a A11.3a private AF_UNIX control listener lifecycle is private, creates a 0600 socket, invokes only its transport callback, and closes idempotently'],
@@ -32,6 +30,7 @@ const CASES = [
   ['G10A_MONGO_QUERY_DRAIN', 'test:g10a:integration', 'dist/test/integration/g10a-driver-log-mongo.test.js', 'G10a true MongoDB driver command monitoring DRAIN waits for a query that already reached G09 native Mongo work, then keeps the maintenance veto'],
   ['G10A_MONGO_RECOGNITION_RETRY', 'test:g10a:integration', 'dist/test/integration/g10a-recognition-http-mongo.test.js', 'G10a true HTTP/Mongo recognition retry provenance existing-only joins then canonically replays under maintenance without a second registration or Mongo Event'],
   ['G10A_SECRET_LOG_SCHEMA', 'test:g10a:unit', 'dist/test/unit/g10a-runtime-log-schema.test.js', 'G10a A10.1 private runtime log schema fails closed on hostile values passed directly to encode, without invoking getters or toJSON'],
+  ['G10A_SECRET_LOG_REDACTION', 'test:g10a:integration', 'dist/test/integration/g10a-driver-log-mongo.test.js', 'G10A_SECRET_LOG_REDACTION excludes a unique driver-payload canary from raw logs and real LOGS_READ while retaining driver allowlist fields'],
   ['G10A_SECRET_EVIDENCE_BOUNDARY', 'test:g10a:unit', 'dist/test/unit/g10a-evidence.test.js', 'G10a private evidence boundary writes only the closed safe artifact set with reproducible provenance hashes'],
   ['G10A_SECRET_CONTROL_PROTOCOL', 'test:g10a:socket', 'dist/test/socket/g10a-runtime-control-cli.test.js', 'G10a private control CLI does not leak local invalid request bytes and uses closed protocol failure'],
 ];

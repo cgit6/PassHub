@@ -18,10 +18,19 @@ type Evidence = Readonly<{
   writeG10aEvidenceArtifacts(input: { root: string; outputRoot?: string; runId: string; provenance: EvidenceProvenance; results: object; categories: object; cleanup: object }): Promise<{ runId: string; artifactNames: readonly string[] }>;
   createG10aEvidenceResults(input: { status: 'PASS' | 'FAIL' | 'INCOMPLETE' | 'FAILED'; phases: unknown[]; environment?: unknown; categoryEvidenceStatus: 'COMPLETE' | 'INCOMPLETE' | 'FAILED' }): object;
   createG10aEvidenceCategories(input?: object): object;
+  collectG10aEvidenceCategories(input: { phases?: unknown; environment?: unknown; observations?: unknown }): Promise<Record<string, any>>;
   createG10aEvidenceCleanup(input: { status: 'PASS' | 'FAIL'; dockerContainersAbsent: boolean; composeContainersAbsent: boolean; composeNetworksAbsent: boolean }): object;
   assertG10aEvidenceOutputRoot(input: { root: string; outputRoot?: string }): Promise<string>;
   runWithPrimaryFailure(input: { execute: () => Promise<unknown>; cleanup: () => Promise<void> }): Promise<unknown>;
 }>;
+
+const CATEGORY_CASES: Record<'socket' | 'rotation' | 'control' | 'mongo' | 'secret', readonly string[]> = {
+  socket: ['G10A_SOCKET_PATH', 'G10A_SOCKET_LISTENER', 'G10A_SOCKET_FRAMING', 'G10A_SOCKET_PROTOCOL', 'G10A_SOCKET_SERVICE', 'G10A_SOCKET_CLI', 'G10A_SOCKET_WATCHDOG'],
+  rotation: ['G10A_ROTATION_FILE_STORE', 'G10A_ROTATION_ARCHIVE', 'G10A_ROTATION_READER', 'G10A_ROTATION_HEALTH', 'G10A_ROTATION_SINK'],
+  control: ['G10A_CONTROL_STATUS', 'G10A_CONTROL_HOLD_RELEASE', 'G10A_CONTROL_DRAIN', 'G10A_CONTROL_REPLAY', 'G10A_CONTROL_LIVE_COUNTERS', 'G10A_CONTROL_LOG_PRODUCERS'],
+  mongo: ['G10A_MONGO_DRIVER_MONITORING', 'G10A_MONGO_HTTP_MANAGEMENT', 'G10A_MONGO_QUERY_DRAIN', 'G10A_MONGO_RECOGNITION_RETRY'],
+  secret: ['G10A_SECRET_LOG_SCHEMA', 'G10A_SECRET_LOG_REDACTION', 'G10A_SECRET_EVIDENCE_BOUNDARY', 'G10A_SECRET_CONTROL_PROTOCOL'],
+};
 
 describe('G10a private evidence boundary', () => {
   const cleanups: string[] = [];
@@ -36,6 +45,20 @@ describe('G10a private evidence boundary', () => {
     const provenance = await evidence.collectG10aEvidenceProvenance({ root: fixture.root, git: cleanGit });
     const second = await evidence.collectG10aEvidenceProvenance({ root: fixture.root, git: cleanGit });
     expect(provenance).toEqual(second);
+    expect(Object.keys(provenance.hashes).sort()).toEqual([
+      'compose', 'environmentProof', 'evidenceHelper', 'executionCore', 'executionRunner', 'g10aSource', 'g10aTests', 'inventory',
+      'jestIntegration', 'jestSocket', 'jestUnit', 'observationCaseMap', 'packageJson', 'packageLock', 'runner', 'safeJestReporter',
+      'sourceTree', 'toolchain', 'tsconfig',
+    ].sort());
+    for (const [key, file] of [
+      ['safeJestReporter', 'g10a-safe-jest-reporter.mjs'],
+      ['observationCaseMap', 'internal-g10a-observation-case-map.mjs'],
+    ] as const) {
+      await writeFile(join(fixture.root, 'scripts', file), `export const changed = '${key}';\n`);
+      const changed = await evidence.collectG10aEvidenceProvenance({ root: fixture.root, git: cleanGit });
+      expect(changed.hashes[key]).not.toBe(provenance.hashes[key]);
+      expect(changed.hashes.inventory).not.toBe(provenance.hashes.inventory);
+    }
     const outputRoot = join(fixture.root, 'private-evidence-root');
     await mkdir(outputRoot, { recursive: true, mode: 0o700 });
     const results = goodResults(evidence);
@@ -203,7 +226,7 @@ describe('G10a private evidence boundary', () => {
       control: { status: 'PASS', cases: [{ id: 'G10A_CONTROL_DRAIN', status: 'PASS' }] },
       mongo: { status: 'PASS', cases: [{ id: 'G10A_MONGO_DRIVER_MONITORING', status: 'PASS' }] },
       secret: { status: 'PASS', cases: [{ id: 'G10A_SECRET_MONGODB_URI_PRIVATE', status: 'PASS' }] },
-    })).toThrow('category case');
+    })).toThrow('category');
     expect(() => evidence.createG10aEvidenceCategories({
       socket: { status: 'PASS', cases: [{ id: 'G10A_SOCKET_ARBITRARY_UPPERCASE_TEXT', status: 'PASS' }] },
     })).toThrow('category case');
@@ -222,6 +245,30 @@ describe('G10a private evidence boundary', () => {
       categories: incomplete,
       cleanup: goodCleanup(evidence),
     })).rejects.toThrow('result/category completeness mismatch');
+  });
+
+  test('builds complete fixed case artifacts from closed observations and gates only Mongo on environment proof', async () => {
+    const evidence = await loadEvidence();
+    const observations = completeObservations('PASS');
+    const complete = await evidence.collectG10aEvidenceCategories({
+      phases: completePhases(), environment: environmentProof(), observations,
+    });
+    for (const [category, ids] of Object.entries(CATEGORY_CASES)) {
+      expect(complete[category]).toMatchObject({ status: 'PASS', passedCaseCount: ids.length, failedCaseCount: 0 });
+      expect(complete[category].cases).toEqual(ids.map((id) => ({ id, status: 'PASS' })));
+    }
+
+    const missingEnvironment = await evidence.collectG10aEvidenceCategories({
+      phases: completePhases(), environment: null, observations,
+    });
+    expect(missingEnvironment.mongo).toMatchObject({ status: 'FAIL', passedCaseCount: 0, failedCaseCount: CATEGORY_CASES.mongo.length });
+    expect(missingEnvironment.socket.status).toBe('PASS');
+
+    const missingObservation = await evidence.collectG10aEvidenceCategories({
+      phases: completePhases(), environment: environmentProof(), observations: observations.slice(0, 2),
+    });
+    expect(Object.values(missingObservation).every((category: any) => category.status === 'FAIL' && category.cases.length > 0)).toBe(true);
+    expect(JSON.stringify(missingObservation)).not.toContain('MONGO_URI=must-not-persist');
   });
 });
 
@@ -248,6 +295,8 @@ async function workspaceFixture(): Promise<{ readonly root: string }> {
   await writeFile(join(root, 'scripts', 'internal-g10a-evidence.mjs'), 'export {};\n');
   await writeFile(join(root, 'scripts', 'test-g10a-evidence.mjs'), 'export {};\n');
   await writeFile(join(root, 'scripts', 'internal-g10a-evidence-runner.mjs'), 'export {};\n');
+  await writeFile(join(root, 'scripts', 'g10a-safe-jest-reporter.mjs'), 'export {};\n');
+  await writeFile(join(root, 'scripts', 'internal-g10a-observation-case-map.mjs'), 'export {};\n');
   await writeFile(join(root, 'scripts', 'internal-g10a-environment-proof.mjs'), 'export {};\n');
   await writeFile(join(root, 'infra', 'toolchain-images.json'), JSON.stringify({ images: {
     node: `node:24.21.0-bookworm-slim@sha256:${'a'.repeat(64)}`,
@@ -263,14 +312,20 @@ function phase(identifier: string, exitCode: number, durationMs: number, suiteCo
 }
 
 function environmentProof() { return { format: 'passhub.g10a.environment-proof.v1', nodeVersion: '24.21.0', mongoVersion: '8.0.32', replicaSet: 'rs0', writablePrimary: true }; }
+function completePhases() { return [phase('test:g10a:unit', 0, 1, 1, 1), phase('test:g10a:socket', 0, 1, 1, 1), phase('test:g10a:integration', 0, 1, 1, 1)]; }
+function completeObservations(status: 'PASS' | 'FAIL') {
+  return [
+    { phase: 'test:g10a:unit', cases: [...CATEGORY_CASES.socket.slice(0, 5), ...CATEGORY_CASES.rotation, ...CATEGORY_CASES.control, CATEGORY_CASES.secret[0], CATEGORY_CASES.secret[2]].map((id) => ({ id, status })) },
+    { phase: 'test:g10a:socket', cases: [CATEGORY_CASES.socket[5], CATEGORY_CASES.secret[3], CATEGORY_CASES.socket[6]].map((id) => ({ id, status })) },
+    { phase: 'test:g10a:integration', cases: [...CATEGORY_CASES.mongo, CATEGORY_CASES.secret[1]].map((id) => ({ id, status })) },
+  ];
+}
 function goodResults(evidence: Evidence): object { return evidence.createG10aEvidenceResults({ status: 'PASS', categoryEvidenceStatus: 'COMPLETE', phases: [phase('test:g10a:unit', 0, 1, 1, 1), phase('test:g10a:socket', 0, 1, 1, 1), phase('test:g10a:integration', 0, 1, 1, 1)], environment: environmentProof() }); }
 function goodCategories(evidence: Evidence): object {
   return evidence.createG10aEvidenceCategories({
-    socket: { status: 'PASS', cases: [{ id: 'G10A_SOCKET_PROTOCOL', status: 'PASS' }] },
-    rotation: { status: 'PASS', cases: [{ id: 'G10A_ROTATION_ARCHIVE', status: 'PASS' }] },
-    control: { status: 'PASS', cases: [{ id: 'G10A_CONTROL_DRAIN', status: 'PASS' }] },
-    mongo: { status: 'PASS', cases: [{ id: 'G10A_MONGO_DRIVER_MONITORING', status: 'PASS' }] },
-    secret: { status: 'PASS', cases: [{ id: 'G10A_SECRET_LOG_REDACTION', status: 'PASS' }] },
+    ...Object.fromEntries(Object.entries(CATEGORY_CASES).map(([category, ids]) => [category, {
+      status: 'PASS', cases: ids.map((id) => ({ id, status: 'PASS' })),
+    }])),
   });
 }
 function goodCleanup(evidence: Evidence): object { return evidence.createG10aEvidenceCleanup({ status: 'PASS', dockerContainersAbsent: true, composeContainersAbsent: true, composeNetworksAbsent: true }); }

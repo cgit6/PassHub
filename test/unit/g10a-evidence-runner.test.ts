@@ -1,5 +1,7 @@
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { chmod, lstat, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 
 const moduleUrl = pathToFileURL(join(process.cwd(), 'scripts', 'internal-g10a-evidence-runner.mjs')).href;
 const environmentProof = 'G10A_ENVIRONMENT_PROOF={"format":"passhub.g10a.environment-proof.v1","nodeVersion":"24.21.0","mongoVersion":"8.0.32","replicaSet":"rs0","writablePrimary":true}';
@@ -7,7 +9,18 @@ const environmentProof = 'G10A_ENVIRONMENT_PROOF={"format":"passhub.g10a.environ
 type Runner = Readonly<{
   parseJestCounts(output: unknown): { suiteCount: number | null; testCount: number | null };
   runG10aEvidence(input: Record<string, unknown>): Promise<{ phases: readonly { identifier: string; exitCode: number; durationMs: number; suiteCount: number | null; testCount: number | null }[]; cleanup: { status: string } }>;
+  createG10aObservationPath(input: { root: string; token: string }): string;
+  readG10aObservation(input: { root: string; path: string; phase: string }): Promise<{ phase: string; cases: readonly { id: string; status: string }[] }>;
+  removeG10aObservation(input: { root: string; path: string }): Promise<void>;
 }>;
+
+const CATEGORY_CASES: Record<string, readonly string[]> = {
+  socket: ['G10A_SOCKET_PATH', 'G10A_SOCKET_LISTENER', 'G10A_SOCKET_FRAMING', 'G10A_SOCKET_PROTOCOL', 'G10A_SOCKET_SERVICE', 'G10A_SOCKET_CLI', 'G10A_SOCKET_WATCHDOG'],
+  rotation: ['G10A_ROTATION_FILE_STORE', 'G10A_ROTATION_ARCHIVE', 'G10A_ROTATION_READER', 'G10A_ROTATION_HEALTH', 'G10A_ROTATION_SINK'],
+  control: ['G10A_CONTROL_STATUS', 'G10A_CONTROL_HOLD_RELEASE', 'G10A_CONTROL_DRAIN', 'G10A_CONTROL_REPLAY', 'G10A_CONTROL_LIVE_COUNTERS', 'G10A_CONTROL_LOG_PRODUCERS'],
+  mongo: ['G10A_MONGO_DRIVER_MONITORING', 'G10A_MONGO_HTTP_MANAGEMENT', 'G10A_MONGO_QUERY_DRAIN', 'G10A_MONGO_RECOGNITION_RETRY'],
+  secret: ['G10A_SECRET_LOG_SCHEMA', 'G10A_SECRET_LOG_REDACTION', 'G10A_SECRET_EVIDENCE_BOUNDARY', 'G10A_SECRET_CONTROL_PROTOCOL'],
+};
 
 describe('G10a evidence top-level runner', () => {
   test('keeps only whitelist summaries, then writes actual phase and cleanup results', async () => {
@@ -259,7 +272,7 @@ describe('G10a evidence top-level runner', () => {
     expect(writes[0].categories.secret.cases).toEqual([]);
   });
 
-  test('still hands closed incomplete artifacts to the writer when category collection and cleanup inspection are themselves malformed', async () => {
+  test('hands closed failed case artifacts to the writer when category collection and cleanup inspection are malformed', async () => {
     const runner = await loadRunner();
     const writes: any[] = [];
     await expect(runner.runG10aEvidence({
@@ -275,9 +288,9 @@ describe('G10a evidence top-level runner', () => {
       writeArtifacts: async (input: any) => { writes.push(input); return {}; },
     })).rejects.toThrow('G10a evidence category collection failed');
     expect(writes).toHaveLength(1);
-    expect(writes[0].results).toMatchObject({ status: 'INCOMPLETE', categoryEvidenceStatus: 'INCOMPLETE' });
+    expect(writes[0].results).toMatchObject({ status: 'FAILED', categoryEvidenceStatus: 'FAILED' });
     expect(writes[0].cleanup).toMatchObject({ status: 'FAIL', dockerContainersAbsent: false, composeContainersAbsent: false, composeNetworksAbsent: false });
-    expect(Object.values(writes[0].categories).every((category: any) => category.status === 'NOT_COLLECTED')).toBe(true);
+    expect(Object.values(writes[0].categories).every((category: any) => category.status === 'FAIL' && category.cases.length > 0)).toBe(true);
     expect(JSON.stringify(writes[0])).not.toContain('collector raw secret');
   });
 
@@ -309,9 +322,53 @@ describe('G10a evidence top-level runner', () => {
     expect(runner.parseJestCounts('Test Suites: 1 passed, one total\nTests: 1 passed, 1 total')).toEqual({ suiteCount: null, testCount: 1 });
     expect(runner.parseJestCounts('Test Suites: 0 total\nTests: 0 total')).toEqual({ suiteCount: null, testCount: null });
   });
+
+  test('rejects a missing or schema-expanded reporter file, and unlinks only its generated direct child', async () => {
+    const runner = await loadRawRunner();
+    const root = await mkdtemp(join(tmpdir(), 'passhub-g10a-observer-'));
+    try {
+      await mkdir(join(root, 'dist'), { mode: 0o700 });
+      const path = runner.createG10aObservationPath({ root, token: 'reader-test' });
+      await expect(runner.readG10aObservation({ root, path, phase: 'test:g10a:unit' })).rejects.toThrow('safe observation');
+      await writeFile(path, JSON.stringify({ format: 'passhub.g10a.jest-observation.v1', phase: 'test:g10a:unit', cases: [], private: 'MONGO_URI=must-not-persist' }), { mode: 0o600 });
+      await chmod(path, 0o600);
+      await expect(runner.readG10aObservation({ root, path, phase: 'test:g10a:unit' })).rejects.toThrow('safe observation');
+      await runner.removeG10aObservation({ root, path });
+      await expect(lstat(path)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test('fails closed with complete FAIL categories when a formal command omits reporter output', async () => {
+    const runner = await loadRawRunner();
+    const writes: any[] = [];
+    await expect(runner.runG10aEvidence({
+      root: '/safe/workspace', outputRoot: '/safe/private-output', runId: 'g10a-20261001-missing-observer', now: sequenceNow(0, 1),
+      assertOutputRoot: async () => '/safe/private-output', assertClean: async () => undefined, collectProvenance: async () => provenance(),
+      executeCommand: async () => ({ exitCode: 0, stdout: 'Test Suites: 1 passed, 1 total\nTests: 1 passed, 1 total\nMONGO_URI=must-not-persist' }),
+      inspectDocker: async () => ({ dockerContainersAbsent: true, composeContainersAbsent: true, composeNetworksAbsent: true }),
+      writeArtifacts: async (input: any) => { writes.push(input); return {}; },
+    })).rejects.toThrow('did not emit a valid G10a safe observation');
+    expect(writes).toHaveLength(1);
+    expect(writes[0].results.status).toBe('FAIL');
+    expect(Object.values(writes[0].categories).every((category: any) => category.status === 'FAIL' && category.cases.length > 0)).toBe(true);
+    expect(JSON.stringify(writes[0])).not.toContain('MONGO_URI=must-not-persist');
+  });
 });
 
-async function loadRunner(): Promise<Runner> { return await import(moduleUrl) as Runner; }
+async function loadRunner(): Promise<Runner> {
+  const loaded = await loadRawRunner();
+  return Object.freeze({
+    ...loaded,
+    runG10aEvidence: async (input: Record<string, unknown>) => await loaded.runG10aEvidence({
+      readObservation: async ({ phase }: { phase: string }) => Object.freeze({ phase, cases: Object.freeze([]) }),
+      removeObservation: async () => undefined,
+      ...input,
+    }),
+  });
+}
+async function loadRawRunner(): Promise<Runner> { return await import(moduleUrl) as Runner; }
 function sequenceNow(...values: number[]) { let index = 0; return () => values[index++] ?? values.at(-1) ?? 0; }
 function provenance() { return { format: 'passhub.g10a.evidence.v1', sourceCommit: 'a'.repeat(40), hashes: {}, toolchain: {} }; }
 function completeCategories() {
@@ -325,8 +382,8 @@ function incompleteCategories() {
   });
 }
 function category(category: string) {
-  const cases = [{ id: categoryCaseCode(category), status: 'PASS' }];
-  return { format: 'passhub.g10a.evidence-category.v1', version: 'g10a-category-summary-v1', category, status: 'PASS', cases, passedCaseCount: 1, failedCaseCount: 0, summaryHash: require('node:crypto').createHash('sha256').update(JSON.stringify(['g10a-category-summary-v1', category, cases.map((entry) => [entry.id, entry.status])]), 'utf8').digest('hex') };
+  const cases = (CATEGORY_CASES[category] ?? []).map((id) => ({ id, status: 'PASS' }));
+  return { format: 'passhub.g10a.evidence-category.v1', version: 'g10a-category-summary-v1', category, status: 'PASS', cases, passedCaseCount: cases.length, failedCaseCount: 0, summaryHash: require('node:crypto').createHash('sha256').update(JSON.stringify(['g10a-category-summary-v1', category, cases.map((entry) => [entry.id, entry.status])]), 'utf8').digest('hex') };
 }
 function incomplete(category: string) {
   return { format: 'passhub.g10a.evidence-category.v1', version: 'g10a-category-summary-v1', category, status: 'NOT_COLLECTED', cases: [], passedCaseCount: 0, failedCaseCount: 0, summaryHash: null };
@@ -338,9 +395,6 @@ function failedCategories() {
   });
 }
 function failed(category: string) {
-  const cases = [{ id: categoryCaseCode(category), status: 'FAIL' }];
-  return { format: 'passhub.g10a.evidence-category.v1', version: 'g10a-category-summary-v1', category, status: 'FAIL', cases, passedCaseCount: 0, failedCaseCount: 1, summaryHash: require('node:crypto').createHash('sha256').update(JSON.stringify(['g10a-category-summary-v1', category, cases.map((entry) => [entry.id, entry.status])]), 'utf8').digest('hex') };
-}
-function categoryCaseCode(category: string) {
-  return ({ socket: 'G10A_SOCKET_PROTOCOL', rotation: 'G10A_ROTATION_ARCHIVE', control: 'G10A_CONTROL_DRAIN', mongo: 'G10A_MONGO_DRIVER_MONITORING', secret: 'G10A_SECRET_LOG_REDACTION' } as Record<string, string>)[category] ?? 'G10A_SOCKET_PROTOCOL';
+  const cases = (CATEGORY_CASES[category] ?? []).map((id, index) => ({ id, status: index === 0 ? 'FAIL' : 'PASS' }));
+  return { format: 'passhub.g10a.evidence-category.v1', version: 'g10a-category-summary-v1', category, status: 'FAIL', cases, passedCaseCount: cases.length - 1, failedCaseCount: 1, summaryHash: require('node:crypto').createHash('sha256').update(JSON.stringify(['g10a-category-summary-v1', category, cases.map((entry) => [entry.id, entry.status])]), 'utf8').digest('hex') };
 }

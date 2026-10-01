@@ -45,7 +45,7 @@ const FIXED_ARTIFACT_NAMES = Object.freeze([
   'cleanup.json',
 ]);
 const HASH_KEYS = Object.freeze([
-  'sourceTree', 'g10aSource', 'g10aTests', 'packageJson', 'packageLock', 'tsconfig', 'runner', 'executionRunner', 'executionCore', 'environmentProof', 'evidenceHelper',
+  'sourceTree', 'g10aSource', 'g10aTests', 'packageJson', 'packageLock', 'tsconfig', 'runner', 'executionRunner', 'executionCore', 'safeJestReporter', 'observationCaseMap', 'environmentProof', 'evidenceHelper',
   'compose', 'toolchain', 'jestUnit', 'jestSocket', 'jestIntegration', 'inventory',
 ]);
 const PROVENANCE_KEYS = Object.freeze(['format', 'sourceCommit', 'hashes', 'toolchain']);
@@ -63,7 +63,7 @@ const PHASE_IDENTIFIERS = Object.freeze(['test:g10a:unit', 'test:g10a:socket', '
 export async function collectG10aEvidenceProvenance({ root, git = runGit } = {}) {
   const workspace = requireAbsoluteDirectory(root, 'root');
   const sourceCommit = await assertCleanGitWorktree({ root: workspace, git });
-  const [sourceTree, g10aSource, g10aTests, packageJson, packageLock, tsconfig, runner, executionRunner, executionCore, environmentProof, evidenceHelper, compose, toolchain, jestUnit, jestSocket, jestIntegration, images] = await Promise.all([
+  const [sourceTree, g10aSource, g10aTests, packageJson, packageLock, tsconfig, runner, executionRunner, executionCore, safeJestReporter, observationCaseMap, environmentProof, evidenceHelper, compose, toolchain, jestUnit, jestSocket, jestIntegration, images] = await Promise.all([
     sha256Directory(join(workspace, 'src')),
     sha256MatchingFiles(workspace, 'src', isG10aSourcePath),
     sha256MatchingFiles(workspace, 'test', isG10aTestPath),
@@ -73,6 +73,8 @@ export async function collectG10aEvidenceProvenance({ root, git = runGit } = {})
     sha256File(join(workspace, 'scripts', 'test-g10a-integration.mjs')),
     sha256File(join(workspace, 'scripts', 'test-g10a-evidence.mjs')),
     sha256File(join(workspace, 'scripts', 'internal-g10a-evidence-runner.mjs')),
+    sha256File(join(workspace, 'scripts', 'g10a-safe-jest-reporter.mjs')),
+    sha256File(join(workspace, 'scripts', 'internal-g10a-observation-case-map.mjs')),
     sha256File(join(workspace, 'scripts', 'internal-g10a-environment-proof.mjs')),
     sha256File(join(workspace, 'scripts', 'internal-g10a-evidence.mjs')),
     sha256File(join(workspace, 'infra', 'g04b-mongo-compose.yml')),
@@ -82,7 +84,7 @@ export async function collectG10aEvidenceProvenance({ root, git = runGit } = {})
     sha256File(join(workspace, 'jest.g10a.integration.config.cjs')),
     readPinnedImages(workspace),
   ]);
-  const unhashedInventory = freezeObject({ sourceTree, g10aSource, g10aTests, packageJson, packageLock, tsconfig, runner, executionRunner, executionCore, environmentProof, evidenceHelper, compose, toolchain, jestUnit, jestSocket, jestIntegration });
+  const unhashedInventory = freezeObject({ sourceTree, g10aSource, g10aTests, packageJson, packageLock, tsconfig, runner, executionRunner, executionCore, safeJestReporter, observationCaseMap, environmentProof, evidenceHelper, compose, toolchain, jestUnit, jestSocket, jestIntegration });
   const hashes = freezeObject({ ...unhashedInventory, inventory: sha256CanonicalInventory(unhashedInventory) });
 
   return freezeObject({
@@ -381,12 +383,28 @@ export function createG10aEvidenceCategories(input = {}) {
 }
 
 /**
- * The generic phase runner intentionally has no knowledge of individual test
- * case IDs.  Until a category-specific collector is supplied, it emits a
- * truthful incomplete skeleton rather than inferring coverage from stdout.
+ * Builds the five fixed case artifacts from the reporter's closed summaries.
+ * A malformed/missing observation or an incomplete phase fails every affected
+ * category closed; raw Jest output is never an input to this boundary.
  */
-export async function collectG10aEvidenceCategories() {
-  return createG10aEvidenceCategories();
+export async function collectG10aEvidenceCategories({ phases, environment, observations } = {}) {
+  const phaseComplete = hasExactSuccessfulPhases(phases);
+  const observed = phaseComplete ? collectObservedCaseStatuses(observations) : undefined;
+  const categories = {};
+  for (const category of CATEGORY_NAMES) {
+    const codes = CATEGORY_CASE_CODES[category];
+    const mongoGate = category !== 'mongo' || isExactEnvironmentProof(environment);
+    const cases = codes.map((id) => Object.freeze({
+      id,
+      status: observed !== undefined && mongoGate && observed.get(id) === 'PASS' ? 'PASS' : 'FAIL',
+    }));
+    categories[category] = createG10aEvidenceCategory({
+      category,
+      status: cases.every((entry) => entry.status === 'PASS') ? 'PASS' : 'FAIL',
+      cases,
+    });
+  }
+  return freezeObject(categories);
 }
 
 export function createG10aEvidenceCleanup({ status, dockerContainersAbsent, composeContainersAbsent, composeNetworksAbsent } = {}) {
@@ -444,8 +462,10 @@ function assertCategory(value) {
   const failed = value.cases.filter((entry) => entry.status === 'FAIL').length;
   if (value.passedCaseCount !== passed || value.failedCaseCount !== failed) throw new Error('G10a evidence category counts are invalid');
   if (value.status === 'NOT_COLLECTED' && (value.cases.length !== 0 || value.summaryHash !== null)) throw new Error('G10a evidence uncollected category is invalid');
-  if (value.status === 'PASS' && (value.cases.length === 0 || failed !== 0 || !SHA256.test(value.summaryHash ?? ''))) throw new Error('G10a evidence PASS category is invalid');
-  if (value.status === 'FAIL' && (value.cases.length === 0 || failed === 0 || !SHA256.test(value.summaryHash ?? ''))) throw new Error('G10a evidence FAIL category is invalid');
+  const completeAllowlist = value.cases.length === CATEGORY_CASE_CODES[value.category].length
+    && CATEGORY_CASE_CODES[value.category].every((id) => identifiers.has(id));
+  if (value.status === 'PASS' && (!completeAllowlist || failed !== 0 || !SHA256.test(value.summaryHash ?? ''))) throw new Error('G10a evidence PASS category is invalid');
+  if (value.status === 'FAIL' && (!completeAllowlist || failed === 0 || !SHA256.test(value.summaryHash ?? ''))) throw new Error('G10a evidence FAIL category is invalid');
   if (value.summaryHash !== null && value.summaryHash !== sha256CanonicalCategory(value.category, value.cases)) throw new Error('G10a evidence category hash is invalid');
 }
 
@@ -483,6 +503,34 @@ function assertArtifactInventory(value) {
 function assertEnvironmentProof(value) {
   assertExactKeys(value, ['format', 'nodeVersion', 'mongoVersion', 'replicaSet', 'writablePrimary'], 'environment proof');
   if (value.format !== ENVIRONMENT_PROOF_FORMAT || value.nodeVersion !== '24.21.0' || value.mongoVersion !== '8.0.32' || value.replicaSet !== 'rs0' || value.writablePrimary !== true) throw new Error('G10a evidence environment proof is invalid');
+}
+
+function isExactEnvironmentProof(value) {
+  try { assertEnvironmentProof(value); return true; } catch { return false; }
+}
+
+function hasExactSuccessfulPhases(value) {
+  if (!Array.isArray(value) || value.length !== PHASE_IDENTIFIERS.length) return false;
+  return value.every((phase, index) => phase !== null && typeof phase === 'object'
+    && phase.identifier === PHASE_IDENTIFIERS[index]
+    && phase.exitCode === 0
+    && hasCompleteJestTotals(phase));
+}
+
+function collectObservedCaseStatuses(value) {
+  if (!Array.isArray(value) || value.length !== PHASE_IDENTIFIERS.length) return undefined;
+  const expected = new Set(Object.values(CATEGORY_CASE_CODES).flat());
+  const statuses = new Map();
+  for (let index = 0; index < value.length; index += 1) {
+    const observation = value[index];
+    if (observation === null || typeof observation !== 'object' || observation.phase !== PHASE_IDENTIFIERS[index] || !Array.isArray(observation.cases)) return undefined;
+    for (const entry of observation.cases) {
+      if (entry === null || typeof entry !== 'object' || typeof entry.id !== 'string'
+        || (entry.status !== 'PASS' && entry.status !== 'FAIL') || !expected.has(entry.id) || statuses.has(entry.id)) return undefined;
+      statuses.set(entry.id, entry.status);
+    }
+  }
+  return statuses.size === expected.size && [...expected].every((id) => statuses.has(id)) ? statuses : undefined;
 }
 
 function isCount(value) { return value === null || (Number.isSafeInteger(value) && value >= 0); }

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { mkdtemp, mkdir, lstat, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join, relative, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import process from 'node:process';
 import { collectG10aEnvironmentProof, writeG10aEnvironmentProof } from './internal-g10a-environment-proof.mjs';
@@ -14,6 +14,7 @@ const uri = process.env.G10A_MONGO_URI ?? 'mongodb://127.0.0.1:27029/?replicaSet
 const databasePrefix = process.env.G10A_MONGO_DATABASE_PREFIX ?? `passhub_g10a_jest_${process.pid}`;
 const compose = ['compose', '--project-name', projectName, '-f', composeFile];
 const workspace = process.cwd();
+const safeObservation = readSafeObservationEnvironment(workspace);
 const nodeContainerName = `passhub-g10a-node-${process.pid}-${randomUUID().replaceAll('-', '')}`;
 const totalDeadlineMs = 300_000;
 const cleanupDeadlineMs = 30_000;
@@ -40,6 +41,10 @@ try {
     'run', '--rm', '--name', nodeContainerName, '--network', 'host', '--user', `${uid}:${gid}`,
     '-v', `${workspace}:/workspace`, '-v', `${scratch}:/tmp/passhub-g10a`, '-w', '/workspace',
     '-e', `G10A_MONGO_URI=${uri}`, '-e', `G10A_MONGO_DATABASE_PREFIX=${databasePrefix}`,
+    ...(safeObservation === undefined ? [] : [
+      '-e', `G10A_SAFE_JEST_REPORT_PATH=${safeObservation.containerPath}`,
+      '-e', `G10A_SAFE_JEST_REPORT_PHASE=${safeObservation.phase}`,
+    ]),
     '-e', 'HOME=/tmp/passhub-g10a/home', '-e', 'NPM_CONFIG_CACHE=/tmp/passhub-g10a/npm-cache',
     nodeImage, 'sh', '-lc',
     'node --version && npm --version && npm run clean && npm run build && node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.g10a.integration.config.cjs --runInBand',
@@ -79,6 +84,26 @@ try {
 }
 if (primaryFailure !== undefined) throw primaryFailure;
 writeG10aEnvironmentProof(environmentProof);
+
+function readSafeObservationEnvironment(root) {
+  const outputPath = process.env.G10A_SAFE_JEST_REPORT_PATH;
+  const phase = process.env.G10A_SAFE_JEST_REPORT_PHASE;
+  if (outputPath === undefined && phase === undefined) return undefined;
+  if (typeof outputPath !== 'string' || typeof phase !== 'string'
+    || !['test:g10a:unit', 'test:g10a:socket', 'test:g10a:integration'].includes(phase)) {
+    throw new Error('G10a integration safe observation environment is invalid');
+  }
+  const dist = resolve(root, 'dist');
+  const resolved = resolve(outputPath);
+  if (resolve(resolved, '..') !== dist
+    || basename(resolved) === ''
+    || !/^\.g10a-evidence-observation-[a-z0-9-]+\.json$/u.test(basename(resolved))) {
+    throw new Error('G10a integration safe observation path is invalid');
+  }
+  const insideWorkspace = relative(root, resolved);
+  if (insideWorkspace.startsWith('..') || insideWorkspace === '') throw new Error('G10a integration safe observation path is invalid');
+  return Object.freeze({ phase, containerPath: `/workspace/${insideWorkspace.split('\\').join('/')}` });
+}
 
 function remainingMs() {
   const remaining = Math.floor(totalDeadlineMs - (performance.now() - startedAt));
