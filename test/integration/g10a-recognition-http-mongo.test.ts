@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import { MongoClient, type Document } from 'mongodb';
 
@@ -36,8 +37,6 @@ import {
   createG04bFixture,
 } from '../../src/infrastructure/mongo/index.js';
 import { RUNTIME_CONTROL_SOCKET_FILE_NAME } from '../../src/runtime/internal/runtime-control-socket-path.js';
-import { dispatchRuntimeControlProtocol, type RuntimeControlProtocolFrame } from '../../src/runtime/internal/runtime-control-protocol.js';
-import type { RuntimeControl } from '../../src/runtime/internal/runtime-control.js';
 import { validateRuntimeLogRecord } from '../../src/runtime/internal/runtime-log-schema.js';
 import {
   FIXED_COMPARISON_REFERENCE_ID,
@@ -50,6 +49,7 @@ const EPOCH = '11111111-1111-4111-8111-111111111111';
 const RUN = '22222222-2222-4222-8222-222222222222';
 const ACCOUNT_ID = '33333333-3333-4333-8333-333333333333';
 const SOURCE_SECRET = 'A'.repeat(43);
+const FACE_SUBJECT = 'subject-1';
 const comparison = createVerifiedComparisonPort(verifyStartupVectorsAndCreateComparisonCapability({
   hmacKey: FIXED_TEST_HMAC_KEY,
   comparisonReferenceId: FIXED_COMPARISON_REFERENCE_ID,
@@ -105,39 +105,107 @@ function sendRecognition(
   });
 }
 
-async function status(control: RuntimeControl): Promise<ReturnType<RuntimeControl['snapshot']>> {
-  const text = `${JSON.stringify({ v: 'c1', requestControlId: randomUUID(), command: 'STATUS', epoch: EPOCH, run: RUN })}\n`;
-  const response = await dispatchRuntimeControlProtocol(control, Object.freeze({
-    text, utf8Valid: true, hasBom: false, singleFinalLf: true, byteLength: Buffer.byteLength(text),
-  }) satisfies RuntimeControlProtocolFrame);
-  if (response === undefined || !response.ok || response.snapshot === null) throw new Error('expected STATUS snapshot');
+function sendManagement(port: number, body: Record<string, unknown>): Promise<{ readonly status: number; readonly body: Record<string, unknown> }> {
+  const wire = JSON.stringify(body);
+  return new Promise((resolveRequest, reject) => {
+    const request = httpRequest({
+      host: '127.0.0.1', port, method: 'POST', path: '/qualifications', agent: false,
+      headers: {
+        Authorization: 'Bearer operator',
+        'PassHub-Dataset-Epoch': EPOCH,
+        'Content-Type': 'application/json',
+        'Content-Length': String(Buffer.byteLength(wire)),
+      },
+    }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on('data', (chunk: Buffer) => chunks.push(chunk));
+      response.once('end', () => resolveRequest({
+        status: response.statusCode ?? 0,
+        body: JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>,
+      }));
+    });
+    request.once('error', reject);
+    request.end(wire);
+  });
+}
+
+interface SocketControlSnapshot {
+  readonly revision: string;
+  readonly maintenance: Readonly<{ readonly active: boolean; readonly outcome: string | null }>;
+  readonly writers: Readonly<{ readonly queued: number; readonly running: number }>;
+  readonly issuedPersistence: number;
+}
+
+interface SocketControlResponse {
+  readonly command: string;
+  readonly outcome: string;
+  readonly revision: string;
+  readonly controlId: string | null;
+  readonly snapshot: SocketControlSnapshot | null;
+  readonly records: readonly unknown[] | null;
+}
+
+/**
+ * Runs the built private CLI.  It is deliberately not a direct protocol
+ * dispatch: the child process must preflight and speak the real AF_UNIX
+ * framing boundary owned by this test runtime.
+ */
+async function commandSocket(socketPath: string, payload: Readonly<Record<string, unknown>>): Promise<SocketControlResponse> {
+  const request = Buffer.from(`${JSON.stringify(payload)}\n`, 'utf8');
+  const result = await new Promise<{ readonly exitCode: number | null; readonly stdout: Buffer; readonly stderr: Buffer }>((resolveCommand, reject) => {
+    const child = spawn(process.execPath, [resolve(process.cwd(), 'dist/src/runtime/internal/runtime-control-cli.js'), socketPath], {
+      cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    child.stdout!.on('data', (chunk: Buffer) => stdout.push(chunk));
+    child.stderr!.on('data', (chunk: Buffer) => stderr.push(chunk));
+    child.once('error', reject);
+    child.once('close', (exitCode) => resolveCommand(Object.freeze({ exitCode, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr) })));
+    child.stdin!.end(request);
+  });
+  if (result.exitCode !== 0 || result.stderr.length !== 0) {
+    throw new Error(`private control CLI failed: ${result.stderr.toString('utf8')}`);
+  }
+  const value: unknown = JSON.parse(result.stdout.toString('utf8'));
+  if (typeof value !== 'object' || value === null || Array.isArray(value)
+    || (value as { readonly ok?: unknown }).ok !== true) {
+    throw new Error('private control CLI returned invalid success');
+  }
+  return value as SocketControlResponse;
+}
+
+async function status(socketPath: string): Promise<SocketControlSnapshot> {
+  const response = await commandSocket(socketPath, Object.freeze({
+    v: 'c1', requestControlId: randomUUID(), command: 'STATUS', epoch: EPOCH, run: RUN,
+  }));
+  if (response.command !== 'STATUS' || response.outcome !== 'STATUS' || response.snapshot === null) {
+    throw new Error('private control CLI did not return STATUS');
+  }
   return response.snapshot;
 }
 
 async function command(
-  control: RuntimeControl,
+  socketPath: string,
   commandName: 'HOLD' | 'RELEASE' | 'DRAIN',
   expectedRevision: string,
   extra: Readonly<Record<string, unknown>> = Object.freeze({}),
-): Promise<Extract<Awaited<ReturnType<typeof dispatchRuntimeControlProtocol>>, { readonly ok: true }>> {
-  const text = `${JSON.stringify({
+): Promise<SocketControlResponse> {
+  const response = await commandSocket(socketPath, Object.freeze({
     v: 'c1', requestControlId: randomUUID(), command: commandName, epoch: EPOCH, run: RUN, expectedRevision, ...extra,
-  })}\n`;
-  const response = await dispatchRuntimeControlProtocol(control, Object.freeze({
-    text, utf8Valid: true, hasBom: false, singleFinalLf: true, byteLength: Buffer.byteLength(text),
-  }) satisfies RuntimeControlProtocolFrame);
-  if (response === undefined || !response.ok) throw new Error(`${commandName} unexpectedly rejected`);
+  }));
+  if (response.command !== commandName) throw new Error(`private control CLI returned wrong command for ${commandName}`);
   return response;
 }
 
 async function waitForStatus(
-  control: RuntimeControl,
-  predicate: (snapshot: ReturnType<RuntimeControl['snapshot']>) => boolean,
+  socketPath: string,
+  predicate: (snapshot: SocketControlSnapshot) => boolean,
   label: string,
-): Promise<ReturnType<RuntimeControl['snapshot']>> {
+): Promise<SocketControlSnapshot> {
   const deadline = Date.now() + 3_000;
   while (Date.now() < deadline) {
-    const snapshot = await status(control);
+    const snapshot = await status(socketPath);
     if (predicate(snapshot)) return snapshot;
     await new Promise<void>((resolve) => { setTimeout(resolve, 5); });
   }
@@ -250,7 +318,6 @@ describe('G10a true HTTP/Mongo recognition retry provenance', () => {
       monotonicClock: { nowMs: () => performance.now() },
       awaitObservation: () => undefined,
     });
-    let control: RuntimeControl | undefined;
     let application: Awaited<ReturnType<typeof createG10aRuntimeHttpApplication>> | undefined;
     try {
       application = await createG10aRuntimeHttpApplication({
@@ -274,68 +341,106 @@ describe('G10a true HTTP/Mongo recognition retry provenance', () => {
               writerQuiescence: quiescence,
             },
           });
-          control = composed.control;
           return composed.handler;
         },
       });
       await application.application.nestApplication.listen(0, '127.0.0.1');
       const address = application.application.server.address();
-      if (address === null || typeof address === 'string' || control === undefined) throw new Error('recognition test server did not start');
-      const body = Object.freeze({ externalEventId: 'g10a-retry-event', kind: 'FACE_UNKNOWN' });
+      const runtime = await owner.start();
+      if (address === null || typeof address === 'string') throw new Error('recognition test server did not start');
+      const body = Object.freeze({
+        externalEventId: 'g10a-retry-event', kind: 'FACE_MATCHED', provider: 'DemoFace', externalSubjectId: FACE_SUBJECT,
+      });
 
       const original = sendRecognition(address.port, body);
       await stageEntered.promise;
-      await waitForStatus(control, (snapshot) => snapshot.issuedPersistence === 1 && snapshot.writers.running === 1, 'original recognition at real G04b write seam');
+      await waitForStatus(runtime.socketPath, (snapshot) => snapshot.issuedPersistence === 1 && snapshot.writers.running === 1, 'original recognition at real G04b write seam');
 
-      const held = await command(control, 'HOLD', (await status(control)).revision);
+      const held = await command(runtime.socketPath, 'HOLD', (await status(runtime.socketPath)).revision);
       expect(held.outcome).toBe('HELD');
       const joined = await sendRecognition(address.port, body, 'existing-only');
       expect(joined).toMatchObject({ status: 202, body: { externalEventId: body.externalEventId, stage: 'RUNNING' } });
       expect(stageCalls).toBe(1);
       expect(await client.db(database).collection<Document>(G04B_EVENTS_COLLECTION).countDocuments()).toBe(0);
-      await expect(status(control)).resolves.toMatchObject({ issuedPersistence: 1, writers: { running: 1, queued: 0 } });
+      await expect(status(runtime.socketPath)).resolves.toMatchObject({ issuedPersistence: 1, writers: { running: 1, queued: 0 } });
 
       const heldControlId = held.controlId;
       if (heldControlId === null) throw new Error('HOLD lacked control ID');
-      await expect(command(control, 'RELEASE', (await status(control)).revision, { controlId: heldControlId })).resolves.toMatchObject({ outcome: 'RELEASED' });
+      await expect(command(runtime.socketPath, 'RELEASE', (await status(runtime.socketPath)).revision, { controlId: heldControlId })).resolves.toMatchObject({ outcome: 'RELEASED' });
       stageRelease.resolve();
       const originalResponse = await original;
-      expect(originalResponse).toMatchObject({ status: 200, body: { outcome: 'REJECTED', reasonCode: 'FACE_UNKNOWN', replayed: false } });
-      await waitForStatus(control, (snapshot) => snapshot.issuedPersistence === 0 && snapshot.writers.running === 0, 'original recognition settlement');
+      expect(originalResponse).toMatchObject({ status: 200, body: { outcome: 'ACCEPTED', reasonCode: 'ENTRY_GRANTED', replayed: false } });
+      await waitForStatus(runtime.socketPath, (snapshot) => snapshot.issuedPersistence === 0 && snapshot.writers.running === 0, 'original recognition settlement');
       expect(await client.db(database).collection<Document>(G04B_EVENTS_COLLECTION).countDocuments({
         sourceId: fixture.sourceEntryId, externalEventId: body.externalEventId,
       })).toBe(1);
 
-      const drained = await command(control, 'DRAIN', (await status(control)).revision, { timeoutMs: 2_000 });
+      // Create a second real qualification to obtain a one-time QR token.
+      // This is a raw secret at the HTTP boundary and must never enter the
+      // runtime log contract or the safe LOGS_READ projection below.
+      const created = await sendManagement(address.port, Object.freeze({
+        displayName: 'G10a secret-redaction qualification',
+        validFrom: new Date(Date.now() - 1_000).toISOString(),
+        validUntil: new Date(Date.now() + 3_600_000).toISOString(),
+        face: null,
+      }));
+      expect(created.status).toBe(201);
+      const qrToken = created.body.qrToken;
+      if (typeof qrToken !== 'string' || qrToken.length === 0) throw new Error('create response did not return a QR token');
+      const qrEventId = 'g10a-secret-qr-event';
+      await expect(sendRecognition(address.port, Object.freeze({
+        externalEventId: qrEventId, kind: 'QR_SCANNED', token: qrToken,
+      }))).resolves.toMatchObject({ status: 200, body: { outcome: 'ACCEPTED', reasonCode: 'ENTRY_GRANTED', replayed: false } });
+      expect(await client.db(database).collection<Document>(G04B_EVENTS_COLLECTION).countDocuments({
+        sourceId: fixture.sourceEntryId, externalEventId: qrEventId,
+      })).toBe(1);
+
+      const drained = await command(runtime.socketPath, 'DRAIN', (await status(runtime.socketPath)).revision, { timeoutMs: 2_000 });
       expect(drained.outcome).toBe('DRAINED');
       const replay = await sendRecognition(address.port, body, 'existing-only');
-      expect(replay).toMatchObject({ status: 200, body: { outcome: 'REJECTED', reasonCode: 'FACE_UNKNOWN', replayed: true } });
+      expect(replay).toMatchObject({ status: 200, body: { outcome: 'ACCEPTED', reasonCode: 'ENTRY_GRANTED', replayed: true } });
       // Maintenance still rejects a fresh recognition candidate at ingress;
       // it must not accidentally use the existing-only memory exception.
       await expect(sendRecognition(address.port, {
         externalEventId: 'g10a-drained-new-event', kind: 'FACE_UNKNOWN',
       })).resolves.toMatchObject({ status: 503, body: { code: 'TECHNICAL_BUSY' } });
-      expect(stageCalls).toBe(1);
+      expect(stageCalls).toBe(2);
       expect(await client.db(database).collection<Document>(G04B_EVENTS_COLLECTION).countDocuments({
         sourceId: fixture.sourceEntryId, externalEventId: 'g10a-drained-new-event',
       })).toBe(0);
       expect(await client.db(database).collection<Document>(G04B_EVENTS_COLLECTION).countDocuments({
         sourceId: fixture.sourceEntryId, externalEventId: body.externalEventId,
       })).toBe(1);
-      await expect(status(control)).resolves.toMatchObject({
+      await expect(status(runtime.socketPath)).resolves.toMatchObject({
         maintenance: { active: true, outcome: 'DRAINED' }, issuedPersistence: 0, writers: { queued: 0, running: 0 },
       });
 
-      await (await owner.start()).runtimeLogSink.flush();
-      const records = (await readFile(join(parent, 'logs', 'runtime.log'), 'utf8'))
+      await runtime.runtimeLogSink.flush();
+      const runtimeLog = await readFile(join(parent, 'logs', 'runtime.log'), 'utf8');
+      const records = runtimeLog
         .split('\n').filter((line) => line.length > 0)
         .map((line) => validateRuntimeLogRecord(JSON.parse(line) as unknown));
+      // These records are emitted by the server-side control protocol after
+      // the separate CLI process crosses the real AF_UNIX listener.  Their
+      // presence rules out a convenient in-process dispatch substitute.
+      expect(records.map((record) => record.code)).toEqual(expect.arrayContaining([
+        'HOLD_ACKNOWLEDGED', 'RELEASE_ACKNOWLEDGED', 'DRAIN_STARTED', 'DRAINED',
+      ]));
       const recognitionAccepted = records.filter((record) => record.code === 'REQUEST_ACCEPTED' && record.route === 'RECOGNITION');
       const registration = records.filter((record) => record.code === 'OPERATION_REGISTERED' && record.route === 'RECOGNITION');
-      expect(recognitionAccepted).toHaveLength(4);
-      expect(registration).toHaveLength(1);
+      expect(recognitionAccepted).toHaveLength(5);
+      expect(registration).toHaveLength(2);
       const originalRequest = registration[0];
       if (originalRequest === undefined) throw new Error('missing original recognition registration');
+      // The only second recognition operation is the QR_SCANNED request sent
+      // synchronously after the face operation settled.  Retry/replay/fresh
+      // attempts deliberately do not register operations, so this binds the
+      // QR token check below to its own persisted operation rather than only
+      // to the earlier FACE_MATCHED log stream.
+      const qrRequest = registration[1];
+      if (qrRequest === undefined || qrRequest.operationUUID === null) {
+        throw new Error('missing QR recognition operation registration');
+      }
       const originalRecords = records.filter((record) => record.requestUUID === originalRequest.requestUUID);
       expect(originalRecords.map((record) => record.code)).toEqual(expect.arrayContaining([
         'REQUEST_ACCEPTED', 'OPERATION_REGISTERED',
@@ -352,13 +457,35 @@ describe('G10a true HTTP/Mongo recognition retry provenance', () => {
       expect(originalPostIngress.filter((record) => record.kind === 'RUNTIME' || record.kind === 'DRIVER').every((record) =>
         record.operationUUID === originalRequest.operationUUID && record.ownerRef === originalRequest.ownerRef,
       )).toBe(true);
+      const operationRequestIds = new Set(registration.map((record) => record.requestUUID));
       const retryRequestIds = recognitionAccepted.map((record) => record.requestUUID)
-        .filter((requestUUID) => requestUUID !== originalRequest.requestUUID);
+        .filter((requestUUID) => !operationRequestIds.has(requestUUID));
       expect(retryRequestIds).toHaveLength(3);
       for (const requestUUID of retryRequestIds) {
         const retryRecords = records.filter((record) => record.requestUUID === requestUUID);
         expect(retryRecords.every((record) => record.operationUUID === null && record.ownerRef === null)).toBe(true);
         expect(retryRecords.some((record) => record.code === 'OPERATION_REGISTERED' || record.kind === 'DRIVER')).toBe(false);
+      }
+      if (originalRequest.operationUUID === null) throw new Error('original recognition lacks operation ID');
+      const safeLogs = await commandSocket(runtime.socketPath, Object.freeze({
+        v: 'c1', requestControlId: randomUUID(), command: 'LOGS_READ', operationUUID: originalRequest.operationUUID, limit: 100,
+      }));
+      expect(safeLogs.command).toBe('LOGS_READ');
+      expect(safeLogs.outcome).toBe('LOGS_READ');
+      expect(Array.isArray(safeLogs.records)).toBe(true);
+      expect(safeLogs.records).not.toHaveLength(0);
+      const safeQrLogs = await commandSocket(runtime.socketPath, Object.freeze({
+        v: 'c1', requestControlId: randomUUID(), command: 'LOGS_READ', operationUUID: qrRequest.operationUUID, limit: 100,
+      }));
+      expect(safeQrLogs.command).toBe('LOGS_READ');
+      expect(safeQrLogs.outcome).toBe('LOGS_READ');
+      expect(Array.isArray(safeQrLogs.records)).toBe(true);
+      expect(safeQrLogs.records).not.toHaveLength(0);
+      const sensitiveValues = [SOURCE_SECRET, qrToken, FACE_SUBJECT];
+      for (const sensitive of sensitiveValues) {
+        expect(runtimeLog).not.toContain(sensitive);
+        expect(JSON.stringify(safeLogs)).not.toContain(sensitive);
+        expect(JSON.stringify(safeQrLogs)).not.toContain(sensitive);
       }
     } finally {
       await application?.close().catch(() => undefined);
