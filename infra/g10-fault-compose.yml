@@ -1,0 +1,88 @@
+# G10b/G10c fault-only topology.  This is deliberately separate from the
+# ordinary integration compose files: no production service or host port is
+# introduced by this file.
+services:
+  mongo-g10:
+    image: mongo:8.0.32-noble@sha256:01354084d2ae665d2e79b79b0cdc50c2c0c98873618912d9a2c8c9cb5c3d24e6
+    command:
+      - mongod
+      - --port
+      - '27031'
+      - --replSet
+      - rs0
+      - --bind_ip_all
+      - --setParameter
+      - enableTestCommands=1
+    expose:
+      - '27031'
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'mongosh --quiet --port 27031 --eval "db.adminCommand({ ping: 1 }).ok === 1"'
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks:
+      - g10-fault
+
+  toxiproxy-g10:
+    image: ghcr.io/shopify/toxiproxy:2.12.0@sha256:a3e244375123dad8849091bcc59775e188624d3f602db01901f9af855682fef8
+    command:
+      - -host
+      - 0.0.0.0
+      - -port
+      - '8474'
+      - -config
+      - /config/toxiproxy.json
+    volumes:
+      - ./g10-fault-toxiproxy.json:/config/toxiproxy.json:ro
+    expose:
+      - '8474'
+      - '27032'
+    depends_on:
+      mongo-g10:
+        condition: service_healthy
+    networks:
+      - g10-fault
+
+  # This is a test-only client container.  It deliberately receives distinct
+  # names for the app, observer, and fault-controller routes so a future test
+  # cannot silently use the direct observer URI as the application URI.
+  g10-fault-runner:
+    image: node:24.21.0-bookworm-slim@sha256:2fe369e969550cde8e867afc3fe370b260140cab4a23d467074295b42163d553
+    profiles:
+      - fault
+    working_dir: /workspace
+    volumes:
+      - ..:/workspace:ro
+      - g10-fault-npm-cache:/tmp/npm-cache
+    tmpfs:
+      - /tmp
+    environment:
+      HOME: /tmp/g10-fault-home
+      NPM_CONFIG_CACHE: /tmp/npm-cache
+      G10_FAULT_APP_MONGO_URI: mongodb://toxiproxy-g10:27032/?replicaSet=rs0
+      G10_FAULT_OBSERVER_MONGO_URI: mongodb://mongo-g10:27031/?directConnection=true&replicaSet=rs0
+      G10_FAULT_TOXIPROXY_API_URL: http://toxiproxy-g10:8474
+    command:
+      - sh
+      - -lc
+      - node scripts/g10-fault-topology-init.mjs && exec node scripts/g10-fault-runner.mjs --print-contract
+    depends_on:
+      mongo-g10:
+        condition: service_healthy
+      toxiproxy-g10:
+        condition: service_started
+    networks:
+      - g10-fault
+
+networks:
+  g10-fault:
+    internal: true
+
+volumes:
+  g10-fault-npm-cache:

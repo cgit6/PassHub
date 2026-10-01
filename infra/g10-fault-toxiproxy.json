@@ -1,0 +1,9 @@
+[
+  {
+    "name": "mongodb-rs0",
+    "listen": "0.0.0.0:27032",
+    "upstream": "mongo-g10:27031",
+    "enabled": true,
+    "toxics": []
+  }
+]
