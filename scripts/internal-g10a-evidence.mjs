@@ -16,7 +16,7 @@ const CATEGORY_NAMES = Object.freeze(['socket', 'rotation', 'control', 'mongo', 
 const CATEGORY_FORMAT = 'passhub.g10a.evidence-category.v1';
 const CATEGORY_VERSION = 'g10a-category-summary-v1';
 const MAX_CATEGORY_CASES = 128;
-const CATEGORY_CASE_CODES = Object.freeze({
+export const CATEGORY_CASE_CODES = Object.freeze({
   socket: Object.freeze([
     'G10A_SOCKET_PATH', 'G10A_SOCKET_LISTENER', 'G10A_SOCKET_FRAMING', 'G10A_SOCKET_PROTOCOL',
     'G10A_SOCKET_SERVICE', 'G10A_SOCKET_CLI', 'G10A_SOCKET_WATCHDOG',
