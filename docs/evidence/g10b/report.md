@@ -1,4 +1,4 @@
-# G10b private evidence runner contract
+# G10b private evidence runner and formal run
 
 ## Scope
 
@@ -19,4 +19,16 @@ The cleanup artifact records only whether containers, networks, and volumes with
 
 ## Deliberate exclusions
 
-Artifacts use exact closed keysets and never retain command text or output, Mongo replies, request IDs, `lsid`, transaction numbers, URIs, HTTP bodies, Face subjects, credentials, or response payloads. This tracked document describes the contract only; it does not claim that a formal evidence run has been performed from this uncommitted working revision.
+Artifacts use exact closed keysets and never retain command text or output, Mongo replies, request IDs, `lsid`, transaction numbers, URIs, HTTP bodies, Face subjects, credentials, or response payloads.
+
+## Formal run
+
+The formal clean-worktree run completed successfully from source commit `77e8c21b741780e7b26ba0d0944111697991dc04`.
+
+- Run ID: `g10b-41a126f2424d49c6a89df8f9b7d200e6`
+- Result: `PASS`; unit suite `8 / 65`, topology check passed, fault suite exactly `2 / 3`.
+- Verified cases: `WRITE_CONFLICT` (`112`) and `DUPLICATE_FACE` (`11000`), both `NO_APP_PARTIAL_EFFECT`.
+- Cleanup: `PASS`; no container, network, or volume with the exact `passhub-g10b-fault-` prefix remained.
+- Private artifact hashes: results `4f5a0a32d1bcc71c723f48707e511ba8c35c119ca557b5e939682fca80fec37b`; cleanup `f4cf6fe9fc222433a6037c166f7ef2f3b266dfc7acd9b37ccc41ed8a994f3043`.
+
+This proves the implemented **pre-commit** termination slice only. It does not prove G10c transport-unknown confirmation, production deployment, or complete-release acceptance.
