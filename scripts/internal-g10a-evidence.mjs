@@ -12,14 +12,46 @@ const FORMAT = 'passhub.g10a.evidence.v1';
 const RESULT_FORMAT = 'passhub.g10a.evidence-results.v1';
 const ENVIRONMENT_PROOF_FORMAT = 'passhub.g10a.environment-proof.v1';
 const CLEANUP_FORMAT = 'passhub.g10a.evidence-cleanup.v1';
-const FIXED_ARTIFACT_NAMES = Object.freeze(['manifest.json', 'results.json', 'cleanup.json']);
+const CATEGORY_NAMES = Object.freeze(['socket', 'rotation', 'control', 'mongo', 'secret']);
+const CATEGORY_FORMAT = 'passhub.g10a.evidence-category.v1';
+const CATEGORY_VERSION = 'g10a-category-summary-v1';
+const MAX_CATEGORY_CASES = 128;
+const CATEGORY_CASE_CODES = Object.freeze({
+  socket: Object.freeze([
+    'G10A_SOCKET_PATH', 'G10A_SOCKET_LISTENER', 'G10A_SOCKET_FRAMING', 'G10A_SOCKET_PROTOCOL',
+    'G10A_SOCKET_SERVICE', 'G10A_SOCKET_CLI', 'G10A_SOCKET_WATCHDOG',
+  ]),
+  rotation: Object.freeze([
+    'G10A_ROTATION_FILE_STORE', 'G10A_ROTATION_ARCHIVE', 'G10A_ROTATION_READER',
+    'G10A_ROTATION_HEALTH', 'G10A_ROTATION_SINK',
+  ]),
+  control: Object.freeze([
+    'G10A_CONTROL_STATUS', 'G10A_CONTROL_HOLD_RELEASE', 'G10A_CONTROL_DRAIN',
+    'G10A_CONTROL_REPLAY', 'G10A_CONTROL_LIVE_COUNTERS', 'G10A_CONTROL_LOG_PRODUCERS',
+  ]),
+  mongo: Object.freeze([
+    'G10A_MONGO_DRIVER_MONITORING', 'G10A_MONGO_HTTP_MANAGEMENT', 'G10A_MONGO_QUERY_DRAIN',
+    'G10A_MONGO_RECOGNITION_RETRY',
+  ]),
+  secret: Object.freeze([
+    'G10A_SECRET_LOG_SCHEMA', 'G10A_SECRET_LOG_REDACTION', 'G10A_SECRET_EVIDENCE_BOUNDARY',
+    'G10A_SECRET_CONTROL_PROTOCOL',
+  ]),
+});
+const FIXED_ARTIFACT_NAMES = Object.freeze([
+  'manifest.json',
+  'results.json',
+  ...CATEGORY_NAMES.map((name) => `${name}.json`),
+  'cleanup.json',
+]);
 const HASH_KEYS = Object.freeze([
   'sourceTree', 'g10aSource', 'g10aTests', 'packageJson', 'packageLock', 'tsconfig', 'runner', 'executionRunner', 'executionCore', 'environmentProof', 'evidenceHelper',
   'compose', 'toolchain', 'jestUnit', 'jestSocket', 'jestIntegration', 'inventory',
 ]);
 const PROVENANCE_KEYS = Object.freeze(['format', 'sourceCommit', 'hashes', 'toolchain']);
-const MANIFEST_KEYS = Object.freeze(['format', 'runId', 'sourceCommit', 'hashes', 'toolchain']);
-const RESULTS_KEYS = Object.freeze(['format', 'runId', 'status', 'phases', 'environment']);
+const PROVENANCE_MANIFEST_KEYS = Object.freeze(['format', 'runId', 'sourceCommit', 'hashes', 'toolchain']);
+const MANIFEST_KEYS = Object.freeze(['format', 'runId', 'sourceCommit', 'hashes', 'toolchain', 'artifacts']);
+const RESULTS_KEYS = Object.freeze(['format', 'runId', 'status', 'phases', 'environment', 'categoryEvidenceStatus']);
 const CLEANUP_KEYS = Object.freeze(['format', 'runId', 'status', 'primaryFailurePrecedence', 'dockerContainersAbsent', 'composeContainersAbsent', 'composeNetworksAbsent']);
 const PHASE_IDENTIFIERS = Object.freeze(['test:g10a:unit', 'test:g10a:socket', 'test:g10a:integration']);
 
@@ -77,12 +109,14 @@ export async function assertG10aEvidenceOutputRoot({ root, outputRoot } = {}) {
   return evidenceRoot;
 }
 
-export async function writeG10aEvidenceArtifacts({ root, outputRoot, runId, provenance, results, cleanup } = {}) {
+export async function writeG10aEvidenceArtifacts({ root, outputRoot, runId, provenance, results, categories, cleanup } = {}) {
   const workspace = requireAbsoluteDirectory(root, 'root');
   assertRunId(runId);
   assertProvenance(provenance);
   assertResults(results);
+  assertCategories(categories);
   assertCleanup(cleanup);
+  assertResultsMatchCategories(results, categories);
 
   const evidenceRoot = await assertG10aEvidenceOutputRoot({ root: workspace, outputRoot });
   const finalDirectory = join(evidenceRoot, runId);
@@ -94,14 +128,16 @@ export async function writeG10aEvidenceArtifacts({ root, outputRoot, runId, prov
   await assertPrivateDirectory(stagingDirectory);
   let stagingCreated = true;
   try {
-    const manifest = freezeObject({ format: FORMAT, runId, sourceCommit: provenance.sourceCommit, hashes: provenance.hashes, toolchain: provenance.toolchain });
     const persistedResults = freezeObject({ ...results, runId });
     const persistedCleanup = freezeObject({ ...cleanup, runId });
     await Promise.all([
-      writeManifest(join(stagingDirectory, 'manifest.json'), manifest),
       writeResults(join(stagingDirectory, 'results.json'), persistedResults),
+      ...CATEGORY_NAMES.map(async (name) => writeCategory(join(stagingDirectory, `${name}.json`), categories[name])),
       writeCleanup(join(stagingDirectory, 'cleanup.json'), persistedCleanup),
     ]);
+    const artifacts = await createArtifactInventory(stagingDirectory);
+    const manifest = freezeObject({ format: FORMAT, runId, sourceCommit: provenance.sourceCommit, hashes: provenance.hashes, toolchain: provenance.toolchain, artifacts });
+    await writeManifest(join(stagingDirectory, 'manifest.json'), manifest);
     await assertExactArtifactDirectory(stagingDirectory);
     if (await exists(finalDirectory)) throw new Error('G10a evidence runId collision');
     try {
@@ -255,6 +291,11 @@ async function writeCleanup(file, value) {
   await writeClosedJson(file, value);
 }
 
+async function writeCategory(file, value) {
+  assertCategory(value);
+  await writeClosedJson(file, value);
+}
+
 async function writeClosedJson(file, value) {
   await writeFile(file, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
 }
@@ -282,15 +323,15 @@ function assertRunId(value) {
 
 function assertProvenance(value) {
   assertExactKeys(value, PROVENANCE_KEYS, 'provenance');
-  assertManifestShape({ format: FORMAT, runId: 'g10a-provenance', sourceCommit: value?.sourceCommit, hashes: value?.hashes, toolchain: value?.toolchain }, false);
+  assertManifestShape({ format: FORMAT, runId: 'g10a-provenance', sourceCommit: value?.sourceCommit, hashes: value?.hashes, toolchain: value?.toolchain }, false, false);
 }
 
 function assertManifest(value) {
   assertManifestShape(value, true);
 }
 
-function assertManifestShape(value, requiresRunId) {
-  assertExactKeys(value, MANIFEST_KEYS, 'manifest');
+function assertManifestShape(value, requiresRunId, requiresArtifactInventory = true) {
+  assertExactKeys(value, requiresArtifactInventory ? MANIFEST_KEYS : PROVENANCE_MANIFEST_KEYS, 'manifest');
   if (value.format !== FORMAT || !GIT_COMMIT.test(value.sourceCommit ?? '')) throw new Error('G10a evidence provenance is invalid');
   if (requiresRunId) assertRunId(value.runId);
   else if (value.runId !== 'g10a-provenance') throw new Error('G10a evidence provenance is invalid');
@@ -301,12 +342,51 @@ function assertManifestShape(value, requiresRunId) {
   }
   assertExactKeys(value.toolchain, ['nodeImage', 'mongoImage'], 'manifest toolchain');
   if (!isNodeImage(value.toolchain.nodeImage) || !isMongoImage(value.toolchain.mongoImage)) throw new Error('G10a evidence toolchain is invalid');
+  if (requiresArtifactInventory) assertArtifactInventory(value.artifacts);
 }
 
-export function createG10aEvidenceResults({ status, phases, environment = null } = {}) {
-  const result = freezeObject({ format: RESULT_FORMAT, runId: 'g10a-provenance', status, phases, environment });
+export function createG10aEvidenceResults({ status, phases, environment = null, categoryEvidenceStatus } = {}) {
+  const result = freezeObject({ format: RESULT_FORMAT, runId: 'g10a-provenance', status, phases, environment, categoryEvidenceStatus });
   assertResults(result, false);
   return result;
+}
+
+/**
+ * A category artifact is deliberately unable to contain command output, a
+ * control request/response, raw log lines, paths, or secret-bearing values.
+ * `NOT_COLLECTED` is a first-class state so a passing broad Jest phase cannot
+ * be mistaken for completed category evidence.
+ */
+export function createG10aEvidenceCategory({ category, status, cases = [] } = {}) {
+  const normalizedCases = cases.map((entry) => freezeObject({ id: entry?.id, status: entry?.status }));
+  const passedCaseCount = normalizedCases.filter((entry) => entry.status === 'PASS').length;
+  const failedCaseCount = normalizedCases.filter((entry) => entry.status === 'FAIL').length;
+  const summaryHash = status === 'NOT_COLLECTED' ? null : sha256CanonicalCategory(category, normalizedCases);
+  const value = freezeObject({ format: CATEGORY_FORMAT, version: CATEGORY_VERSION, category, status, cases: Object.freeze(normalizedCases), passedCaseCount, failedCaseCount, summaryHash });
+  assertCategory(value);
+  return value;
+}
+
+export function createG10aEvidenceCategories(input = {}) {
+  const categories = {};
+  for (const category of CATEGORY_NAMES) {
+    const supplied = input[category];
+    categories[category] = supplied === undefined
+      ? createG10aEvidenceCategory({ category, status: 'NOT_COLLECTED' })
+      : createG10aEvidenceCategory({ category, status: supplied?.status, cases: supplied?.cases });
+  }
+  const value = freezeObject(categories);
+  assertCategories(value);
+  return value;
+}
+
+/**
+ * The generic phase runner intentionally has no knowledge of individual test
+ * case IDs.  Until a category-specific collector is supplied, it emits a
+ * truthful incomplete skeleton rather than inferring coverage from stdout.
+ */
+export async function collectG10aEvidenceCategories() {
+  return createG10aEvidenceCategories();
 }
 
 export function createG10aEvidenceCleanup({ status, dockerContainersAbsent, composeContainersAbsent, composeNetworksAbsent } = {}) {
@@ -321,16 +401,79 @@ function assertResults(value, requiresRunId = true) {
   if (requiresRunId) assertRunId(value.runId);
   else if (value.runId !== 'g10a-provenance') throw new Error('G10a evidence results are invalid');
   assertResultStatus(value.status);
+  if (value.categoryEvidenceStatus !== 'COMPLETE' && value.categoryEvidenceStatus !== 'INCOMPLETE' && value.categoryEvidenceStatus !== 'FAILED') throw new Error('G10a evidence category status is invalid');
   if (!Array.isArray(value.phases) || value.phases.length === 0 || value.phases.length > PHASE_IDENTIFIERS.length) throw new Error('G10a evidence results are invalid');
   for (let index = 0; index < value.phases.length; index += 1) {
     const phase = value.phases[index];
     assertExactKeys(phase, ['identifier', 'exitCode', 'durationMs', 'suiteCount', 'testCount'], 'phase');
     if (phase.identifier !== PHASE_IDENTIFIERS[index] || !Number.isInteger(phase.exitCode) || phase.exitCode < 0 || !Number.isSafeInteger(phase.durationMs) || phase.durationMs < 0 || !isCount(phase.suiteCount) || !isCount(phase.testCount)) throw new Error('G10a evidence results are invalid');
   }
-  if (value.status === 'PASS' && (value.phases.length !== PHASE_IDENTIFIERS.length || value.phases.some((phase) => phase.exitCode !== 0 || phase.suiteCount === null || phase.testCount === null))) throw new Error('G10a evidence PASS results are incomplete');
+  const completePhases = value.phases.length === PHASE_IDENTIFIERS.length && value.phases.every((phase) => phase.exitCode === 0 && phase.suiteCount !== null && phase.testCount !== null);
+  if (value.status === 'PASS' && (!completePhases || value.categoryEvidenceStatus !== 'COMPLETE')) throw new Error('G10a evidence PASS results are incomplete');
+  if (value.status === 'INCOMPLETE' && (!completePhases || value.categoryEvidenceStatus !== 'INCOMPLETE')) throw new Error('G10a evidence INCOMPLETE results are invalid');
+  if (value.status === 'FAILED' && (!completePhases || value.categoryEvidenceStatus !== 'FAILED')) throw new Error('G10a evidence FAILED results are invalid');
   if (value.status === 'FAIL' && !value.phases.some((phase) => phase.exitCode !== 0) && value.environment !== null) throw new Error('G10a evidence FAIL results require a failed phase or missing environment proof');
-  if (value.status === 'PASS') assertEnvironmentProof(value.environment);
+  if (value.status === 'PASS' || value.status === 'INCOMPLETE' || value.status === 'FAILED') assertEnvironmentProof(value.environment);
   else if (value.environment !== null) assertEnvironmentProof(value.environment);
+}
+
+function assertCategories(value) {
+  assertExactKeys(value, CATEGORY_NAMES, 'categories');
+  for (const category of CATEGORY_NAMES) {
+    assertCategory(value[category]);
+    if (value[category].category !== category) throw new Error('G10a evidence category name is invalid');
+  }
+}
+
+function assertCategory(value) {
+  assertExactKeys(value, ['format', 'version', 'category', 'status', 'cases', 'passedCaseCount', 'failedCaseCount', 'summaryHash'], 'category');
+  if (value.format !== CATEGORY_FORMAT || value.version !== CATEGORY_VERSION || !CATEGORY_NAMES.includes(value.category)) throw new Error('G10a evidence category is invalid');
+  if (value.status !== 'NOT_COLLECTED' && value.status !== 'PASS' && value.status !== 'FAIL') throw new Error('G10a evidence category status is invalid');
+  if (!Array.isArray(value.cases) || value.cases.length > MAX_CATEGORY_CASES || !Number.isSafeInteger(value.passedCaseCount) || value.passedCaseCount < 0 || !Number.isSafeInteger(value.failedCaseCount) || value.failedCaseCount < 0) throw new Error('G10a evidence category is invalid');
+  const identifiers = new Set();
+  for (const entry of value.cases) {
+    assertExactKeys(entry, ['id', 'status'], 'category case');
+    if (typeof entry.id !== 'string' || !CATEGORY_CASE_CODES[value.category].includes(entry.id) || identifiers.has(entry.id) || (entry.status !== 'PASS' && entry.status !== 'FAIL')) throw new Error('G10a evidence category case is invalid');
+    identifiers.add(entry.id);
+  }
+  const passed = value.cases.filter((entry) => entry.status === 'PASS').length;
+  const failed = value.cases.filter((entry) => entry.status === 'FAIL').length;
+  if (value.passedCaseCount !== passed || value.failedCaseCount !== failed) throw new Error('G10a evidence category counts are invalid');
+  if (value.status === 'NOT_COLLECTED' && (value.cases.length !== 0 || value.summaryHash !== null)) throw new Error('G10a evidence uncollected category is invalid');
+  if (value.status === 'PASS' && (value.cases.length === 0 || failed !== 0 || !SHA256.test(value.summaryHash ?? ''))) throw new Error('G10a evidence PASS category is invalid');
+  if (value.status === 'FAIL' && (value.cases.length === 0 || failed === 0 || !SHA256.test(value.summaryHash ?? ''))) throw new Error('G10a evidence FAIL category is invalid');
+  if (value.summaryHash !== null && value.summaryHash !== sha256CanonicalCategory(value.category, value.cases)) throw new Error('G10a evidence category hash is invalid');
+}
+
+function sha256CanonicalCategory(category, cases) {
+  return createHash('sha256').update(JSON.stringify([CATEGORY_VERSION, category, cases.map((entry) => [entry.id, entry.status])]), 'utf8').digest('hex');
+}
+
+function categoryEvidenceStatus(categories) {
+  if (CATEGORY_NAMES.some((category) => categories[category].status === 'FAIL')) return 'FAILED';
+  return CATEGORY_NAMES.every((category) => categories[category].status === 'PASS') ? 'COMPLETE' : 'INCOMPLETE';
+}
+
+function assertResultsMatchCategories(results, categories) {
+  if (results.categoryEvidenceStatus !== categoryEvidenceStatus(categories)) throw new Error('G10a evidence result/category completeness mismatch');
+}
+
+async function createArtifactInventory(directory) {
+  const inventory = [];
+  for (const name of FIXED_ARTIFACT_NAMES) {
+    if (name === 'manifest.json') inventory.push(freezeObject({ name, sha256: 'SELF' }));
+    else inventory.push(freezeObject({ name, sha256: await sha256File(join(directory, name)) }));
+  }
+  return Object.freeze(inventory);
+}
+
+function assertArtifactInventory(value) {
+  if (!Array.isArray(value) || value.length !== FIXED_ARTIFACT_NAMES.length) throw new Error('G10a evidence artifact inventory is invalid');
+  for (let index = 0; index < FIXED_ARTIFACT_NAMES.length; index += 1) {
+    const entry = value[index];
+    assertExactKeys(entry, ['name', 'sha256'], 'artifact inventory entry');
+    if (entry.name !== FIXED_ARTIFACT_NAMES[index] || (entry.name === 'manifest.json' ? entry.sha256 !== 'SELF' : !SHA256.test(entry.sha256 ?? ''))) throw new Error('G10a evidence artifact inventory is invalid');
+  }
 }
 
 function assertEnvironmentProof(value) {
@@ -359,7 +502,7 @@ function assertExactKeys(value, expectedKeys, label) {
 }
 
 function assertResultStatus(value) {
-  if (value !== 'PASS' && value !== 'FAIL') throw new Error('G10a evidence result status is invalid');
+  if (value !== 'PASS' && value !== 'FAIL' && value !== 'INCOMPLETE' && value !== 'FAILED') throw new Error('G10a evidence result status is invalid');
 }
 
 function assertCleanupStatus(value) {

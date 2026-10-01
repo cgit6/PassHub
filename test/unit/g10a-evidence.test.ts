@@ -1,4 +1,5 @@
 import { chmod, lstat, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -14,8 +15,9 @@ type EvidenceProvenance = Readonly<{
 
 type Evidence = Readonly<{
   collectG10aEvidenceProvenance(input: { root: string; git: (root: string, args: readonly string[]) => Promise<string> }): Promise<EvidenceProvenance>;
-  writeG10aEvidenceArtifacts(input: { root: string; outputRoot?: string; runId: string; provenance: EvidenceProvenance; results: object; cleanup: object }): Promise<{ runId: string; artifactNames: readonly string[] }>;
-  createG10aEvidenceResults(input: { status: 'PASS' | 'FAIL'; phases: unknown[]; environment?: unknown }): object;
+  writeG10aEvidenceArtifacts(input: { root: string; outputRoot?: string; runId: string; provenance: EvidenceProvenance; results: object; categories: object; cleanup: object }): Promise<{ runId: string; artifactNames: readonly string[] }>;
+  createG10aEvidenceResults(input: { status: 'PASS' | 'FAIL' | 'INCOMPLETE' | 'FAILED'; phases: unknown[]; environment?: unknown; categoryEvidenceStatus: 'COMPLETE' | 'INCOMPLETE' | 'FAILED' }): object;
+  createG10aEvidenceCategories(input?: object): object;
   createG10aEvidenceCleanup(input: { status: 'PASS' | 'FAIL'; dockerContainersAbsent: boolean; composeContainersAbsent: boolean; composeNetworksAbsent: boolean }): object;
   assertG10aEvidenceOutputRoot(input: { root: string; outputRoot?: string }): Promise<string>;
   runWithPrimaryFailure(input: { execute: () => Promise<unknown>; cleanup: () => Promise<void> }): Promise<unknown>;
@@ -38,6 +40,7 @@ describe('G10a private evidence boundary', () => {
     await mkdir(outputRoot, { recursive: true, mode: 0o700 });
     const results = goodResults(evidence);
     const cleanup = evidence.createG10aEvidenceCleanup({ status: 'PASS', dockerContainersAbsent: true, composeContainersAbsent: true, composeNetworksAbsent: true });
+    const categories = goodCategories(evidence);
 
     const written = await evidence.writeG10aEvidenceArtifacts({
       root: fixture.root,
@@ -45,9 +48,10 @@ describe('G10a private evidence boundary', () => {
       runId: 'g10a-20261001-a1b2c3d4',
       provenance,
       results,
+      categories,
       cleanup,
     });
-    expect(written.artifactNames).toEqual(['manifest.json', 'results.json', 'cleanup.json']);
+    expect(written.artifactNames).toEqual(['manifest.json', 'results.json', 'socket.json', 'rotation.json', 'control.json', 'mongo.json', 'secret.json', 'cleanup.json']);
 
     const directory = join(outputRoot, written.runId);
     const files = await Promise.all(written.artifactNames.map(async (name) => readFile(join(directory, name), 'utf8')));
@@ -57,8 +61,19 @@ describe('G10a private evidence boundary', () => {
     expect(persisted).toContain('node:24.21.0-bookworm-slim@sha256:');
     expect(persisted).toContain('mongo:8.0.32-noble@sha256:');
     expect(persisted).not.toMatch(/mongodb(?:\+srv)?:\/\//iu);
-    expect(persisted).not.toMatch(/\b(?:uri|secret|token|password|authorization|cookie|body|stack)\b/iu);
-    const cleanupJson = files.at(2);
+    expect(persisted).not.toContain('private.example');
+    const manifestJson = files.at(0);
+    if (manifestJson === undefined) throw new Error('missing manifest evidence');
+    const artifactInventory = JSON.parse(manifestJson).artifacts;
+    expect(artifactInventory).toEqual([
+      { name: 'manifest.json', sha256: 'SELF' },
+      ...written.artifactNames.slice(1).map((name) => expect.objectContaining({ name, sha256: expect.stringMatching(/^[a-f0-9]{64}$/u) })),
+    ]);
+    for (const entry of artifactInventory.slice(1)) {
+      const content = await readFile(join(directory, entry.name));
+      expect(entry.sha256).toBe(createHash('sha256').update(content).digest('hex'));
+    }
+    const cleanupJson = files.at(-1);
     if (cleanupJson === undefined) throw new Error('missing cleanup evidence');
     expect(JSON.parse(cleanupJson)).toEqual({
       format: 'passhub.g10a.evidence-cleanup.v1',
@@ -108,7 +123,7 @@ describe('G10a private evidence boundary', () => {
     const reserved = join(outputRoot, 'g10a-20261001-collision');
     await mkdir(reserved, { recursive: true, mode: 0o700 });
     await writeFile(join(reserved, 'preserved'), 'do-not-replace\n', { mode: 0o600 });
-    await expect(evidence.writeG10aEvidenceArtifacts({ root: fixture.root, outputRoot, runId: 'g10a-20261001-collision', provenance, results: goodResults(evidence), cleanup: goodCleanup(evidence) })).rejects.toThrow('runId collision');
+    await expect(evidence.writeG10aEvidenceArtifacts({ root: fixture.root, outputRoot, runId: 'g10a-20261001-collision', provenance, results: goodResults(evidence), categories: goodCategories(evidence), cleanup: goodCleanup(evidence) })).rejects.toThrow('runId collision');
     expect(await readFile(join(reserved, 'preserved'), 'utf8')).toBe('do-not-replace\n');
     expect(await lstat(join(outputRoot, '.g10a-20261001-collision.staging')).catch(() => undefined)).toBeUndefined();
   });
@@ -121,7 +136,7 @@ describe('G10a private evidence boundary', () => {
     const staging = join(outputRoot, '.g10a-20261001-staging.staging');
     await mkdir(staging, { recursive: true, mode: 0o700 });
     await writeFile(join(staging, 'preserved'), 'do-not-delete\n', { mode: 0o600 });
-    await expect(evidence.writeG10aEvidenceArtifacts({ root: fixture.root, outputRoot, runId: 'g10a-20261001-staging', provenance, results: goodResults(evidence), cleanup: goodCleanup(evidence) })).rejects.toThrow('staging collision');
+    await expect(evidence.writeG10aEvidenceArtifacts({ root: fixture.root, outputRoot, runId: 'g10a-20261001-staging', provenance, results: goodResults(evidence), categories: goodCategories(evidence), cleanup: goodCleanup(evidence) })).rejects.toThrow('staging collision');
     expect(await readFile(join(staging, 'preserved'), 'utf8')).toBe('do-not-delete\n');
   });
 
@@ -132,11 +147,11 @@ describe('G10a private evidence boundary', () => {
     const outputRoot = join(fixture.root, 'private-evidence-root');
     await mkdir(outputRoot, { recursive: true, mode: 0o700 });
     await chmod(outputRoot, 0o750);
-    await expect(evidence.writeG10aEvidenceArtifacts({ root: fixture.root, outputRoot, runId: 'g10a-20261001-permissions', provenance, results: goodResults(evidence), cleanup: goodCleanup(evidence) })).rejects.toThrow('exactly mode 0700');
+    await expect(evidence.writeG10aEvidenceArtifacts({ root: fixture.root, outputRoot, runId: 'g10a-20261001-permissions', provenance, results: goodResults(evidence), categories: goodCategories(evidence), cleanup: goodCleanup(evidence) })).rejects.toThrow('exactly mode 0700');
 
     await chmod(outputRoot, 0o700);
     const tainted = { ...provenance, message: 'mongodb://must-not-be-accepted/secret' } as unknown as EvidenceProvenance;
-    await expect(evidence.writeG10aEvidenceArtifacts({ root: fixture.root, outputRoot, runId: 'g10a-20261001-tainted', provenance: tainted, results: goodResults(evidence), cleanup: goodCleanup(evidence) })).rejects.toThrow('unexpected fields');
+    await expect(evidence.writeG10aEvidenceArtifacts({ root: fixture.root, outputRoot, runId: 'g10a-20261001-tainted', provenance: tainted, results: goodResults(evidence), categories: goodCategories(evidence), cleanup: goodCleanup(evidence) })).rejects.toThrow('unexpected fields');
   });
 
   test('rejects symlinked G10a inventory and mismatched runner pin', async () => {
@@ -165,9 +180,40 @@ describe('G10a private evidence boundary', () => {
 
   test('enforces PASS and FAIL result/cleanup semantics instead of only field shape', async () => {
     const evidence = await loadEvidence();
-    expect(() => evidence.createG10aEvidenceResults({ status: 'PASS', phases: [phase('test:g10a:unit', 0, 1, 1, 1)] })).toThrow('PASS results are incomplete');
-    expect(() => evidence.createG10aEvidenceResults({ status: 'FAIL', phases: [phase('test:g10a:unit', 0, 1, 1, 1)], environment: environmentProof() })).toThrow('FAIL results require a failed phase');
+    expect(() => evidence.createG10aEvidenceResults({ status: 'PASS', categoryEvidenceStatus: 'COMPLETE', phases: [phase('test:g10a:unit', 0, 1, 1, 1)] })).toThrow('PASS results are incomplete');
+    expect(() => evidence.createG10aEvidenceResults({ status: 'FAIL', categoryEvidenceStatus: 'INCOMPLETE', phases: [phase('test:g10a:unit', 0, 1, 1, 1)], environment: environmentProof() })).toThrow('FAIL results require a failed phase');
     expect(() => evidence.createG10aEvidenceCleanup({ status: 'PASS', dockerContainersAbsent: false, composeContainersAbsent: true, composeNetworksAbsent: true })).toThrow('status does not match outcomes');
+  });
+
+  test('makes missing category evidence explicit and rejects uncontrolled case text or mismatched PASS results', async () => {
+    const evidence = await loadEvidence();
+    const incomplete = evidence.createG10aEvidenceCategories();
+    expect((incomplete as any).socket).toMatchObject({ status: 'NOT_COLLECTED', cases: [], passedCaseCount: 0, failedCaseCount: 0, summaryHash: null });
+    expect(() => evidence.createG10aEvidenceCategories({
+      socket: { status: 'PASS', cases: [{ id: 'G10A_SOCKET_PROTOCOL', status: 'PASS' }] },
+      rotation: { status: 'PASS', cases: [{ id: 'G10A_ROTATION_ARCHIVE', status: 'PASS' }] },
+      control: { status: 'PASS', cases: [{ id: 'G10A_CONTROL_DRAIN', status: 'PASS' }] },
+      mongo: { status: 'PASS', cases: [{ id: 'G10A_MONGO_DRIVER_MONITORING', status: 'PASS' }] },
+      secret: { status: 'PASS', cases: [{ id: 'G10A_SECRET_MONGODB_URI_PRIVATE', status: 'PASS' }] },
+    })).toThrow('category case');
+    expect(() => evidence.createG10aEvidenceCategories({
+      socket: { status: 'PASS', cases: [{ id: 'G10A_SOCKET_ARBITRARY_UPPERCASE_TEXT', status: 'PASS' }] },
+    })).toThrow('category case');
+    expect(() => evidence.createG10aEvidenceCategories({
+      mongo: { status: 'PASS', cases: [{ id: 'G10A_SOCKET_PROTOCOL', status: 'PASS' }] },
+    })).toThrow('category case');
+    const fixture = await workspaceFixture(); cleanups.push(fixture.root);
+    const outputRoot = join(fixture.root, 'private-evidence-root');
+    await mkdir(outputRoot, { recursive: true, mode: 0o700 });
+    await expect(evidence.writeG10aEvidenceArtifacts({
+      root: fixture.root,
+      outputRoot,
+      runId: 'g10a-20261001-category-mismatch',
+      provenance: await evidence.collectG10aEvidenceProvenance({ root: fixture.root, git: cleanGit }),
+      results: goodResults(evidence),
+      categories: incomplete,
+      cleanup: goodCleanup(evidence),
+    })).rejects.toThrow('result/category completeness mismatch');
   });
 });
 
@@ -209,7 +255,16 @@ function phase(identifier: string, exitCode: number, durationMs: number, suiteCo
 }
 
 function environmentProof() { return { format: 'passhub.g10a.environment-proof.v1', nodeVersion: '24.21.0', mongoVersion: '8.0.32', replicaSet: 'rs0', writablePrimary: true }; }
-function goodResults(evidence: Evidence): object { return evidence.createG10aEvidenceResults({ status: 'PASS', phases: [phase('test:g10a:unit', 0, 1, 1, 1), phase('test:g10a:socket', 0, 1, 1, 1), phase('test:g10a:integration', 0, 1, 1, 1)], environment: environmentProof() }); }
+function goodResults(evidence: Evidence): object { return evidence.createG10aEvidenceResults({ status: 'PASS', categoryEvidenceStatus: 'COMPLETE', phases: [phase('test:g10a:unit', 0, 1, 1, 1), phase('test:g10a:socket', 0, 1, 1, 1), phase('test:g10a:integration', 0, 1, 1, 1)], environment: environmentProof() }); }
+function goodCategories(evidence: Evidence): object {
+  return evidence.createG10aEvidenceCategories({
+    socket: { status: 'PASS', cases: [{ id: 'G10A_SOCKET_PROTOCOL', status: 'PASS' }] },
+    rotation: { status: 'PASS', cases: [{ id: 'G10A_ROTATION_ARCHIVE', status: 'PASS' }] },
+    control: { status: 'PASS', cases: [{ id: 'G10A_CONTROL_DRAIN', status: 'PASS' }] },
+    mongo: { status: 'PASS', cases: [{ id: 'G10A_MONGO_DRIVER_MONITORING', status: 'PASS' }] },
+    secret: { status: 'PASS', cases: [{ id: 'G10A_SECRET_LOG_REDACTION', status: 'PASS' }] },
+  });
+}
 function goodCleanup(evidence: Evidence): object { return evidence.createG10aEvidenceCleanup({ status: 'PASS', dockerContainersAbsent: true, composeContainersAbsent: true, composeNetworksAbsent: true }); }
 
 async function cleanGit(_root: string, args: readonly string[]): Promise<string> {

@@ -4,7 +4,9 @@ import { spawn } from 'node:child_process';
 import {
   assertCleanGitWorktree,
   assertG10aEvidenceOutputRoot,
+  collectG10aEvidenceCategories,
   collectG10aEvidenceProvenance,
+  createG10aEvidenceCategories,
   createG10aEvidenceCleanup,
   createG10aEvidenceResults,
   writeG10aEvidenceArtifacts,
@@ -26,6 +28,7 @@ export async function runG10aEvidence({
   executeCommand = executeNpmCommand,
   inspectDocker = inspectG10aDockerCleanup,
   writeArtifacts = writeG10aEvidenceArtifacts,
+  collectCategories = collectG10aEvidenceCategories,
 } = {}) {
   await assertClean({ root });
   const evidenceRoot = await assertOutputRoot({ root, outputRoot });
@@ -59,6 +62,23 @@ export async function runG10aEvidence({
     if (phaseFailure !== undefined) break;
   }
 
+  let categories;
+  let categoryFailure;
+  try {
+    categories = createG10aEvidenceCategories(await collectCategories({ phases: Object.freeze([...phaseResults]), environment: environment ?? null }));
+  } catch {
+    categoryFailure = new Error('G10a evidence category collection failed');
+    categories = undefined;
+  }
+  if (categories === undefined) {
+    // The helper validates this fallback; no raw collector exception can reach
+    // private evidence artifacts.
+    categories = await collectG10aEvidenceCategories();
+  }
+  const categoryEvidenceStatus = categoryStatus(categories);
+  if (categoryEvidenceStatus === 'FAILED' && categoryFailure === undefined) categoryFailure = new Error('G10a evidence category failed');
+  if (categoryEvidenceStatus === 'INCOMPLETE' && categoryFailure === undefined) categoryFailure = new Error('G10a evidence categories are incomplete');
+
   let docker = { dockerContainersAbsent: false, composeContainersAbsent: false, composeNetworksAbsent: false };
   let cleanupFailure;
   try {
@@ -68,14 +88,20 @@ export async function runG10aEvidence({
   }
   const cleanupPass = docker.dockerContainersAbsent === true && docker.composeContainersAbsent === true && docker.composeNetworksAbsent === true;
   if (!cleanupPass && cleanupFailure === undefined) cleanupFailure = new Error('G10a Docker resources remain after execution');
-  const results = createG10aEvidenceResults({ status: phaseFailure === undefined ? 'PASS' : 'FAIL', phases: phaseResults, environment });
+  const results = createG10aEvidenceResults({
+    status: phaseFailure === undefined ? (categoryEvidenceStatus === 'COMPLETE' ? 'PASS' : categoryEvidenceStatus) : 'FAIL',
+    phases: phaseResults,
+    environment,
+    categoryEvidenceStatus,
+  });
   const cleanup = createG10aEvidenceCleanup({ status: cleanupPass ? 'PASS' : 'FAIL', ...docker });
   try {
-    await writeArtifacts({ root, outputRoot: evidenceRoot, runId, provenance, results, cleanup });
+    await writeArtifacts({ root, outputRoot: evidenceRoot, runId, provenance, results, categories, cleanup });
   } catch {
     if (phaseFailure === undefined && cleanupFailure === undefined) cleanupFailure = new Error('G10a evidence artifact write failed');
   }
   if (phaseFailure !== undefined) throw phaseFailure;
+  if (categoryFailure !== undefined) throw categoryFailure;
   if (cleanupFailure !== undefined) throw cleanupFailure;
   return Object.freeze({ runId, phases: results.phases, cleanup });
 }
@@ -132,3 +158,8 @@ async function dockerList(args) {
 function normalizeExitCode(value) { return Number.isInteger(value) && value >= 0 ? value : 1; }
 function safeDuration(value) { return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0; }
 function createRunId() { return `g10a-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${randomUUID().replaceAll('-', '')}`; }
+function categoryStatus(categories) {
+  const statuses = Object.values(categories).map((category) => category.status);
+  if (statuses.includes('FAIL')) return 'FAILED';
+  return statuses.every((status) => status === 'PASS') ? 'COMPLETE' : 'INCOMPLETE';
+}

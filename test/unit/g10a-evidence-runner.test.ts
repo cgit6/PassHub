@@ -23,6 +23,7 @@ describe('G10a evidence top-level runner', () => {
         commandCalls.push(identifier);
         return { exitCode: 0, stdout: `Test Suites: 1 passed, 1 total\nTests:       7 passed, 7 total\nprivate mongodb://not-persisted/secret${identifier === 'test:g10a:integration' ? `\n${environmentProof}` : ''}` };
       },
+      collectCategories: async () => completeCategories(),
       inspectDocker: async () => ({ dockerContainersAbsent: true, composeContainersAbsent: true, composeNetworksAbsent: true }),
       writeArtifacts: async (input: unknown) => { writes.push(input); return {}; },
     });
@@ -33,7 +34,7 @@ describe('G10a evidence top-level runner', () => {
       { identifier: 'test:g10a:integration', exitCode: 0, durationMs: 55, suiteCount: 1, testCount: 7 },
     ]);
     expect(JSON.stringify(writes)).not.toContain('mongodb://');
-    expect(JSON.stringify(writes)).not.toContain('secret');
+    expect(JSON.stringify(writes)).not.toContain('not-persisted');
     expect(writes).toHaveLength(1);
   });
 
@@ -44,6 +45,7 @@ describe('G10a evidence top-level runner', () => {
     await expect(runner.runG10aEvidence({
       root: '/safe/workspace', outputRoot: '/safe/private-output', runId: 'g10a-20261001-fail', now: sequenceNow(0, 4),
       assertOutputRoot: async () => '/safe/private-output', assertClean: async () => undefined, collectProvenance: async () => provenance(),
+      collectCategories: async () => failedCategories(),
       executeCommand: async (identifier: string) => { calls.push(identifier); return { exitCode: 9, stdout: 'Tests: 3 failed, 3 total' }; },
       inspectDocker: async () => ({ dockerContainersAbsent: false, composeContainersAbsent: false, composeNetworksAbsent: false }),
       writeArtifacts: async (input: any) => { writes.push(input); return {}; },
@@ -58,6 +60,7 @@ describe('G10a evidence top-level runner', () => {
     await expect(runner.runG10aEvidence({
       root: '/safe/workspace', outputRoot: '/safe/private-output', runId: 'g10a-20261001-write-fail', now: sequenceNow(0, 1),
       assertOutputRoot: async () => '/safe/private-output', assertClean: async () => undefined, collectProvenance: async () => provenance(),
+      collectCategories: async () => incompleteCategories(),
       executeCommand: async () => ({ exitCode: 7, stdout: '' }),
       inspectDocker: async () => ({ dockerContainersAbsent: true, composeContainersAbsent: true, composeNetworksAbsent: true }),
       writeArtifacts: async () => { throw new Error('private artifact failure must not win'); },
@@ -73,6 +76,7 @@ describe('G10a evidence top-level runner', () => {
     await expect(runner.runG10aEvidence({
       root: '/safe/workspace', outputRoot: '/safe/private-output', runId: 'g10a-20261001-cleanup-fail', now: sequenceNow(0, 1, 1, 2, 2, 3),
       assertOutputRoot: async () => '/safe/private-output', assertClean: async () => undefined, collectProvenance: async () => provenance(),
+      collectCategories: async () => completeCategories(),
       executeCommand: async (identifier: string) => ({ exitCode: 0, stdout: `Test Suites: 1 passed, 1 total\nTests: 1 passed, 1 total${identifier === 'test:g10a:integration' ? `\n${environmentProof}` : ''}` }),
       inspectDocker, writeArtifacts: async (input: any) => { writes.push(input); return {}; },
     })).rejects.toThrow(message);
@@ -97,6 +101,7 @@ describe('G10a evidence top-level runner', () => {
     await expect(runner.runG10aEvidence({
       root: '/safe/workspace', outputRoot: '/safe/private-output', runId: 'g10a-20261001-missing-proof', now: sequenceNow(0, 1, 1, 2, 2, 3),
       assertOutputRoot: async () => '/safe/private-output', assertClean: async () => undefined, collectProvenance: async () => provenance(),
+      collectCategories: async () => completeCategories(),
       executeCommand: async () => ({ exitCode: 0, stdout: 'Test Suites: 1 passed, 1 total\nTests: 1 passed, 1 total' }),
       inspectDocker: async () => ({ dockerContainersAbsent: true, composeContainersAbsent: true, composeNetworksAbsent: true }),
       writeArtifacts: async (input: any) => { writes.push(input); return {}; },
@@ -121,6 +126,44 @@ describe('G10a evidence top-level runner', () => {
     expect(calls).toEqual(['clean']);
   });
 
+  test('writes explicit incomplete category skeletons and does not call them successful evidence', async () => {
+    const runner = await loadRunner();
+    const writes: any[] = [];
+    await expect(runner.runG10aEvidence({
+      root: '/safe/workspace', outputRoot: '/safe/private-output', runId: 'g10a-20261001-incomplete', now: sequenceNow(0, 1, 1, 2, 2, 3),
+      assertOutputRoot: async () => '/safe/private-output', assertClean: async () => undefined, collectProvenance: async () => provenance(),
+      executeCommand: async (identifier: string) => ({ exitCode: 0, stdout: `Test Suites: 1 passed, 1 total\nTests: 1 passed, 1 total${identifier === 'test:g10a:integration' ? `\n${environmentProof}` : ''}` }),
+      collectCategories: async () => incompleteCategories(),
+      inspectDocker: async () => ({ dockerContainersAbsent: true, composeContainersAbsent: true, composeNetworksAbsent: true }),
+      writeArtifacts: async (input: any) => { writes.push(input); return {}; },
+    })).rejects.toThrow('categories are incomplete');
+    expect(writes).toHaveLength(1);
+    expect(writes[0].results.status).toBe('INCOMPLETE');
+    expect(writes[0].results.categoryEvidenceStatus).toBe('INCOMPLETE');
+    expect(writes[0].categories.secret.cases).toEqual([]);
+  });
+
+  test('keeps a collected category failure distinct from incomplete collection and beneath a phase failure', async () => {
+    const runner = await loadRunner();
+    const categoryWrites: any[] = [];
+    await expect(runner.runG10aEvidence({
+      root: '/safe/workspace', outputRoot: '/safe/private-output', runId: 'g10a-20261001-category-failed', now: sequenceNow(0, 1, 1, 2, 2, 3),
+      assertOutputRoot: async () => '/safe/private-output', assertClean: async () => undefined, collectProvenance: async () => provenance(),
+      executeCommand: async (identifier: string) => ({ exitCode: 0, stdout: `Test Suites: 1 passed, 1 total\nTests: 1 passed, 1 total${identifier === 'test:g10a:integration' ? `\n${environmentProof}` : ''}` }),
+      collectCategories: async () => failedCategories(),
+      inspectDocker: async () => ({ dockerContainersAbsent: true, composeContainersAbsent: true, composeNetworksAbsent: true }),
+      writeArtifacts: async (input: any) => { categoryWrites.push(input); return {}; },
+    })).rejects.toThrow('category failed');
+    expect(categoryWrites[0].results).toMatchObject({ status: 'FAILED', categoryEvidenceStatus: 'FAILED' });
+
+    await expect(runner.runG10aEvidence({
+      root: '/safe/workspace', outputRoot: '/safe/private-output', runId: 'g10a-20261001-phase-over-category', now: sequenceNow(0, 1),
+      assertOutputRoot: async () => '/safe/private-output', assertClean: async () => undefined, collectProvenance: async () => provenance(),
+      executeCommand: async () => ({ exitCode: 9, stdout: '' }), collectCategories: async () => failedCategories(),
+      inspectDocker: async () => ({ dockerContainersAbsent: true, composeContainersAbsent: true, composeNetworksAbsent: true }), writeArtifacts: async () => ({}),
+    })).rejects.toThrow('test:g10a:unit failed with exit 9');
+  });
+
   test('parses only Jest total suite/test counts and rejects unstructured text', async () => {
     const runner = await loadRunner();
     expect(runner.parseJestCounts('\u001b[32mTest Suites:\u001b[0m 2 passed, 2 total\nTests:       15 passed, 15 total')).toEqual({ suiteCount: 2, testCount: 15 });
@@ -131,3 +174,33 @@ describe('G10a evidence top-level runner', () => {
 async function loadRunner(): Promise<Runner> { return await import(moduleUrl) as Runner; }
 function sequenceNow(...values: number[]) { let index = 0; return () => values[index++] ?? values.at(-1) ?? 0; }
 function provenance() { return { format: 'passhub.g10a.evidence.v1', sourceCommit: 'a'.repeat(40), hashes: {}, toolchain: {} }; }
+function completeCategories() {
+  return Object.freeze({
+    socket: category('socket'), rotation: category('rotation'), control: category('control'), mongo: category('mongo'), secret: category('secret'),
+  });
+}
+function incompleteCategories() {
+  return Object.freeze({
+    socket: incomplete('socket'), rotation: incomplete('rotation'), control: incomplete('control'), mongo: incomplete('mongo'), secret: incomplete('secret'),
+  });
+}
+function category(category: string) {
+  const cases = [{ id: categoryCaseCode(category), status: 'PASS' }];
+  return { format: 'passhub.g10a.evidence-category.v1', version: 'g10a-category-summary-v1', category, status: 'PASS', cases, passedCaseCount: 1, failedCaseCount: 0, summaryHash: require('node:crypto').createHash('sha256').update(JSON.stringify(['g10a-category-summary-v1', category, cases.map((entry) => [entry.id, entry.status])]), 'utf8').digest('hex') };
+}
+function incomplete(category: string) {
+  return { format: 'passhub.g10a.evidence-category.v1', version: 'g10a-category-summary-v1', category, status: 'NOT_COLLECTED', cases: [], passedCaseCount: 0, failedCaseCount: 0, summaryHash: null };
+}
+function failedCategories() {
+  return Object.freeze({
+    socket: category('socket'), rotation: category('rotation'), control: category('control'), mongo: category('mongo'),
+    secret: failed('secret'),
+  });
+}
+function failed(category: string) {
+  const cases = [{ id: categoryCaseCode(category), status: 'FAIL' }];
+  return { format: 'passhub.g10a.evidence-category.v1', version: 'g10a-category-summary-v1', category, status: 'FAIL', cases, passedCaseCount: 0, failedCaseCount: 1, summaryHash: require('node:crypto').createHash('sha256').update(JSON.stringify(['g10a-category-summary-v1', category, cases.map((entry) => [entry.id, entry.status])]), 'utf8').digest('hex') };
+}
+function categoryCaseCode(category: string) {
+  return ({ socket: 'G10A_SOCKET_PROTOCOL', rotation: 'G10A_ROTATION_ARCHIVE', control: 'G10A_CONTROL_DRAIN', mongo: 'G10A_MONGO_DRIVER_MONITORING', secret: 'G10A_SECRET_LOG_REDACTION' } as Record<string, string>)[category] ?? 'G10A_SOCKET_PROTOCOL';
+}
