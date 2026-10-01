@@ -88,7 +88,11 @@ import {
   assertG10aDriverLogBinding,
   type G10aDriverLogBinding,
 } from './g10a-driver-log-binding.js';
-import { registerG10bAdmissionWorkContext } from './g10b-operation-bridge.js';
+import {
+  bindG10bOperationBudget,
+  registerG10bAdmissionWorkContext,
+  type G10bOperationBudgetBindingFactory,
+} from './g10b-operation-bridge.js';
 import type { RuntimeIdentity } from '../../runtime/internal/runtime-control.js';
 import { assertRuntimeLiveCounterBridge, notifyRuntimeLiveCounterBridge, type RuntimeLiveCounterBridge } from '../../runtime/internal/runtime-live-counter-bridge.js';
 import {
@@ -233,6 +237,11 @@ export interface G07bAdmissionHandlerOptions {
   readonly runtimeCounterBridge?: RuntimeLiveCounterBridge;
   /** Internal async attribution for true Mongo driver command monitoring. */
   readonly driverLogBinding?: G10aDriverLogBinding;
+  /**
+   * Optional internal G10b dependency.  It is intentionally created only
+   * when a writer has passed admission and is about to do original G08 work.
+   */
+  readonly operationBudgetBindingFactory?: G10bOperationBudgetBindingFactory;
 }
 
 interface WriterInput {
@@ -366,6 +375,14 @@ export function createG07bAdmissionHandler(
   const beginBusinessStepLog = businessStepLogBinding === undefined
     ? undefined
     : captureConstructionMethod(businessStepLogBinding, 'begin', 'G10a business step log binding').bind(businessStepLogBinding) as G10aBusinessStepLogBinding['begin'];
+  const operationBudgetBindingFactory = options.operationBudgetBindingFactory;
+  const createOperationBudgetBinding = operationBudgetBindingFactory === undefined
+    ? undefined
+    : captureConstructionMethod(
+      operationBudgetBindingFactory,
+      'bind',
+      'G10b operation budget binding factory',
+    ).bind(operationBudgetBindingFactory) as G10bOperationBudgetBindingFactory['bind'];
   assertOptions(options, validator, work, validatorValidate, loginWorkMethod, queryWorkMethod, managementWorkMethod, recognitionWorkMethod);
   const validatorIdentity = getQueryAdmissionIdentity(validatorValidate);
   const workIdentity = getQueryAdmissionIdentity(queryWorkMethod);
@@ -655,8 +672,9 @@ export function createG07bAdmissionHandler(
       return;
     }
     try {
+      const admissionContext = workContext(context, input.runtimeIdentity, createOperationBudgetBinding);
       const outcome = await invokeG08WriterWork(
-        () => managementWork(input.workInput, workContext(context, input.runtimeIdentity)), input.runtimeIdentity,
+        () => managementWork(input.workInput, admissionContext), input.runtimeIdentity,
       );
       settleWriterOutcome(input.owner, settlement, outcome);
     } catch {
@@ -728,14 +746,29 @@ export function createG07bAdmissionHandler(
       }
 
       if (input.runningPlan === null) throw new AdmissionTechnicalError('RUNNING_PLAN_REQUIRED');
+      // A registered ORIGINAL is the first point at which recognition has
+      // real G08 work.  This exact context is retained for the observer,
+      // unknown hand-off, and G08 invocation; joined/replay paths never make
+      // one or ask the G10b factory for a binding.
+      // Create the context before the G10b bridge.  Once the registry has
+      // accepted ORIGINAL, a bridge or binding failure must leave the exact
+      // context/lease/observation triple available for unknown recovery.
+      const admissionContext = createWorkContext(context, input.runtimeIdentity);
       observations.set(registration.observationReference, {
-        original: workContext(context, input.runtimeIdentity),
+        original: admissionContext,
         progressPlan: input.runningPlan,
       });
       input.deadlineObservation.useProgress(input.runningPlan);
+      try {
+        attachOperationBudgetBinding(context, admissionContext, createOperationBudgetBinding);
+      } catch {
+        transitionUnknown(input, registration.lease, admissionContext, registration.observationReference);
+        settleUnknown(input.owner, settlement, 'RECOGNITION_BINDING_UNCONFIRMED');
+        return;
+      }
       await runOriginalRecognition(
         input,
-        context,
+        admissionContext,
         settlement,
         registration.lease,
         registration.observationReference,
@@ -752,7 +785,7 @@ export function createG07bAdmissionHandler(
 
   async function runOriginalRecognition(
     input: WriterInput,
-    context: WriteOperationContext,
+    admissionContext: AdmissionWorkContext,
     settlement: WriteOperationSettlement<AdmissionWriterOutcome>,
     lease: OperationExecutionLease,
     observationReference: OperationObservationReference,
@@ -760,17 +793,17 @@ export function createG07bAdmissionHandler(
     let outcome: AdmissionRecognitionWriterOutcome;
     try {
       outcome = sanitizeRecognitionWriterOutcome(
-        await invokeG08WriterWork(() => recognitionWork(input.workInput, workContext(context, input.runtimeIdentity)), input.runtimeIdentity),
+        await invokeG08WriterWork(() => recognitionWork(input.workInput, admissionContext), input.runtimeIdentity),
         renderResponsePlan,
       );
     } catch {
-      transitionUnknown(input, lease, context, observationReference);
+      transitionUnknown(input, lease, admissionContext, observationReference);
       settleUnknown(input.owner, settlement, 'RECOGNITION_WORK_UNCONFIRMED');
       return;
     }
 
     if (outcome.disposition === 'UNKNOWN_EFFECT') {
-      transitionUnknown(input, lease, context, observationReference);
+      transitionUnknown(input, lease, admissionContext, observationReference);
       respond(input.owner, technical.unconfirmed);
       settlement.unknownEffect(new AdmissionTechnicalError('RECOGNITION_UNKNOWN_EFFECT'));
       return;
@@ -787,7 +820,7 @@ export function createG07bAdmissionHandler(
         completeSafeTerminal(lease, result);
       } catch {
         if (result !== null) resultPlans.delete(result);
-        transitionUnknown(input, lease, context, observationReference);
+        transitionUnknown(input, lease, admissionContext, observationReference);
         settleUnknown(input.owner, settlement, 'RECOGNITION_TERMINAL_UNCONFIRMED');
         return;
       }
@@ -810,13 +843,13 @@ export function createG07bAdmissionHandler(
       completeCanonical(lease, result);
     } catch {
       if (result !== null) resultPlans.delete(result);
-      transitionUnknown(input, lease, context, observationReference);
+      transitionUnknown(input, lease, admissionContext, observationReference);
       settleUnknown(input.owner, settlement, 'RECOGNITION_TERMINAL_UNCONFIRMED');
       return;
     }
     const plans = resultPlans.get(result);
     if (plans === undefined) {
-      transitionUnknown(input, lease, context, observationReference);
+      transitionUnknown(input, lease, admissionContext, observationReference);
       settleUnknown(input.owner, settlement, 'RECOGNITION_RESULT_PLAN_UNCONFIRMED');
       return;
     }
@@ -827,7 +860,7 @@ export function createG07bAdmissionHandler(
   function transitionUnknown(
     input: WriterInput,
     lease: OperationExecutionLease,
-    context: WriteOperationContext,
+    admissionContext: AdmissionWorkContext,
     observationReference: OperationObservationReference,
   ): void {
     let confirmation: OperationConfirmationLease;
@@ -853,7 +886,10 @@ export function createG07bAdmissionHandler(
       });
       const receipt = offerUnknownRecognition(Object.freeze({
         confirmationLease: confirmation,
-        operation: workContext(context, input.runtimeIdentity),
+        // The coordinator accepts only its deliberately narrow safe context.
+        // Preserve the exact admissionContext for the bridge/G08 path above,
+        // but project its required operation facts for the recovery hand-off.
+        operation: unknownRecognitionOperation(admissionContext),
         observationReference,
         recovery,
       }));
@@ -1738,15 +1774,48 @@ function isRelatedWrite(routeId: BusinessRouteId): boolean {
   return isManagementRoute(routeId) || routeId === 'RECOGNITION_ATTEMPT';
 }
 
-function workContext(context: WriteOperationContext, runtimeIdentity: RuntimeIdentity | null): AdmissionWorkContext {
+function workContext(
+  context: WriteOperationContext,
+  runtimeIdentity: RuntimeIdentity | null,
+  createOperationBudgetBinding: G10bOperationBudgetBindingFactory['bind'] | undefined,
+): AdmissionWorkContext {
+  const admissionContext = createWorkContext(context, runtimeIdentity);
+  attachOperationBudgetBinding(context, admissionContext, createOperationBudgetBinding);
+  return admissionContext;
+}
+
+function createWorkContext(
+  context: WriteOperationContext,
+  runtimeIdentity: RuntimeIdentity | null,
+): AdmissionWorkContext {
   const admissionContext: AdmissionWorkContext = Object.freeze({
     operationId: context.operationId,
     receivedAtMs: context.receivedAtMs,
     sequence: context.sequence,
     runtimeIdentity,
   });
-  registerG10bAdmissionWorkContext(admissionContext, context);
   return admissionContext;
+}
+
+function unknownRecognitionOperation(
+  admissionContext: AdmissionWorkContext,
+): Readonly<{ readonly operationId: string; readonly receivedAtMs: number; readonly sequence: bigint }> {
+  return Object.freeze({
+    operationId: admissionContext.operationId,
+    receivedAtMs: admissionContext.receivedAtMs,
+    sequence: admissionContext.sequence,
+  });
+}
+
+function attachOperationBudgetBinding(
+  context: WriteOperationContext,
+  admissionContext: AdmissionWorkContext,
+  createOperationBudgetBinding: G10bOperationBudgetBindingFactory['bind'] | undefined,
+): void {
+  registerG10bAdmissionWorkContext(admissionContext, context);
+  if (createOperationBudgetBinding !== undefined) {
+    bindG10bOperationBudget(admissionContext, createOperationBudgetBinding(context, admissionContext));
+  }
 }
 
 function recognitionProgressPlan(
@@ -1850,6 +1919,7 @@ function captureOptions(options: G07bAdmissionHandlerOptions): G07bAdmissionHand
     businessStepLogBinding: captureOptionalConstructionProperty(options, 'businessStepLogBinding', 'G07b options'),
     runtimeCounterBridge: captureOptionalConstructionProperty(options, 'runtimeCounterBridge', 'G07b options'),
     driverLogBinding: captureOptionalConstructionProperty(options, 'driverLogBinding', 'G07b options'),
+    operationBudgetBindingFactory: captureOptionalConstructionProperty(options, 'operationBudgetBindingFactory', 'G07b options'),
   }) as G07bAdmissionHandlerOptions;
 }
 

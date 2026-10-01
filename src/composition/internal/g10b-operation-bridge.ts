@@ -3,7 +3,9 @@ import {
   assertOperationBudgetBindingCurrent,
   assertOperationBudgetBindingOwnership,
   assertOperationBudgetBindingProvenance,
+  createOperationBudgetBindingFactory,
   type OperationBudgetBinding,
+  type TrustedOperationBudgetBindingFactoryOptions,
 } from '../../access/application/internal/operation-budget-binding.js';
 import type { AdmissionWorkContext } from './g07b-admission-handler.js';
 import type { WriteOperationContext } from '../../access/application/internal/write-operation-coordinator.js';
@@ -58,6 +60,31 @@ const admissionBindings = new WeakMap<object, AdmissionBindingState>();
 const scopeBindings = new WeakMap<object, AdmissionBindingState>();
 const admissionScopes = new WeakMap<object, object>();
 const bindingAdmissions = new WeakMap<object, AdmissionBindingState>();
+
+/**
+ * Internal composition-only binding factory.  G07 supplies both contexts so
+ * its one freshly-created AdmissionWorkContext is the exact object associated
+ * with the binding it is about to hand to G08.
+ */
+export interface G10bOperationBudgetBindingFactory {
+  bind(context: WriteOperationContext, admissionContext: AdmissionWorkContext): OperationBudgetBinding;
+}
+
+/**
+ * Creates the one composition-owned G10b binding factory.  It is kept in the
+ * composition layer (and out of all public barrels) so G07 can receive only
+ * the already-configured internal dependency, never a clock or budget policy.
+ */
+export function createG10bOperationBudgetBindingFactory(
+  options: TrustedOperationBudgetBindingFactoryOptions,
+): G10bOperationBudgetBindingFactory {
+  const bindingFactory = createOperationBudgetBindingFactory(options);
+  return Object.freeze({
+    bind(context: WriteOperationContext, _admissionContext: AdmissionWorkContext): OperationBudgetBinding {
+      return bindingFactory.bind(context);
+    },
+  });
+}
 
 /**
  * Called at the one existing G07 construction point.  A frozen copy has the

@@ -69,6 +69,7 @@ const ADMISSION_OPTIONAL = Object.freeze([
   'resources',
   'rates',
   'writerQuiescence',
+  'operationBudgetBindingFactory',
 ] as const);
 
 export function createG10aAdmissionRuntimeComposition(
@@ -197,6 +198,7 @@ function captureAdmissionOptions(value: unknown): Omit<G07bAdmissionHandlerOptio
     ...(Object.hasOwn(record, 'resources') ? { resources: record.resources } : {}),
     ...(Object.hasOwn(record, 'rates') ? { rates: record.rates } : {}),
     ...(Object.hasOwn(record, 'writerQuiescence') ? { writerQuiescence: record.writerQuiescence } : {}),
+    ...(Object.hasOwn(record, 'operationBudgetBindingFactory') ? { operationBudgetBindingFactory: record.operationBudgetBindingFactory } : {}),
   }) as Omit<G07bAdmissionHandlerOptions, 'writerPermission' | 'queryPermission'>;
 }
 
