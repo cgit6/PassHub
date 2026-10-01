@@ -718,6 +718,26 @@ describe('G04b bootstrap fails closed against an existing dataset', () => {
     expect(duplicate).toMatchObject({ code: 11000, keyPattern: { sourceId: 1, externalEventId: 1 } });
     expect(String((duplicate as Error).message)).toContain(G04B_EVENT_EXTERNAL_INDEX);
     expect(classifyG04bTransactionError(duplicate, 'event')).toMatchObject({ kind: 'DUPLICATE_KEY', stage: 'event', code: 11000 });
+
+    // This independently proves real-server E11000 mapping classification;
+    // it is intentionally classifier coverage, not a claim that bindNewFace
+    // reaches this driver path (the fault harness will establish that).
+    const faceSlot = {
+      _id: randomUUID(), provider: 'DemoFace.server', subject: 'server-e11000',
+      qualificationId: null, qualificationIncarnation: null, slotIncarnation: randomUUID(), version: 0,
+    };
+    await collections.faceSlots.insertOne(faceSlot);
+    let duplicateFace: unknown;
+    try {
+      await collections.faceSlots.insertOne({ ...faceSlot, _id: randomUUID(), slotIncarnation: randomUUID() });
+    } catch (error: unknown) {
+      duplicateFace = error;
+    }
+    expect(duplicateFace).toMatchObject({ code: 11000, keyPattern: { provider: 1, subject: 1 } });
+    expect(String((duplicateFace as Error).message)).toContain(G04A_FACE_SUBJECT_INDEX);
+    expect(classifyG04bTransactionError(duplicateFace, 'mapping')).toMatchObject({
+      kind: 'FACE_SUBJECT_ALREADY_BOUND', stage: 'mapping', code: 11000,
+    });
     expect(classifyG04bTransactionError({ code: 112, errorLabels: ['TransientTransactionError'] }, 'guard')).toMatchObject({ kind: 'WRITE_CONFLICT', code: 112 });
     expect(classifyG04bTransactionError({ code: 121 }, 'event')).toMatchObject({ kind: 'SCHEMA_VALIDATION', code: 121 });
     expect(classifyG04bTransactionError({ code: 251 }, 'abort')).toMatchObject({ kind: 'TRANSACTION_ABORTED', code: 251 });

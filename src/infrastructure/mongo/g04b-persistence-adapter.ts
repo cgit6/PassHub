@@ -883,13 +883,6 @@ export class G04bMongoPersistenceAdapter
 
   private async bindNewFace(state: TransactionState, qualificationId: string, qualificationIncarnation: string, mapping: Readonly<{ provider: string; externalSubjectId: string }>): Promise<void> {
     const faceSlots = this.requireCollections().faceSlots;
-    const bound = await this.executeCrud(state, async (timeoutMs) => faceSlots.findOne(
-      { provider: mapping.provider, subject: mapping.externalSubjectId, qualificationId: { $type: 'string' } },
-      this.transactionDriverOptions(state, timeoutMs),
-    ));
-    if (bound !== null) {
-      throw new G04bTransactionError({ kind: 'FACE_SUBJECT_ALREADY_BOUND', stage: 'mapping', code: 11000, labels: [] }, new Error('face subject is already bound'));
-    }
     const empty = await this.executeCrud(state, async (timeoutMs) => faceSlots.findOne(
       { provider: mapping.provider, subject: mapping.externalSubjectId, qualificationId: null, qualificationIncarnation: null },
       this.transactionDriverOptions(state, timeoutMs),
@@ -899,6 +892,18 @@ export class G04bMongoPersistenceAdapter
     if (empty === null) {
       const metadata = await this.readMetadata(state);
       if (metadata.slotCount >= G04B_FACE_SLOT_CAPACITY) {
+        // At full capacity a duplicate subject must retain its established
+        // conflict precedence (409) rather than being misreported as a new
+        // subject's capacity exhaustion (507). Ordinary duplicate binding is
+        // still left to the Mongo unique index; this probe exists only when
+        // no slot can be claimed at all.
+        const bound = await this.executeCrud(state, async (timeoutMs) => faceSlots.findOne(
+          { provider: mapping.provider, subject: mapping.externalSubjectId, qualificationId: { $type: 'string' } },
+          this.transactionDriverOptions(state, timeoutMs),
+        ));
+        if (bound !== null) {
+          throw new G04bTransactionError({ kind: 'FACE_SUBJECT_ALREADY_BOUND', stage: 'mapping', code: 11000, labels: [] }, new Error('face subject is already bound at capacity'));
+        }
         throw new G04bTransactionError({ kind: 'FACE_SUBJECT_SLOT_CAPACITY_EXHAUSTED', stage: 'mapping', code: null, labels: [] }, new Error('face slot capacity exhausted'));
       }
       await this.executeCrud(state, async (timeoutMs) => faceSlots.insertOne({

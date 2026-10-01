@@ -302,6 +302,16 @@ describe('G08a true MongoDB 8.0.32 replica-set management', () => {
     expect(await qualifications.countDocuments({})).toBe(qualificationCountAtCapacity);
     expect(await metadata.findOne({ _id: 'system' })).toMatchObject({ slotCount: 4096 });
 
+    // At capacity, an already-bound subject keeps its conflict semantics
+    // rather than falling through to the new-subject capacity response.
+    await expect(h.access.manageQualifications.create({
+      displayName: 'already bound at capacity', validFromMs: BASE_NOW, validUntilMs: BASE_NOW + 100_000,
+      faceMapping: { provider: 'CapacityFace', externalSubjectId: 'subject-0' },
+      receivedAtMs: BASE_NOW, actorId: ACTOR_ID,
+    })).rejects.toMatchObject({ facts: { kind: 'FACE_SUBJECT_ALREADY_BOUND' } });
+    expect(await slots.countDocuments({})).toBe(4096);
+    expect(await qualifications.countDocuments({})).toBe(qualificationCountAtCapacity);
+
     await h.access.manageQualifications.revoke({
       qualificationId: edge.qualificationId, reason: 'release at capacity',
       receivedAtMs: BASE_NOW + 1_000, actorId: ACTOR_ID,
