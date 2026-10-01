@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { Buffer } from 'node:buffer';
 import { readFile, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +10,7 @@ import {
   createConfigurableFixedMinuteRateLedger,
   createHttpResponsePlanBundle,
   createUnknownRecognitionCoordinatorBundle,
+  type AdmissionResourceLedger,
   type AdmissionValidationInput,
   type AdmissionValidationResult,
   type AdmissionWorkPort,
@@ -16,6 +18,7 @@ import {
 import { createG10aAdmissionRuntimeComposition } from '../../src/composition/internal/g10a-admission-runtime-composition.js';
 import { createG10aRuntimeOwner } from '../../src/composition/internal/g10a-runtime-owner.js';
 import { RUNTIME_CONTROL_SOCKET_FILE_NAME } from '../../src/runtime/internal/runtime-control-socket-path.js';
+import { dispatchRuntimeControlProtocol, type RuntimeControlProtocolFrame } from '../../src/runtime/internal/runtime-control-protocol.js';
 import { validateRuntimeLogRecord } from '../../src/runtime/internal/runtime-log-schema.js';
 import { RuntimeLogSink } from '../../src/runtime/internal/runtime-log-sink.js';
 import { createLegacyQueryAdmissionCapability } from '../../src/composition/internal/query-admission-binding.js';
@@ -50,6 +53,8 @@ function makeComposition(
   validateOverride?: (input: AdmissionValidationInput) => Promise<AdmissionValidationResult>,
   onManagementContext?: (context: Parameters<AdmissionWorkPort['management']>[1]) => void,
   managementRateLimit = 10,
+  compose = true,
+  resourcesOverride?: AdmissionResourceLedger,
 ) {
   const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
   const handoff = createAdmissionWorkHandoffBundle();
@@ -100,7 +105,7 @@ function makeComposition(
     validate,
     query: queryDelegate,
   });
-  const resources = createAdmissionResourceLedger();
+  const resources = resourcesOverride ?? createAdmissionResourceLedger();
   const rates = createConfigurableFixedMinuteRateLedger({ clock: { nowMs: () => 0 } }, {
     login: { perKey: 10, global: 10, maxKeys: 2 },
     query: { perKey: 10, global: 10 },
@@ -140,13 +145,13 @@ function makeComposition(
     rates,
     validationCalls: () => validationCalls,
     admission,
-    composition: createG10aAdmissionRuntimeComposition({
+    composition: (compose ? createG10aAdmissionRuntimeComposition({
       epoch: EPOCH,
       run: RUN,
       monotonicClock: { nowMs: () => 0 },
       awaitObservation: () => undefined,
       admission,
-    }),
+    }) : undefined) as ReturnType<typeof createG10aAdmissionRuntimeComposition>,
   };
 }
 
@@ -188,7 +193,70 @@ function invokeRecognition(handler: ReturnType<typeof createG10aAdmissionRuntime
   );
 }
 
+async function statusSnapshot(control: ReturnType<typeof createG10aAdmissionRuntimeComposition>['control']) {
+  const text = `${JSON.stringify({ v: 'c1', requestControlId: '99999999-9999-4999-8999-999999999999', command: 'STATUS', epoch: EPOCH, run: RUN })}\n`;
+  const frame: RuntimeControlProtocolFrame = Object.freeze({ text, utf8Valid: true, hasBom: false, singleFinalLf: true, byteLength: Buffer.byteLength(text, 'utf8') });
+  const response = await dispatchRuntimeControlProtocol(control, frame);
+  if (response === undefined || !response.ok || response.snapshot === null) throw new Error('expected STATUS snapshot');
+  return response.snapshot;
+}
+
 describe('G10a A4 admission runtime composition', () => {
+  test('STATUS observes UNKNOWN_EFFECT produced by the real HTTP writer lifecycle', async () => {
+    const fixture = makeComposition({ management: () => Promise.reject(new Error('writer unknown')) as never });
+    invoke(fixture.composition.handler);
+    await flush(); await flush(); await flush();
+    await expect(statusSnapshot(fixture.composition.control)).resolves.toMatchObject({ writers: { unknown: 1 } });
+  });
+
+  test('STATUS observes BLOCKED when the real HTTP lifecycle cannot release its origin lease', async () => {
+    const backing = createAdmissionResourceLedger();
+    const resources = Object.freeze({
+      ...backing,
+      releaseOrigin: () => { throw new Error('origin cleanup failed'); },
+    }) as AdmissionResourceLedger;
+    const fixture = makeComposition(undefined, undefined, undefined, 10, true, resources);
+
+    // The handler obtains a real writer bundle, then its own settled observer
+    // reaches the injected ledger cleanup failure.  No lifecycle or metrics
+    // publisher is driven by this test directly.
+    invoke(fixture.composition.handler);
+    await flush(); await flush(); await flush();
+    await expect(statusSnapshot(fixture.composition.control)).resolves.toMatchObject({
+      writers: { provisional: 0, queued: 0, running: 0, blocked: 1, unknown: 0 },
+    });
+  });
+
+  test('STATUS reads the real coordinator lifecycle counters through the nominal internal source', async () => {
+    const first = deferred<{ readonly disposition: 'KNOWN_NO_EFFECT'; readonly response: unknown }>();
+    const second = deferred<{ readonly disposition: 'KNOWN_NO_EFFECT'; readonly response: unknown }>();
+    let calls = 0;
+    const fixture = makeComposition({ management: () => (calls++ === 0 ? first.promise : second.promise) as never });
+
+    invoke(fixture.composition.handler);
+    await flush();
+    await expect(statusSnapshot(fixture.composition.control)).resolves.toMatchObject({ writers: { provisional: 0, queued: 0, running: 1, blocked: 0, unknown: 0 }, registryUnknown: 0 });
+
+    const held = fixture.composition.control.hold({
+      requestControlId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', epoch: EPOCH, run: RUN, expectedRevision: '0',
+    });
+    invoke(fixture.composition.handler);
+    await flush();
+    await expect(statusSnapshot(fixture.composition.control)).resolves.toMatchObject({ writers: { provisional: 0, queued: 1, running: 1, blocked: 0, unknown: 0 }, registryUnknown: 0 });
+
+    first.resolve({ disposition: 'KNOWN_NO_EFFECT', response: fixture.plans.technical.issue('INVALID_REQUEST') });
+    await flush(); await flush();
+    await expect(statusSnapshot(fixture.composition.control)).resolves.toMatchObject({ writers: { provisional: 0, queued: 1, running: 0, blocked: 0, unknown: 0 } });
+    fixture.composition.control.release({
+      requestControlId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', epoch: EPOCH, run: RUN, expectedRevision: held.revision, controlId: held.controlId as string,
+    });
+    await flush();
+    await expect(statusSnapshot(fixture.composition.control)).resolves.toMatchObject({ writers: { provisional: 0, queued: 0, running: 1, blocked: 0, unknown: 0 } });
+    second.resolve({ disposition: 'KNOWN_NO_EFFECT', response: fixture.plans.technical.issue('INVALID_REQUEST') });
+    await flush(); await flush();
+    await expect(statusSnapshot(fixture.composition.control)).resolves.toMatchObject({ writers: { provisional: 0, queued: 0, running: 0, blocked: 0, unknown: 0 } });
+  });
+
   test('constructs the private runtime and its handler acquires the factory-created lease for deferred G08 work', async () => {
     const pending = deferred<{ readonly disposition: 'KNOWN_NO_EFFECT'; readonly response: unknown }>();
     const fixture = makeComposition({ management: () => pending.promise as never });
@@ -213,7 +281,7 @@ describe('G10a A4 admission runtime composition', () => {
     try {
       const runtime = await owner.start();
       let observedContext: Parameters<AdmissionWorkPort['management']>[1] | undefined;
-      const fixture = makeComposition(undefined, undefined, (context) => { observedContext = context; });
+      const fixture = makeComposition(undefined, undefined, (context) => { observedContext = context; }, 10, false);
       const composed = createG10aAdmissionRuntimeComposition({
         epoch: EPOCH, run: RUN, monotonicClock: { nowMs: () => performance.now() }, awaitObservation: () => undefined,
         admission: fixture.admission, runtime,
@@ -261,7 +329,7 @@ describe('G10a A4 admission runtime composition', () => {
     });
     try {
       const runtime = await owner.start();
-      const fixture = makeComposition({ management: () => Promise.reject(new Error('opaque asynchronous failure')) });
+      const fixture = makeComposition({ management: () => Promise.reject(new Error('opaque asynchronous failure')) }, undefined, undefined, 10, false);
       const composed = createG10aAdmissionRuntimeComposition({
         epoch: EPOCH, run: RUN, monotonicClock: { nowMs: () => performance.now() }, awaitObservation: () => undefined,
         admission: fixture.admission, runtime,
@@ -293,7 +361,7 @@ describe('G10a A4 admission runtime composition', () => {
     });
     try {
       const runtime = await owner.start();
-      const fixture = makeComposition({ management: () => { throw new Error('opaque synchronous failure'); } });
+      const fixture = makeComposition({ management: () => { throw new Error('opaque synchronous failure'); } }, undefined, undefined, 10, false);
       const composed = createG10aAdmissionRuntimeComposition({
         epoch: EPOCH, run: RUN, monotonicClock: { nowMs: () => performance.now() }, awaitObservation: () => undefined,
         admission: fixture.admission, runtime,
@@ -329,7 +397,7 @@ describe('G10a A4 admission runtime composition', () => {
       const fixture = makeComposition({ management: () => {
         managementCalls += 1;
         return Promise.resolve({ disposition: 'KNOWN_NO_EFFECT', response: fixture.plans.technical.issue('INVALID_REQUEST') });
-      } }, undefined, undefined, 1);
+      } }, undefined, undefined, 1, false);
       const composed = createG10aAdmissionRuntimeComposition({
         epoch: EPOCH, run: RUN, monotonicClock: { nowMs: () => performance.now() }, awaitObservation: () => undefined,
         admission: fixture.admission, runtime,
@@ -365,7 +433,7 @@ describe('G10a A4 admission runtime composition', () => {
     const fixture = makeComposition({ management: () => {
       managementCalls += 1;
       return Promise.resolve({ disposition: 'KNOWN_NO_EFFECT', response: fixture.plans.technical.issue('INVALID_REQUEST') });
-    } });
+    } }, undefined, undefined, 10, false);
     const composed = createG10aAdmissionRuntimeComposition({
       epoch: EPOCH, run: RUN, monotonicClock: { nowMs: () => 0 }, awaitObservation: () => undefined,
       admission: fixture.admission, runtimeLogSink: sink,
@@ -392,7 +460,7 @@ describe('G10a A4 admission runtime composition', () => {
       const fixture = makeComposition({
         query: () => { queryCalls += 1; return Promise.resolve(fixture.plans.business.issue(200, { query: true })); },
         login: () => { loginCalls += 1; return Promise.resolve(fixture.plans.business.issue(200, { login: true })); },
-      });
+      }, undefined, undefined, 10, false);
       const composed = createG10aAdmissionRuntimeComposition({
         epoch: EPOCH, run: RUN, monotonicClock: { nowMs: () => performance.now() }, awaitObservation: () => undefined,
         admission: fixture.admission, runtime,
@@ -425,7 +493,7 @@ describe('G10a A4 admission runtime composition', () => {
     });
     try {
       const runtime = await owner.start();
-      const fixture = makeComposition();
+      const fixture = makeComposition(undefined, undefined, undefined, 10, false);
       const composed = createG10aAdmissionRuntimeComposition({
         epoch: EPOCH, run: RUN, monotonicClock: { nowMs: () => performance.now() }, awaitObservation: () => undefined,
         admission: fixture.admission, runtime,
@@ -464,7 +532,7 @@ describe('G10a A4 admission runtime composition', () => {
   });
 
   test('rejects epoch mismatch and a caller-supplied writer permission before it can shadow the internal binding', () => {
-    const fixture = makeComposition();
+    const fixture = makeComposition(undefined, undefined, undefined, 10, false);
     expect(() => createG10aAdmissionRuntimeComposition({
       epoch: EPOCH, run: RUN, monotonicClock: { nowMs: () => 0 }, awaitObservation: () => undefined,
       admission: { ...fixture.admission, currentDatasetEpoch: RUN },
@@ -478,7 +546,7 @@ describe('G10a A4 admission runtime composition', () => {
   });
 
   test('accepts only a nominal private runtime log sink and projects its health without expanding the handler surface', () => {
-    const fixture = makeComposition();
+    const fixture = makeComposition(undefined, undefined, undefined, 10, false);
     const sink = new RuntimeLogSink({ write: async () => undefined });
     const composed = createG10aAdmissionRuntimeComposition({
       epoch: EPOCH, run: RUN, monotonicClock: { nowMs: () => 0 }, awaitObservation: () => undefined,

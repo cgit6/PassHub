@@ -74,7 +74,7 @@ describe('G10a A1 runtime identity/control core', () => {
     }
     const source = readFileSync('src/runtime/internal/runtime-control.ts', 'utf8');
     const imports = [...source.matchAll(/^import .* from ['"]([^'"]+)['"];$/gmu)].map((match) => match[1]);
-    expect(imports).toEqual(['node:crypto', 'node:util', './runtime-log-schema.js', './runtime-log-sink.js']);
+    expect(imports).toEqual(['node:crypto', 'node:util', './runtime-live-counter-snapshot.js', './runtime-live-counter-bridge.js', './runtime-log-schema.js', './runtime-log-sink.js']);
     expect(source).not.toMatch(/socket|g07|mongodb|infrastructure/iu);
   });
 

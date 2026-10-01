@@ -23,11 +23,26 @@ export interface WriterQuiescenceLifecycle {
   blocked(receipt: WriteOperationRegistrationReceipt): void;
   settled(receipt: WriteOperationRegistrationReceipt, disposition: WriteOperationLifecycleDisposition): void;
 }
+export interface WriterQuiescenceCounters {
+  readonly provisional: number;
+  readonly queued: number;
+  readonly running: number;
+  readonly blocked: number;
+  readonly unknown: number;
+}
 interface LeaseState { readonly identity: object; active: boolean; }
 const leaseStates = new WeakMap<object, LeaseState>();
 const quiescencePorts = new WeakSet<object>();
+const counterReaders = new WeakMap<object, () => WriterQuiescenceCounters>();
 export function isWriterQuiescencePort(value: unknown): value is WriterQuiescencePort {
   return typeof value === 'object' && value !== null && quiescencePorts.has(value);
+}
+/** Internal nominal read of the coordinator's lifecycle state; no polling or callbacks. */
+export function readWriterQuiescenceCounters(port: WriterQuiescencePort): WriterQuiescenceCounters {
+  if (!isWriterQuiescencePort(port)) throw new TypeError('writer quiescence port is not trusted');
+  const read = counterReaders.get(port as object);
+  if (read === undefined) throw new TypeError('writer quiescence counters are unavailable');
+  return read();
 }
 export function createWriterQuiescence(options: Readonly<{ readonly clock: WriterQuiescenceClock; readonly onLeaseReleased?: () => void }>): WriterQuiescencePort {
   if (typeof options !== 'object' || options === null || typeof options.clock !== 'object' || options.clock === null
@@ -65,7 +80,21 @@ export function createWriterQuiescence(options: Readonly<{ readonly clock: Write
   };
   const bindCoordinatorWake = (wake: () => void): void => { if (typeof wake !== 'function' || wakeBound) throw new TypeError('writer coordinator wake is already bound'); wakeBound = true; coordinatorWake = wake; };
   const port = Object.freeze({ lifecycle, canStartWriter, acquireReadObservationLease, bindCoordinatorWake });
-  quiescencePorts.add(port); return port;
+  quiescencePorts.add(port);
+  counterReaders.set(port, (): WriterQuiescenceCounters => {
+    const counters = { provisional: 0, queued: 0, running: 0, blocked: 0, unknown: 0 };
+    for (const state of states.values()) {
+      switch (state) {
+        case 'PROVISIONAL': counters.provisional += 1; break;
+        case 'QUEUED': counters.queued += 1; break;
+        case 'RUNNING': counters.running += 1; break;
+        case 'BLOCKED': counters.blocked += 1; break;
+        case 'UNKNOWN': counters.unknown += 1; break;
+      }
+    }
+    return Object.freeze(counters);
+  });
+  return port;
   function requireState(operationId: string, expected: WriterQuiescenceState): void { if (states.get(operationId) !== expected) throw new TypeError(`writer lifecycle expected ${expected}`); }
 }
 function assertReceipt(receipt: WriteOperationRegistrationReceipt): void {

@@ -15,6 +15,7 @@ import {
   createWriteOperationCoordinatorBundle,
   type WriteOperationContext,
   type WriteOperationLifecycleEvent,
+  type WriteOperationRegistrationReceipt,
   type WriteOperationProvisional,
   type WriteOperationSettlement,
 } from '../../access/application/internal/write-operation-coordinator.js';
@@ -84,11 +85,21 @@ import {
   type G10aBusinessStepLogBinding,
 } from './g10a-business-step-log-binding.js';
 import type { RuntimeIdentity } from '../../runtime/internal/runtime-control.js';
+import { assertRuntimeLiveCounterBridge, notifyRuntimeLiveCounterBridge, type RuntimeLiveCounterBridge } from '../../runtime/internal/runtime-live-counter-bridge.js';
 import {
   captureConstructionMethod,
   captureOptionalConstructionProperty,
   captureConstructionProperty,
 } from '../../shared/internal/construction-capture.js';
+
+const handlerWriterQuiescence = new WeakMap<object, WriterQuiescencePort>();
+
+/** Internal G10a composition seam; it exposes no HTTP capability or mutable state. */
+export function readG07bHandlerWriterQuiescence(handler: AcceptedIngressHandler): WriterQuiescencePort {
+  const source = typeof handler === 'function' ? handlerWriterQuiescence.get(handler as object) : undefined;
+  if (source === undefined) throw new TypeError('G07b handler writer quiescence is unavailable');
+  return source;
+}
 
 export interface G07bWallClock {
   nowMs(): number;
@@ -213,6 +224,8 @@ export interface G07bAdmissionHandlerOptions {
   readonly operationIdentityBinding?: unknown;
   /** Internal G10a bridge; records exactly the full G08 writer-work lifecycle. */
   readonly businessStepLogBinding?: unknown;
+  /** Internal push-only STATUS metrics notifier. */
+  readonly runtimeCounterBridge?: RuntimeLiveCounterBridge;
 }
 
 interface WriterInput {
@@ -420,6 +433,8 @@ export function createG07bAdmissionHandler(
   const writerQuiescence = options.writerQuiescence
     ?? (validatorIdentity.kind === 'QUIESCED' ? validatorIdentity.writerQuiescence : undefined)
     ?? createWriterQuiescence({ clock: wallClock });
+  const runtimeCounterBridge = options.runtimeCounterBridge;
+  if (runtimeCounterBridge !== undefined) assertRuntimeLiveCounterBridge(runtimeCounterBridge);
 
   const acquireBundle = resources.tryAcquire.bind(resources);
   const releaseHttp = resources.releaseHttp.bind(resources);
@@ -517,13 +532,14 @@ export function createG07bAdmissionHandler(
 
   let wakeCoordinator = (): void => undefined;
   const lifecycleObserver = Object.freeze({
-    registered: writerQuiescence.lifecycle.registered.bind(writerQuiescence.lifecycle),
-    queued: writerQuiescence.lifecycle.queued.bind(writerQuiescence.lifecycle),
-    started: writerQuiescence.lifecycle.started.bind(writerQuiescence.lifecycle),
-    blocked: writerQuiescence.lifecycle.blocked.bind(writerQuiescence.lifecycle),
+    registered(value: WriteOperationRegistrationReceipt): void { writerQuiescence.lifecycle.registered(value); try { if (runtimeCounterBridge !== undefined) notifyRuntimeLiveCounterBridge(runtimeCounterBridge); } catch {} },
+    queued(value: WriteOperationRegistrationReceipt): void { writerQuiescence.lifecycle.queued(value); try { if (runtimeCounterBridge !== undefined) notifyRuntimeLiveCounterBridge(runtimeCounterBridge); } catch {} },
+    started(value: WriteOperationRegistrationReceipt): void { writerQuiescence.lifecycle.started(value); try { if (runtimeCounterBridge !== undefined) notifyRuntimeLiveCounterBridge(runtimeCounterBridge); } catch {} },
+    blocked(value: WriteOperationRegistrationReceipt): void { writerQuiescence.lifecycle.blocked(value); try { if (runtimeCounterBridge !== undefined) notifyRuntimeLiveCounterBridge(runtimeCounterBridge); } catch {} },
     settled(event: WriteOperationLifecycleEvent): void {
       if (event.disposition === 'UNKNOWN_EFFECT') {
         writerQuiescence.lifecycle.settled(event.receipt, event.disposition);
+        try { if (runtimeCounterBridge !== undefined) notifyRuntimeLiveCounterBridge(runtimeCounterBridge); } catch {}
         return;
       }
       const lease = originByOperation.get(event.receipt.operationId);
@@ -532,12 +548,14 @@ export function createG07bAdmissionHandler(
           releaseOrigin(lease);
         } catch (error: unknown) {
           writerQuiescence.lifecycle.blocked(event.receipt);
+          try { if (runtimeCounterBridge !== undefined) notifyRuntimeLiveCounterBridge(runtimeCounterBridge); } catch {}
           throw error;
         }
         originByOperation.delete(event.receipt.operationId);
       }
       // State is removed only after every external cleanup step succeeds.
       writerQuiescence.lifecycle.settled(event.receipt, event.disposition);
+      try { if (runtimeCounterBridge !== undefined) notifyRuntimeLiveCounterBridge(runtimeCounterBridge); } catch {}
     },
   });
 
@@ -1490,6 +1508,7 @@ export function createG07bAdmissionHandler(
     try { lease.release(); } catch { /* query admission remains fail-closed */ }
   }
 
+  handlerWriterQuiescence.set(handler as object, writerQuiescence);
   return handler;
 }
 
@@ -1792,6 +1811,7 @@ function captureOptions(options: G07bAdmissionHandlerOptions): G07bAdmissionHand
     queryPermission: captureOptionalConstructionProperty(options, 'queryPermission', 'G07b options'),
     operationIdentityBinding: captureOptionalConstructionProperty(options, 'operationIdentityBinding', 'G07b options'),
     businessStepLogBinding: captureOptionalConstructionProperty(options, 'businessStepLogBinding', 'G07b options'),
+    runtimeCounterBridge: captureOptionalConstructionProperty(options, 'runtimeCounterBridge', 'G07b options'),
   }) as G07bAdmissionHandlerOptions;
 }
 

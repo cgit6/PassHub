@@ -2,6 +2,7 @@ import { types as nodeTypes } from 'node:util';
 
 import {
   createG07bAdmissionHandler,
+  readG07bHandlerWriterQuiescence,
   type G07bAdmissionHandlerOptions,
 } from './g07b-admission-handler.js';
 import { createG10aWriterPermissionBinding } from './g10a-writer-permission-binding.js';
@@ -9,9 +10,14 @@ import { createG10aQueryPermissionBinding } from './g10a-query-permission-bindin
 import {
   createRuntimeControl,
   createRuntimeIdentityIssuer,
+  bindRuntimeControlLiveCounters,
   type RuntimeClock,
   type RuntimeControl,
 } from '../../runtime/internal/runtime-control.js';
+import { createRuntimeLiveCounterSnapshotSource, publishRuntimeLiveCounterSnapshot } from '../../runtime/internal/runtime-live-counter-snapshot.js';
+import { createRuntimeLiveCounterBridge } from '../../runtime/internal/runtime-live-counter-bridge.js';
+import { readWriterQuiescenceCounters } from '../../access/application/internal/writer-quiescence.js';
+import { readOperationRegistryUnknownCount, bindOperationRegistryMetricsBridge } from '../../access/application/internal/operation-registry.js';
 import { assertRuntimeLogSink, type RuntimeLogSink } from '../../runtime/internal/runtime-log-sink.js';
 import type { AcceptedIngressHandler } from '../../shared/internal/http/index.js';
 import { createG10aIngressIdentityHandler } from './g10a-ingress-identity.js';
@@ -97,6 +103,11 @@ export function createG10aAdmissionRuntimeComposition(
   }
   const writerPermission = createG10aWriterPermissionBinding(control);
   const queryPermission = createG10aQueryPermissionBinding(control);
+  let refreshCounters: (() => void) | undefined;
+  const counterSource = createRuntimeLiveCounterSnapshotSource(Object.freeze({
+    writers: Object.freeze({ provisional: 0, queued: 0, running: 0, blocked: 0, unknown: 0 }), registryUnknown: 0,
+  }));
+  const counterBridge = createRuntimeLiveCounterBridge(() => refreshCounters?.());
   const admissionHandler = createG07bAdmissionHandler({
     ...options.admission,
     writerPermission,
@@ -105,7 +116,15 @@ export function createG10aAdmissionRuntimeComposition(
       operationIdentityBinding: createG10aOperationIdentityBinding(runtime),
       businessStepLogBinding: createG10aBusinessStepLogBinding(runtime),
     }),
+    runtimeCounterBridge: counterBridge,
   });
+  const writerQuiescence = readG07bHandlerWriterQuiescence(admissionHandler);
+  refreshCounters = () => publishRuntimeLiveCounterSnapshot(counterSource, Object.freeze({
+    writers: readWriterQuiescenceCounters(writerQuiescence), registryUnknown: readOperationRegistryUnknownCount(options.admission.registry),
+  }));
+  refreshCounters();
+  bindOperationRegistryMetricsBridge(options.admission.registry, counterBridge);
+  bindRuntimeControlLiveCounters(control, counterSource);
   const handler = runtime === undefined
     ? admissionHandler
     : createG10aIngressIdentityHandler({

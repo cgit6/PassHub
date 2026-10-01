@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { types as nodeTypes } from 'node:util';
+import { assertRuntimeLiveCounterSnapshotSource, bindRuntimeLiveCounterSnapshot, type RuntimeLiveCounterSnapshotSource } from './runtime-live-counter-snapshot.js';
+import { isRuntimeLiveCounterBridgeNotifying } from './runtime-live-counter-bridge.js';
 import { createRuntimeLogRecord, type RuntimeLogCode } from './runtime-log-schema.js';
 import { assertRuntimeLogSink, subscribeRuntimeLogSinkHealth, type RuntimeLogSink, type RuntimeLogSinkSnapshot } from './runtime-log-sink.js';
 
@@ -199,6 +201,7 @@ const identities = new WeakMap<object, IdentityState>();
 const operationTokens = new WeakMap<object, OperationTokenState>();
 const controls = new WeakMap<object, ControlState>();
 const controlRejectionRecorders = new WeakMap<object, (requestControlId: string) => void>();
+const controlLiveCounterBinders = new WeakMap<object, (source: RuntimeLiveCounterSnapshotSource) => void>();
 const leases = new WeakMap<object, LeaseState>();
 const issuedControlIds = new Set<string>();
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -306,13 +309,16 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
   let maintenanceValidationCancellationBound = false;
   let current: MutationRecord | null = null;
   let last: MutationRecord | null = null;
+  let liveCounterSourceBound = false;
+  let cachedWriters: WriterCounterSnapshot = Object.freeze({ provisional: 0, queued: 0, running: 0, blocked: 0, unknown: 0 });
+  let cachedRegistryUnknown = 0;
   interface CounterWaiter { readonly wake: () => void; active: boolean; }
   const counterWaiters = new Set<CounterWaiter>();
 
   const makeSnapshot = (projection: SnapshotProjection): RuntimeControlSnapshot => {
     const manual = Object.freeze({ active: projection.manualControlId !== null, controlId: projection.manualControlId });
     const maintenance = Object.freeze({ active: projection.maintenanceControlId !== null, controlId: projection.maintenanceControlId, outcome: projection.maintenanceOutcome });
-    const writers = Object.freeze({ provisional: 0, queued: 0, running: 0, blocked: 0, unknown: 0 });
+    const writers = cachedWriters;
     const logging = projectLogging();
     return Object.freeze({
       epoch: state.epoch,
@@ -324,15 +330,14 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
       writers,
       issuedPersistence,
       activeQueryReads,
-      registryUnknown: 0,
+      registryUnknown: cachedRegistryUnknown,
       logging,
     });
   };
   const snapshot = (): RuntimeControlSnapshot => makeSnapshot({ revision, manualControlId, maintenanceControlId, maintenanceOutcome });
 
-  // Status/HOLD/RELEASE only read this immutable value.  The sink pushes a
-  // fresh health projection on its own state changes, so a diagnostic source
-  // cannot inject a callback into a synchronous control decision.
+  // The sink pushes a fresh health projection on its own state changes; the
+  // control path never pulls it while serving a synchronous command.
   const projectLogging = (): LoggingSnapshot => cachedLogging;
   if (capturedOptions.runtimeLogSink !== undefined) {
     const acceptLoggingHealth = (source: RuntimeLogSinkSnapshot): void => {
@@ -373,6 +378,15 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
   };
   const recordControlRejection = (requestControlId: string): void => {
     appendControlLog('CONTROL_REJECTED', requestControlId, null, revision.toString(10));
+  };
+  const bindLiveCounters = (source: RuntimeLiveCounterSnapshotSource): void => {
+    assertRuntimeLiveCounterSnapshotSource(source);
+    if (liveCounterSourceBound) throw new TypeError('runtime live counter source is already bound');
+    bindRuntimeLiveCounterSnapshot(source, (live) => {
+      cachedWriters = live.writers;
+      cachedRegistryUnknown = live.registryUnknown;
+    });
+    liveCounterSourceBound = true;
   };
 
   const canStartWriter = (): boolean => manualControlId === null;
@@ -420,6 +434,7 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
   };
 
   const validateMutation = (command: MutationRecord['command'], request: CapturedMutation, extra: string): RuntimeControlResult | undefined => {
+    if (isRuntimeLiveCounterBridgeNotifying()) throw new RuntimeControlError('CONTROL_BUSY');
     const fingerprint = fingerprintFor(command, request, extra);
     if (request.epoch !== state.epoch) throw new RuntimeControlError('STALE_EPOCH');
     if (request.run !== state.run) throw new RuntimeControlError('STALE_RUN');
@@ -437,6 +452,7 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
     return undefined;
   };
   const validateDrainMutation = (request: CapturedMutation, timeoutMs: number): Promise<RuntimeControlResult> | undefined => {
+    if (isRuntimeLiveCounterBridgeNotifying()) throw new RuntimeControlError('CONTROL_BUSY');
     const fingerprint = fingerprintFor('DRAIN', request, String(timeoutMs));
     if (request.epoch !== state.epoch) throw new RuntimeControlError('STALE_EPOCH');
     if (request.run !== state.run) throw new RuntimeControlError('STALE_RUN');
@@ -658,6 +674,7 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
   const control: RuntimeControl = Object.freeze({ snapshot, acquireIssuedPersistence, acquireActiveQueryRead, canStartWriter, isMaintenanceWriterVeto, bindWriterWake, bindMaintenanceReadySettlement, bindMaintenanceValidationCancellation, hold, release, drain });
   controls.set(control as object, state);
   controlRejectionRecorders.set(control as object, recordControlRejection);
+  controlLiveCounterBinders.set(control as object, bindLiveCounters);
   return control;
 
   function makeResult(outcome: RuntimeControlOutcome, controlId: string | null, projection?: SnapshotProjection): RuntimeControlResult {
@@ -689,6 +706,15 @@ export function recordRuntimeControlRejection(control: RuntimeControl, requestCo
   const record = controlRejectionRecorders.get(control as object);
   if (record === undefined) throw new TypeError('runtime control rejection recorder is unavailable');
   record(requestControlId);
+}
+
+/** Internal one-time composition seam for the nominal admission status source. */
+export function bindRuntimeControlLiveCounters(control: RuntimeControl, source: RuntimeLiveCounterSnapshotSource): void {
+  assertRuntimeControl(control);
+  assertRuntimeLiveCounterSnapshotSource(source);
+  const bind = controlLiveCounterBinders.get(control as object);
+  if (bind === undefined) throw new TypeError('runtime control live counter binding is unavailable');
+  bind(source);
 }
 
 function createPendingResult(cell: PendingResultCell): RuntimeControlResult {

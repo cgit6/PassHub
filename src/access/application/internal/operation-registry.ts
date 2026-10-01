@@ -1,3 +1,5 @@
+import { assertRuntimeLiveCounterBridge, isRuntimeLiveCounterBridgeNotifying, notifyRuntimeLiveCounterBridge, type RuntimeLiveCounterBridge } from '../../../runtime/internal/runtime-live-counter-bridge.js';
+
 /**
  * Process-local operation registry for recognition idempotency.
  *
@@ -243,6 +245,26 @@ export interface OperationRegistry {
   snapshot(): OperationRegistrySnapshot;
 }
 
+const registryUnknownReaders = new WeakMap<object, () => number>();
+const registryMetricSubscribers = new WeakMap<object, RuntimeLiveCounterBridge | undefined>();
+
+/** Internal nominal metric: it reads entry state directly and never widens the registry snapshot contract. */
+export function readOperationRegistryUnknownCount(registry: OperationRegistry): number {
+  const read = typeof registry === 'object' && registry !== null ? registryUnknownReaders.get(registry as object) : undefined;
+  if (read === undefined) throw new TypeError('operation registry unknown metric is unavailable');
+  return read();
+}
+export function bindOperationRegistryMetricsBridge(registry: OperationRegistry, bridge: RuntimeLiveCounterBridge): void {
+  assertRuntimeLiveCounterBridge(bridge);
+  if (typeof registry !== 'object' || registry === null || !registryMetricSubscribers.has(registry as object)) throw new TypeError('operation registry metric bridge is unavailable');
+  const current = registryMetricSubscribers.get(registry as object);
+  if (current !== undefined) {
+    if (current === bridge) return;
+    throw new TypeError('operation registry metric bridge is already bound');
+  }
+  registryMetricSubscribers.set(registry as object, bridge);
+}
+
 const DEFAULT_CAPACITY = 4_096;
 
 interface Entry {
@@ -486,6 +508,7 @@ export function createOperationRegistry(options: OperationRegistryOptions): Oper
   };
 
   const transition = <T>(work: () => T): T => {
+    if (isRuntimeLiveCounterBridgeNotifying()) throw localError('REENTRANT', 'operation registry transition is blocked by runtime metrics');
     if (transitioning) freeze('REENTRANT', 'operation registry transition is reentrant');
     if (frozen) {
       throw new OperationRegistryError(
@@ -499,6 +522,8 @@ export function createOperationRegistry(options: OperationRegistryOptions): Oper
       return work();
     } finally {
       transitioning = false;
+      const bridge = registryMetricSubscribers.get(registry as object);
+      try { if (bridge !== undefined) notifyRuntimeLiveCounterBridge(bridge); } catch { /* metrics cannot affect registry */ }
     }
   };
 
@@ -987,6 +1012,15 @@ export function createOperationRegistry(options: OperationRegistryOptions): Oper
       return frozen ? makeSnapshot() : transition(makeSnapshot);
     },
   });
+
+  registryUnknownReaders.set(registry as object, (): number => {
+    let unknown = 0;
+    for (const sourceEntries of entriesBySource.values()) {
+      for (const entry of sourceEntries.values()) if (entry.state === 'UNKNOWN') unknown += 1;
+    }
+    return unknown;
+  });
+  registryMetricSubscribers.set(registry as object, undefined);
 
   return registry;
 }
