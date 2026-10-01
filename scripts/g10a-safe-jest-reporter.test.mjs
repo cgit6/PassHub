@@ -59,6 +59,16 @@ test('fails closed without writing for missing, duplicate, mismatch, malformed a
   }
 });
 
+test('maps the redaction integration assertion using Jest’s complete describe-prefixed fullName', () => {
+  const entry = G10A_EVIDENCE_CASE_MAP.find((candidate) => candidate.id === 'G10A_SECRET_LOG_REDACTION');
+  assert.deepEqual(entry, {
+    id: 'G10A_SECRET_LOG_REDACTION',
+    phase: 'test:g10a:integration',
+    testFilePath: 'dist/test/integration/g10a-driver-log-mongo.test.js',
+    fullName: 'G10a true MongoDB driver command monitoring G10A_SECRET_LOG_REDACTION excludes a unique driver-payload canary from raw logs and real LOGS_READ while retaining driver allowlist fields',
+  });
+});
+
 function aggregateFor(phase, statuses = {}) {
   const suites = new Map();
   for (const entry of G10A_EVIDENCE_CASE_MAP.filter((candidate) => candidate.phase === phase)) {

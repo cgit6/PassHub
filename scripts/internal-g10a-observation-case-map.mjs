@@ -30,7 +30,7 @@ const CASES = [
   ['G10A_MONGO_QUERY_DRAIN', 'test:g10a:integration', 'dist/test/integration/g10a-driver-log-mongo.test.js', 'G10a true MongoDB driver command monitoring DRAIN waits for a query that already reached G09 native Mongo work, then keeps the maintenance veto'],
   ['G10A_MONGO_RECOGNITION_RETRY', 'test:g10a:integration', 'dist/test/integration/g10a-recognition-http-mongo.test.js', 'G10a true HTTP/Mongo recognition retry provenance existing-only joins then canonically replays under maintenance without a second registration or Mongo Event'],
   ['G10A_SECRET_LOG_SCHEMA', 'test:g10a:unit', 'dist/test/unit/g10a-runtime-log-schema.test.js', 'G10a A10.1 private runtime log schema fails closed on hostile values passed directly to encode, without invoking getters or toJSON'],
-  ['G10A_SECRET_LOG_REDACTION', 'test:g10a:integration', 'dist/test/integration/g10a-driver-log-mongo.test.js', 'G10A_SECRET_LOG_REDACTION excludes a unique driver-payload canary from raw logs and real LOGS_READ while retaining driver allowlist fields'],
+  ['G10A_SECRET_LOG_REDACTION', 'test:g10a:integration', 'dist/test/integration/g10a-driver-log-mongo.test.js', 'G10a true MongoDB driver command monitoring G10A_SECRET_LOG_REDACTION excludes a unique driver-payload canary from raw logs and real LOGS_READ while retaining driver allowlist fields'],
   ['G10A_SECRET_EVIDENCE_BOUNDARY', 'test:g10a:unit', 'dist/test/unit/g10a-evidence.test.js', 'G10a private evidence boundary writes only the closed safe artifact set with reproducible provenance hashes'],
   ['G10A_SECRET_CONTROL_PROTOCOL', 'test:g10a:socket', 'dist/test/socket/g10a-runtime-control-cli.test.js', 'G10a private control CLI does not leak local invalid request bytes and uses closed protocol failure'],
 ];
