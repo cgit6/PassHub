@@ -14,6 +14,8 @@ export const G04B_EVENTS_COLLECTION = 'events';
 export const G04B_USERS_COLLECTION = 'users';
 export const G04B_SOURCES_COLLECTION = 'sources';
 export const G04B_METADATA_COLLECTION = 'metadata';
+/** Immutable transaction receipt used only for G10c unknown-commit confirmation. */
+export const G04B_MANAGEMENT_RECEIPTS_COLLECTION = 'managementReceipts';
 export const G04B_REASON_CODES = Object.freeze([
   'SOURCE_INACTIVE', 'INVALID_QR_CREDENTIAL', 'FACE_UNKNOWN', 'FACE_SUBJECT_NOT_MAPPED',
   'QUALIFICATION_REVOKED', 'ALREADY_INSIDE', 'QUALIFICATION_ALREADY_USED',
@@ -114,6 +116,14 @@ export interface G04bMetadataDocument {
     readonly runId: string;
     readonly claimedAt: Date;
   } | null;
+}
+
+export interface G04bManagementReceiptDocument {
+  readonly _id: string;
+  readonly operation: 'CREATE' | 'UPDATE' | 'REVOKE' | 'EXPIRE';
+  readonly qualificationId: string;
+  readonly qualificationIncarnation: string;
+  readonly qualificationVersion: number;
 }
 
 export const G04B_STARTUP_VECTORS: readonly G04bStartupVectorDocument[] = Object.freeze([
@@ -304,6 +314,21 @@ export const G04B_SOURCES_VALIDATOR = Object.freeze({
   },
 });
 
+export const G04B_MANAGEMENT_RECEIPTS_VALIDATOR = Object.freeze({
+  $jsonSchema: {
+    bsonType: 'object',
+    additionalProperties: false,
+    required: ['_id', 'operation', 'qualificationId', 'qualificationIncarnation', 'qualificationVersion'],
+    properties: {
+      _id: UUID,
+      operation: { enum: ['CREATE', 'UPDATE', 'REVOKE', 'EXPIRE'] },
+      qualificationId: UUID,
+      qualificationIncarnation: UUID,
+      qualificationVersion: { bsonType: 'int', minimum: 0 },
+    },
+  },
+});
+
 export const G04B_METADATA_VALIDATOR = Object.freeze({
   $jsonSchema: {
     bsonType: 'object',
@@ -377,6 +402,7 @@ export interface G04bCollections {
   readonly users: Collection<G04bUserDocument>;
   readonly sources: Collection<G04bSourceDocument>;
   readonly metadata: Collection<G04bMetadataDocument>;
+  readonly managementReceipts: Collection<G04bManagementReceiptDocument>;
 }
 
 const STARTUP_VECTOR_NAMES = new Set(G04B_STARTUP_VECTORS.map((vector) => vector.name));
@@ -428,6 +454,7 @@ export async function ensureG04bSchema(database: Db): Promise<G04bCollections> {
   const requiredCollections = [
     G04B_QUALIFICATIONS_COLLECTION, G04A_FACE_SLOTS_COLLECTION, G04B_EVENTS_COLLECTION,
     G04B_USERS_COLLECTION, G04B_SOURCES_COLLECTION, G04B_METADATA_COLLECTION,
+    G04B_MANAGEMENT_RECEIPTS_COLLECTION,
   ] as const;
   const freshBootstrap = existingNames.size === 0;
   if (!freshBootstrap) {
@@ -438,6 +465,7 @@ export async function ensureG04bSchema(database: Db): Promise<G04bCollections> {
       [G04B_USERS_COLLECTION, G04B_USERS_VALIDATOR],
       [G04B_SOURCES_COLLECTION, G04B_SOURCES_VALIDATOR],
       [G04B_METADATA_COLLECTION, G04B_METADATA_VALIDATOR],
+      [G04B_MANAGEMENT_RECEIPTS_COLLECTION, G04B_MANAGEMENT_RECEIPTS_VALIDATOR],
     ] as const) {
       if (existingNames.has(name)) await assertExistingCollectionOptions(database, name, validator);
     }
@@ -450,6 +478,9 @@ export async function ensureG04bSchema(database: Db): Promise<G04bCollections> {
   const users = await ensureCollection<G04bUserDocument>(database, G04B_USERS_COLLECTION, G04B_USERS_VALIDATOR);
   const sources = await ensureCollection<G04bSourceDocument>(database, G04B_SOURCES_COLLECTION, G04B_SOURCES_VALIDATOR);
   const metadata = await ensureCollection<G04bMetadataDocument>(database, G04B_METADATA_COLLECTION, G04B_METADATA_VALIDATOR);
+  const managementReceipts = await ensureCollection<G04bManagementReceiptDocument>(
+    database, G04B_MANAGEMENT_RECEIPTS_COLLECTION, G04B_MANAGEMENT_RECEIPTS_VALIDATOR,
+  );
   if (freshBootstrap) {
     await qualifications.createIndexes([...G04B_QUALIFICATION_INDEXES]);
     await events.createIndexes([...G04B_EVENT_INDEXES]);
@@ -462,6 +493,7 @@ export async function ensureG04bSchema(database: Db): Promise<G04bCollections> {
     await assertExistingIndexContract(users, G04B_USER_INDEXES, G04B_USERS_COLLECTION);
     await assertExistingIndexContract(sources, G04B_SOURCE_INDEXES, G04B_SOURCES_COLLECTION);
     await assertExistingIndexContract(metadata, [], G04B_METADATA_COLLECTION);
+    await assertExistingIndexContract(managementReceipts, [], G04B_MANAGEMENT_RECEIPTS_COLLECTION);
   }
   const startupSession = database.client.startSession();
   try {
@@ -469,7 +501,7 @@ export async function ensureG04bSchema(database: Db): Promise<G04bCollections> {
     const existingMetadata = await metadata.findOne({ _id: 'system' }, { session: startupSession });
     if (existingMetadata !== null) {
       assertG04bMetadataBootstrap(existingMetadata);
-      await assertExistingLegacyIntegrity({ qualifications, faceSlots, events, users, sources, metadata }, existingMetadata, startupSession);
+      await assertExistingLegacyIntegrity({ qualifications, faceSlots, events, users, sources, metadata, managementReceipts }, existingMetadata, startupSession);
     } else if (!freshBootstrap) {
       throw new TypeError('G04b metadata/system document is required for an existing schema');
     }
@@ -480,7 +512,7 @@ export async function ensureG04bSchema(database: Db): Promise<G04bCollections> {
   } finally {
     await startupSession.endSession();
   }
-  return { qualifications, faceSlots, events, users, sources, metadata };
+  return { qualifications, faceSlots, events, users, sources, metadata, managementReceipts };
 }
 
 async function assertExistingIndexContract<T extends Document>(
@@ -541,6 +573,7 @@ async function assertExistingLegacyIntegrity(
   await assertNoInvalidDocuments(collections.users, G04B_USERS_VALIDATOR, G04B_USERS_COLLECTION, session);
   await assertNoInvalidDocuments(collections.sources, G04B_SOURCES_VALIDATOR, G04B_SOURCES_COLLECTION, session);
   await assertNoInvalidDocuments(collections.metadata, G04B_METADATA_VALIDATOR, G04B_METADATA_COLLECTION, session);
+  await assertNoInvalidDocuments(collections.managementReceipts, G04B_MANAGEMENT_RECEIPTS_VALIDATOR, G04B_MANAGEMENT_RECEIPTS_COLLECTION, session);
   await assertExistingEventIntegrity(collections.events, metadataDocument, session);
   await assertExistingReferenceIntegrity(collections, session);
   const faceSlotCount = await collections.faceSlots.countDocuments({}, { session });

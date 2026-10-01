@@ -3,6 +3,7 @@ import type { ClientSession } from 'mongodb';
 import type {
   AccessScopeContext,
   FaceMappingSnapshot,
+  ManagementQualificationSnapshot,
   QualificationSnapshot,
 } from '../../../access/ports/index.js';
 import type { G10bScopedPersistenceBinding } from './g10b-scoped-persistence-sidecar.js';
@@ -134,11 +135,33 @@ export interface G10cRecognitionExpectedImage {
   readonly guardVersions: Readonly<{ qr: number; face: number }>;
 }
 
+/**
+ * The immutable image of a management transaction.  Qualification identity,
+ * incarnation, and post-write version are the durable anchor: a worker must
+ * not treat a later qualification that merely has similar mutable fields as
+ * confirmation of this original transaction.
+ */
+export interface G10cManagementExpectedImage {
+  /** Immutable receipt ID written inside the original management transaction. */
+  readonly operationId: string;
+  readonly operation: 'CREATE' | 'UPDATE' | 'REVOKE' | 'EXPIRE';
+  readonly qualification: ManagementQualificationSnapshot;
+  readonly mapping: FaceMappingSnapshot | null;
+  readonly guardVersions: Readonly<{ qr: number; face: number }>;
+}
+
 declare const g10cRecognitionImageCaptureBrand: unique symbol;
 
 /** Adapter-private capability; ordinary recovery workers cannot prepare data. */
 export interface G10cRecognitionExpectedImageCapture {
   readonly [g10cRecognitionImageCaptureBrand]: never;
+}
+
+declare const g10cManagementImageCaptureBrand: unique symbol;
+
+/** Adapter-private capability for a management transaction's post-write image. */
+export interface G10cManagementExpectedImageCapture {
+  readonly [g10cManagementImageCaptureBrand]: never;
 }
 
 /**
@@ -180,7 +203,8 @@ interface HandoffState {
   status: 'RETAINED' | 'TAKEN';
   originalCommitTerminatorClaimed: boolean;
   confirmationActionAdmitted: boolean;
-  readonly expectedImage: G10cRecognitionExpectedImage | null;
+  readonly expectedRecognitionImage: G10cRecognitionExpectedImage | null;
+  readonly expectedManagementImage: G10cManagementExpectedImage | null;
 }
 
 interface ConfirmationActionState {
@@ -199,6 +223,10 @@ const confirmationActions = new WeakMap<object, ConfirmationActionState>();
 const preparedExpectedImages = new WeakMap<object, WeakMap<object, G10cRecognitionExpectedImage>>();
 const expectedImageCaptures = new WeakMap<object, G04bMongoPersistenceAdapter>();
 const adapterExpectedImageCaptures = new WeakMap<object, G10cRecognitionExpectedImageCapture>();
+const preparedManagementImages = new WeakMap<object, WeakMap<object, G10cManagementExpectedImage>>();
+const managementImageCaptures = new WeakMap<object, G04bMongoPersistenceAdapter>();
+const adapterManagementImageCaptures = new WeakMap<object, G10cManagementExpectedImageCapture>();
+const CANONICAL_UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
 /** Called only by the concrete G04b adapter constructor. */
 export function registerG10cConcreteG04bMongoPersistenceAdapter(
@@ -271,6 +299,45 @@ export function prepareG10cRecognitionExpectedImage(
   byScope.set(scope as object, freezeExpectedImage(image));
 }
 
+/** Allocate the separate private writer capability owned by the G04b adapter. */
+export function createG10cManagementExpectedImageCapture(
+  adapter: G04bMongoPersistenceAdapter,
+): G10cManagementExpectedImageCapture {
+  if (!concreteAdapters.has(adapter as object)) {
+    throw new TypeError('G10c management expected image requires a concrete G04b Mongo persistence adapter');
+  }
+  if (adapterManagementImageCaptures.has(adapter as object)) {
+    throw new TypeError('G10c management expected image capture is already bound to this adapter');
+  }
+  const capture = Object.freeze({}) as G10cManagementExpectedImageCapture;
+  managementImageCaptures.set(capture as object, adapter);
+  adapterManagementImageCaptures.set(adapter as object, capture);
+  return capture;
+}
+
+/**
+ * Store the exact post-write management image before the first commit.  This
+ * intentionally shares neither a public DTO nor a recovery-worker input.
+ */
+export function prepareG10cManagementExpectedImage(
+  capture: G10cManagementExpectedImageCapture,
+  scope: AccessScopeContext,
+  image: G10cManagementExpectedImage,
+): void {
+  const adapter = managementImageCaptures.get(capture as object);
+  if (adapter === undefined) throw new TypeError('G10c management expected image capture capability is foreign');
+  const claims = readAccessScopeContextClaims(scope);
+  if (claims === null || claims.owner.length === 0) throw new TypeError('G10c management expected image scope is untrusted');
+  assertManagementExpectedImage(image);
+  let byScope = preparedManagementImages.get(adapter as object);
+  if (byScope === undefined) {
+    byScope = new WeakMap<object, G10cManagementExpectedImage>();
+    preparedManagementImages.set(adapter as object, byScope);
+  }
+  if (byScope.has(scope as object)) throw new TypeError('G10c management expected image is already prepared for this scope');
+  byScope.set(scope as object, freezeManagementExpectedImage(image));
+}
+
 /**
  * Retain an unknown initial-commit transaction exactly once for the attached
  * future confirmation owner.  The adapter invokes this synchronously in its
@@ -306,7 +373,11 @@ export function handoffG10cPostCommitUnknown(
   }
   contexts.add(scope as object);
   const handoff = Object.freeze({}) as G10cPostCommitUnknownHandoff;
-  const expectedImage = preparedExpectedImages.get(adapter as object)?.get(scope as object) ?? null;
+  const expectedRecognitionImage = preparedExpectedImages.get(adapter as object)?.get(scope as object) ?? null;
+  const expectedManagementImage = preparedManagementImages.get(adapter as object)?.get(scope as object) ?? null;
+  if (expectedRecognitionImage !== null && expectedManagementImage !== null) {
+    throw new TypeError('G10c transaction has conflicting canonical image kinds');
+  }
   handoffs.set(handoff as object, {
     adapter,
     scope,
@@ -317,7 +388,8 @@ export function handoffG10cPostCommitUnknown(
     status: 'RETAINED',
     originalCommitTerminatorClaimed: false,
     confirmationActionAdmitted: false,
-    expectedImage,
+    expectedRecognitionImage,
+    expectedManagementImage,
   });
   sink.retain(handoff);
 }
@@ -329,7 +401,8 @@ export function assertG10cPostCommitUnknownCanonicalMaterial(
 ): void {
   const sink = ownerSinks.get(owner as object);
   if (sink === undefined) throw new TypeError('G10c post-commit unknown handoff owner is foreign');
-  if (requireTakenHandoff(sink, handoff).expectedImage === null) {
+  const state = requireTakenHandoff(sink, handoff);
+  if (state.expectedRecognitionImage === null && state.expectedManagementImage === null) {
     throw new TypeError('G10c canonical confirmation material is unavailable');
   }
 }
@@ -347,14 +420,26 @@ export async function confirmG10cPostCommitUnknownCanonicalResult(
   const sink = ownerSinks.get(owner as object);
   if (sink === undefined) throw new TypeError('G10c post-commit unknown handoff owner is foreign');
   const state = requireTakenHandoff(sink, handoff);
-  if (state.expectedImage === null) throw new TypeError('G10c canonical confirmation material is unavailable');
+  if (state.expectedRecognitionImage === null && state.expectedManagementImage === null) {
+    throw new TypeError('G10c canonical confirmation material is unavailable');
+  }
   try {
-    const snapshot = await state.adapter.readG10cCanonicalSnapshot(
-      state.expectedImage.sourceId,
-      state.expectedImage.externalEventId,
+    if (state.expectedRecognitionImage !== null) {
+      const snapshot = await state.adapter.readG10cCanonicalSnapshot(
+        state.expectedRecognitionImage.sourceId,
+        state.expectedRecognitionImage.externalEventId,
+        timeoutMs,
+      );
+      return snapshot !== null && matchesRecognitionExpectedImage(snapshot, state.expectedRecognitionImage)
+        ? 'MATCHED'
+        : 'INCONCLUSIVE';
+    }
+    const expected = state.expectedManagementImage!;
+    const snapshot = await state.adapter.readG10cManagementCanonicalSnapshot(
+      expected.operationId,
       timeoutMs,
     );
-    return snapshot !== null && matchesRecognitionExpectedImage(snapshot, state.expectedImage)
+    return snapshot !== null && matchesManagementExpectedImage(snapshot, expected)
       ? 'MATCHED'
       : 'INCONCLUSIVE';
   } catch (_error: unknown) {
@@ -573,6 +658,43 @@ function freezeExpectedImage(image: G10cRecognitionExpectedImage): G10cRecogniti
   });
 }
 
+function assertManagementExpectedImage(image: G10cManagementExpectedImage): void {
+  if (!isPlainRecord(image)
+    || !CANONICAL_UUID_V4.test(image.operationId)
+    || (image.operation !== 'CREATE' && image.operation !== 'UPDATE' && image.operation !== 'REVOKE' && image.operation !== 'EXPIRE')
+    || !isManagementQualificationSnapshot(image.qualification)
+    || !isPlainRecord(image.guardVersions)
+    || !validVersion(image.guardVersions.qr)
+    || !validVersion(image.guardVersions.face)
+    || (image.mapping !== null && !isFaceMappingSnapshot(image.mapping))) {
+    throw new TypeError('G10c management expected image is invalid');
+  }
+  if (image.mapping !== null && (
+    image.mapping.qualificationId !== image.qualification.qualificationId
+    || image.mapping.qualificationIncarnation !== image.qualification.incarnation
+  )) {
+    throw new TypeError('G10c management expected image mapping is not owned by qualification');
+  }
+}
+
+function freezeManagementExpectedImage(image: G10cManagementExpectedImage): G10cManagementExpectedImage {
+  return Object.freeze({
+    operationId: image.operationId,
+    operation: image.operation,
+    qualification: Object.freeze({
+      qualificationId: image.qualification.qualificationId,
+      incarnation: image.qualification.incarnation,
+      version: image.qualification.version,
+      displayName: image.qualification.displayName,
+      createdAtMs: image.qualification.createdAtMs,
+      updatedAtMs: image.qualification.updatedAtMs,
+      state: Object.freeze({ ...image.qualification.state }),
+    }),
+    mapping: image.mapping === null ? null : Object.freeze({ ...image.mapping }),
+    guardVersions: Object.freeze({ qr: image.guardVersions.qr, face: image.guardVersions.face }),
+  });
+}
+
 function matchesRecognitionExpectedImage(
   snapshot: import('../g04b-persistence-adapter.js').G04bCanonicalSnapshot,
   expected: G10cRecognitionExpectedImage,
@@ -592,6 +714,21 @@ function matchesRecognitionExpectedImage(
     && snapshot.guardVersions.face === expected.guardVersions.face;
 }
 
+function matchesManagementExpectedImage(
+  snapshot: import('../g04b-persistence-adapter.js').G04bManagementCanonicalSnapshot,
+  expected: G10cManagementExpectedImage,
+): boolean {
+  return snapshot.receipt.operationId === expected.operationId
+    && snapshot.receipt.operation === expected.operation
+    && snapshot.receipt.qualificationId === expected.qualification.qualificationId
+    && snapshot.receipt.qualificationIncarnation === expected.qualification.incarnation
+    && snapshot.receipt.qualificationVersion === expected.qualification.version
+    && sameManagementQualification(snapshot.qualification, expected.qualification)
+    && sameMapping(snapshot.mapping, expected.mapping)
+    && snapshot.guardVersions.qr === expected.guardVersions.qr
+    && snapshot.guardVersions.face === expected.guardVersions.face;
+}
+
 function sameQualification(left: QualificationSnapshot | null, right: QualificationSnapshot | null): boolean {
   return left === null || right === null
     ? left === right
@@ -606,6 +743,26 @@ function sameQualification(left: QualificationSnapshot | null, right: Qualificat
       && left.state.revokedAtMs === right.state.revokedAtMs
       && left.state.revocationReason === right.state.revocationReason
       && left.state.expiredTerminalAtMs === right.state.expiredTerminalAtMs;
+}
+
+function sameManagementQualification(
+  left: ManagementQualificationSnapshot,
+  right: ManagementQualificationSnapshot,
+): boolean {
+  return left.qualificationId === right.qualificationId
+    && left.incarnation === right.incarnation
+    && left.version === right.version
+    && left.displayName === right.displayName
+    && left.createdAtMs === right.createdAtMs
+    && left.updatedAtMs === right.updatedAtMs
+    && left.state.validFromMs === right.state.validFromMs
+    && left.state.validUntilMs === right.state.validUntilMs
+    && left.state.presence === right.state.presence
+    && left.state.enteredAtMs === right.state.enteredAtMs
+    && left.state.exitedAtMs === right.state.exitedAtMs
+    && left.state.revokedAtMs === right.state.revokedAtMs
+    && left.state.revocationReason === right.state.revocationReason
+    && left.state.expiredTerminalAtMs === right.state.expiredTerminalAtMs;
 }
 
 function sameMapping(left: FaceMappingSnapshot | null, right: FaceMappingSnapshot | null): boolean {
@@ -628,6 +785,38 @@ function sameTransition(
 
 function validVersion(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isManagementQualificationSnapshot(value: unknown): value is ManagementQualificationSnapshot {
+  if (!isPlainRecord(value)
+    || !nonEmptyString(value.qualificationId)
+    || !nonEmptyString(value.incarnation)
+    || !validVersion(value.version)
+    || !nonEmptyString(value.displayName)
+    || !Number.isSafeInteger(value.createdAtMs)
+    || !Number.isSafeInteger(value.updatedAtMs)
+    || !isPlainRecord(value.state)) return false;
+  const state = value.state as Record<string, unknown>;
+  return Number.isSafeInteger(state.validFromMs)
+    && Number.isSafeInteger(state.validUntilMs)
+    && (state.presence === 'NOT_ENTERED' || state.presence === 'INSIDE' || state.presence === 'EXITED')
+    && nullableSafeInteger(state.enteredAtMs)
+    && nullableSafeInteger(state.exitedAtMs)
+    && nullableSafeInteger(state.revokedAtMs)
+    && (state.revocationReason === null || nonEmptyString(state.revocationReason))
+    && nullableSafeInteger(state.expiredTerminalAtMs);
+}
+
+function isFaceMappingSnapshot(value: unknown): value is FaceMappingSnapshot {
+  return isPlainRecord(value)
+    && nonEmptyString(value.qualificationId)
+    && nonEmptyString(value.qualificationIncarnation)
+    && nonEmptyString(value.mappingIncarnation)
+    && validVersion(value.version);
+}
+
+function nullableSafeInteger(value: unknown): boolean {
+  return value === null || Number.isSafeInteger(value);
 }
 
 function nonEmptyString(value: unknown): value is string {

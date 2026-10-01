@@ -41,6 +41,7 @@ import {
   assertG04bMetadataBootstrap,
   type G04bCollections,
   type G04bEventDocument,
+  type G04bManagementReceiptDocument,
   type G04bMetadataDocument,
   type G04bQualificationDocument,
 } from './g04b-schema.js';
@@ -61,10 +62,13 @@ import {
 } from './internal/g10b-scoped-persistence-sidecar.js';
 import { createG10bPrecommitMongoTerminator } from './internal/g10b-precommit-mongo-terminator.js';
 import {
+  createG10cManagementExpectedImageCapture,
   createG10cRecognitionExpectedImageCapture,
   handoffG10cPostCommitUnknown,
+  prepareG10cManagementExpectedImage,
   prepareG10cRecognitionExpectedImage,
   registerG10cConcreteG04bMongoPersistenceAdapter,
+  type G10cManagementExpectedImageCapture,
   type G10cRecognitionExpectedImageCapture,
 } from './internal/g10c-post-commit-unknown-handoff.js';
 
@@ -138,8 +142,22 @@ export interface G04bCanonicalSnapshot {
   readonly guardVersions: Readonly<{ qr: number; face: number }>;
 }
 
+/** A redacted snapshot tied to one immutable management receipt. */
+export interface G04bManagementCanonicalSnapshot {
+  readonly receipt: Readonly<{
+    operationId: string;
+    operation: 'CREATE' | 'UPDATE' | 'REVOKE' | 'EXPIRE';
+    qualificationId: string;
+    qualificationIncarnation: string;
+    qualificationVersion: number;
+  }>;
+  readonly qualification: ManagementQualificationSnapshot;
+  readonly mapping: FaceMappingSnapshot | null;
+  readonly guardVersions: Readonly<{ qr: number; face: number }>;
+}
+
 export type G04bTransactionStage =
-  | 'begin' | 'read' | 'guard' | 'qualification' | 'mapping' | 'event' | 'commit' | 'abort' | 'canonical';
+  | 'begin' | 'read' | 'guard' | 'qualification' | 'mapping' | 'event' | 'receipt' | 'commit' | 'abort' | 'canonical';
 export type G04bTransactionErrorKind =
   | 'DUPLICATE_KEY' | 'FACE_SUBJECT_ALREADY_BOUND' | 'FACE_SUBJECT_SLOT_CAPACITY_EXHAUSTED'
   | 'WRITE_CONFLICT' | 'SCHEMA_VALIDATION'
@@ -218,6 +236,7 @@ export class G04bMongoPersistenceAdapter
   private collections: G04bCollections | null = null;
   private readonly transactions = new WeakMap<object, TransactionState>();
   private readonly g10cRecognitionExpectedImageCapture: G10cRecognitionExpectedImageCapture;
+  private readonly g10cManagementExpectedImageCapture: G10cManagementExpectedImageCapture;
 
   public constructor(
     private readonly client: MongoClient,
@@ -229,6 +248,7 @@ export class G04bMongoPersistenceAdapter
     registerG10bConcreteG04bMongoPersistenceAdapter(this);
     registerG10cConcreteG04bMongoPersistenceAdapter(this);
     this.g10cRecognitionExpectedImageCapture = createG10cRecognitionExpectedImageCapture(this);
+    this.g10cManagementExpectedImageCapture = createG10cManagementExpectedImageCapture(this);
     bindG10aMongoCommandMonitoring(client);
   }
 
@@ -300,6 +320,7 @@ export class G04bMongoPersistenceAdapter
     await collections.users.deleteMany({});
     await collections.sources.deleteMany({});
     await collections.metadata.deleteMany({});
+    await collections.managementReceipts.deleteMany({});
     if (fixture.events.length > 0) await collections.events.insertMany([...fixture.events]);
     if (fixture.qualifications.length > 0) await collections.qualifications.insertMany([...fixture.qualifications]);
     if (fixture.faceSlots.length > 0) await collections.faceSlots.insertMany([...fixture.faceSlots]);
@@ -411,6 +432,10 @@ export class G04bMongoPersistenceAdapter
     const state = await this.begin(context);
     try {
       const result = await this.applyManagementChange(state, plan);
+      if (state.g10bScopedPersistenceBinding !== undefined) {
+        const receipt = await this.writeG10cManagementReceipt(state, result);
+        await this.prepareG10cManagementExpectedImage(context, state, result, receipt);
+      }
       await this.commit(context, state);
       return result;
     } catch (error: unknown) { throw await this.fail(context, state, error); }
@@ -498,6 +523,78 @@ export class G04bMongoPersistenceAdapter
     }
     const result = await this.readCanonicalSnapshotInternal(sourceId, externalEventId, timeoutMs);
     return result === null ? null : redactCanonical(result);
+  }
+
+  /**
+   * G10c's management observer starts from the immutable receipt, rather
+   * than from mutable qualification state.  All related reads occur in one
+   * bounded primary snapshot transaction.
+   */
+  public async readG10cManagementCanonicalSnapshot(
+    operationId: string,
+    timeoutMs: number,
+  ): Promise<G04bManagementCanonicalSnapshot | null> {
+    if (!UUID_V4.test(operationId)) throw new G04bTechnicalError('G10c management receipt ID is invalid');
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_000) {
+      throw new G04bTechnicalError('G10c canonical timeout must be an integer from 1 to 2000ms');
+    }
+    const session = this.client.startSession();
+    const deadline = performance.now() + timeoutMs;
+    const optionsForNextCommand = (): { readonly session: ClientSession; readonly timeoutMS: number } => {
+      const remaining = Math.floor(deadline - performance.now());
+      if (remaining < 1) throw new G04bTechnicalError('G10c canonical observation deadline elapsed before driver command');
+      return { session, timeoutMS: remaining };
+    };
+    const commit = async (): Promise<void> => {
+      await session.commitTransaction({ timeoutMS: optionsForNextCommand().timeoutMS });
+    };
+    try {
+      session.startTransaction({
+        readConcern: { level: 'snapshot' }, readPreference: 'primary', writeConcern: { w: 'majority', j: true },
+      });
+      const collections = this.requireCollections();
+      const receipt = await collections.managementReceipts.findOne({ _id: operationId }, optionsForNextCommand());
+      if (receipt === null) {
+        await commit();
+        return null;
+      }
+      const qualificationDocument = await collections.qualifications.findOne({
+        _id: receipt.qualificationId,
+        incarnation: receipt.qualificationIncarnation,
+        version: receipt.qualificationVersion,
+      }, optionsForNextCommand());
+      if (qualificationDocument === null) {
+        await commit();
+        return null;
+      }
+      const mapping = mappingFromSlots(await collections.faceSlots.find(
+        { qualificationId: { $eq: qualificationDocument._id, $type: 'string' } }, optionsForNextCommand(),
+      ).toArray(), qualificationDocument._id, qualificationDocument.incarnation);
+      const metadata = await collections.metadata.findOne({ _id: 'system' }, optionsForNextCommand());
+      if (metadata === null) throw new G04bTechnicalError('metadata system document is missing');
+      await commit();
+      return Object.freeze({
+        receipt: Object.freeze({
+          operationId: receipt._id,
+          operation: receipt.operation,
+          qualificationId: receipt.qualificationId,
+          qualificationIncarnation: receipt.qualificationIncarnation,
+          qualificationVersion: receipt.qualificationVersion,
+        }),
+        qualification: toQualificationSnapshot(qualificationDocument),
+        mapping,
+        guardVersions: Object.freeze({ qr: metadata.qrGuardVersion, face: metadata.faceGuardVersion }),
+      });
+    } catch (error: unknown) {
+      if (session.inTransaction()) {
+        try {
+          await session.abortTransaction({ timeoutMS: optionsForNextCommand().timeoutMS });
+        } catch (_cleanupError: unknown) { /* original read failure wins */ }
+      }
+      throw error;
+    } finally {
+      await session.endSession();
+    }
   }
 
   /** Compatibility primitive: only the redacted event projection is returned. */
@@ -820,6 +917,66 @@ export class G04bMongoPersistenceAdapter
       ? currentMapping !== null
       : mappingMode === 'SET' && plan.faceMapping !== null && plan.faceMapping !== undefined;
     return this.managementSummary('UPDATE', { ...current, displayName, validFrom, validUntil, updatedAt: now }, current.version + 1, null, faceBound);
+  }
+
+  /**
+   * The receipt is a transaction-local durable anchor, not an application
+   * event or public DTO.  It is written only on G10b/G10c-attached scopes,
+   * immediately after the management mutation and before its first commit.
+   */
+  private async writeG10cManagementReceipt(
+    state: TransactionState,
+    result: G04bManagementResult,
+  ): Promise<G04bManagementReceiptDocument> {
+    const receipt: G04bManagementReceiptDocument = Object.freeze({
+      _id: randomUUID(),
+      operation: result.operation,
+      qualificationId: result.qualificationId,
+      qualificationIncarnation: result.incarnation,
+      qualificationVersion: result.version,
+    });
+    state.stage = 'receipt';
+    await this.executeCrud(state, async (timeoutMs) => this.requireCollections().managementReceipts.insertOne(
+      receipt, this.transactionDriverOptions(state, timeoutMs),
+    ));
+    return receipt;
+  }
+
+  /**
+   * Capture an exact, secret-free post-write image while still inside the
+   * original transaction.  A later recovery worker can only use the opaque
+   * receipt and this frozen material; it cannot provide its own expected
+   * qualification result.
+   */
+  private async prepareG10cManagementExpectedImage(
+    context: AccessScopeContext,
+    state: TransactionState,
+    result: G04bManagementResult,
+    receipt: G04bManagementReceiptDocument,
+  ): Promise<void> {
+    const qualificationDocument = await this.executeCrud(state, async (timeoutMs) => this.requireCollections().qualifications.findOne({
+      _id: result.qualificationId,
+      incarnation: result.incarnation,
+      version: result.version,
+    }, this.transactionDriverOptions(state, timeoutMs)));
+    if (qualificationDocument === null) {
+      throw new G04bTechnicalError('G10c management post-write qualification image is missing');
+    }
+    const mapping = mappingFromSlots(await this.executeCrud(state, async (timeoutMs) => this.requireCollections().faceSlots.find(
+      { qualificationId: { $eq: result.qualificationId, $type: 'string' } },
+      this.transactionDriverOptions(state, timeoutMs),
+    ).toArray()), result.qualificationId, result.incarnation);
+    const metadata = await this.executeCrud(state, async (timeoutMs) => this.requireCollections().metadata.findOne(
+      { _id: 'system' }, this.transactionDriverOptions(state, timeoutMs),
+    ));
+    if (metadata === null) throw new G04bTechnicalError('metadata system document is missing');
+    prepareG10cManagementExpectedImage(this.g10cManagementExpectedImageCapture, context, {
+      operationId: receipt._id,
+      operation: receipt.operation,
+      qualification: toQualificationSnapshot(qualificationDocument),
+      mapping,
+      guardVersions: { qr: metadata.qrGuardVersion, face: metadata.faceGuardVersion },
+    });
   }
 
   private async applyRecognitionResult(state: TransactionState, plan: RecognitionResultPlan): Promise<G04bRecognitionResult> {

@@ -8,10 +8,16 @@ import {
   createG10cPostCommitUnknownHandoffBundle,
   createG10cRetainedOriginalCommitTerminator,
   handoffG10cPostCommitUnknown,
+  prepareG10cManagementExpectedImage,
   prepareG10cRecognitionExpectedImage,
+  type G10cManagementExpectedImage,
   type G10cRecognitionExpectedImage,
 } from '../../src/infrastructure/mongo/internal/g10c-post-commit-unknown-handoff.js';
-import { G04bMongoPersistenceAdapter, type G04bCanonicalSnapshot } from '../../src/infrastructure/mongo/g04b-persistence-adapter.js';
+import {
+  G04bMongoPersistenceAdapter,
+  type G04bCanonicalSnapshot,
+  type G04bManagementCanonicalSnapshot,
+} from '../../src/infrastructure/mongo/g04b-persistence-adapter.js';
 import { createAccessScopeContext } from '../../src/shared/access-scope-context.js';
 import {
   beginOperationExecutionRound,
@@ -117,6 +123,42 @@ function snapshot(image: G10cRecognitionExpectedImage): G04bCanonicalSnapshot {
       qualificationId: image.event.qualificationId, presenceTransition: image.event.presenceTransition,
     },
     qualification: image.qualification, mapping: image.mapping, guardVersions: image.guardVersions,
+  };
+}
+
+function managementExpectedImage(): G10cManagementExpectedImage {
+  return {
+    operationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    operation: 'UPDATE',
+    qualification: {
+      qualificationId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      incarnation: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      version: 7,
+      displayName: 'Ada',
+      createdAtMs: 1_000,
+      updatedAtMs: 2_000,
+      state: {
+        validFromMs: 500, validUntilMs: 3_000, presence: 'NOT_ENTERED', enteredAtMs: null,
+        exitedAtMs: null, revokedAtMs: null, revocationReason: null, expiredTerminalAtMs: null,
+      },
+    },
+    mapping: null,
+    guardVersions: { qr: 3, face: 5 },
+  };
+}
+
+function managementSnapshot(image: G10cManagementExpectedImage): G04bManagementCanonicalSnapshot {
+  return {
+    receipt: {
+      operationId: image.operationId,
+      operation: image.operation,
+      qualificationId: image.qualification.qualificationId,
+      qualificationIncarnation: image.qualification.incarnation,
+      qualificationVersion: image.qualification.version,
+    },
+    qualification: image.qualification,
+    mapping: image.mapping,
+    guardVersions: image.guardVersions,
   };
 }
 
@@ -275,6 +317,64 @@ describe('G10c canonical confirmation reader', () => {
       const verifier = createG10cCanonicalConfirmationReader(retained.bundle.owner, retained.handoff);
       await expect(verifier.confirmCanonicalRead()).resolves.toMatchObject({ result: 'MATCHED' });
       expect(read).toHaveBeenCalledTimes(1);
+    }, () => now);
+  });
+
+  test('confirms management only through its immutable receipt plus coherent exact post-write image', async () => {
+    let now = 1_000;
+    await withActiveBinding(async (binding) => {
+      const h = mongoHarness();
+      const adapter = new G04bMongoPersistenceAdapter(h.client, 'g10c_management_canonical_reader');
+      const bundle = createG10cPostCommitUnknownHandoffBundle();
+      attachG10cPostCommitUnknownHandoffSink(adapter, bundle.sink);
+      const round = beginOperationExecutionRound(binding);
+      finishOperationExecutionRound(binding, round);
+      const scoped = scope();
+      const input = managementExpectedImage();
+      const internal = adapter as unknown as {
+        readonly g10cManagementExpectedImageCapture: Parameters<typeof prepareG10cManagementExpectedImage>[0];
+      };
+      prepareG10cManagementExpectedImage(internal.g10cManagementExpectedImageCapture, scoped, input);
+      handoffG10cPostCommitUnknown(adapter, scoped, h.session, binding);
+      const handoff = bundle.owner.take(bundle.owner.pending()[0]!);
+      await createG10cRetainedOriginalCommitTerminator(bundle.owner, handoff).attemptOriginalCommit();
+      now += 1_000;
+      const read = jest.spyOn(adapter, 'readG10cManagementCanonicalSnapshot')
+        .mockResolvedValue(managementSnapshot(input));
+      const verifier = createG10cCanonicalConfirmationReader(bundle.owner, handoff);
+
+      await expect(verifier.confirmCanonicalRead()).resolves.toMatchObject({ result: 'MATCHED', attempt: 1 });
+      expect(read).toHaveBeenCalledWith(input.operationId, 123);
+    }, () => now);
+  });
+
+  test('does not accept a matching mutable management qualification when its receipt ID differs', async () => {
+    let now = 1_000;
+    await withActiveBinding(async (binding) => {
+      const h = mongoHarness();
+      const adapter = new G04bMongoPersistenceAdapter(h.client, 'g10c_management_receipt_mismatch');
+      const bundle = createG10cPostCommitUnknownHandoffBundle();
+      attachG10cPostCommitUnknownHandoffSink(adapter, bundle.sink);
+      const round = beginOperationExecutionRound(binding);
+      finishOperationExecutionRound(binding, round);
+      const scoped = scope();
+      const input = managementExpectedImage();
+      const internal = adapter as unknown as {
+        readonly g10cManagementExpectedImageCapture: Parameters<typeof prepareG10cManagementExpectedImage>[0];
+      };
+      prepareG10cManagementExpectedImage(internal.g10cManagementExpectedImageCapture, scoped, input);
+      handoffG10cPostCommitUnknown(adapter, scoped, h.session, binding);
+      const handoff = bundle.owner.take(bundle.owner.pending()[0]!);
+      await createG10cRetainedOriginalCommitTerminator(bundle.owner, handoff).attemptOriginalCommit();
+      now += 1_000;
+      const wrong = managementSnapshot(input);
+      jest.spyOn(adapter, 'readG10cManagementCanonicalSnapshot').mockResolvedValue({
+        ...wrong,
+        receipt: { ...wrong.receipt, operationId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee' },
+      });
+
+      await expect(createG10cCanonicalConfirmationReader(bundle.owner, handoff).confirmCanonicalRead())
+        .resolves.toMatchObject({ result: 'INCONCLUSIVE' });
     }, () => now);
   });
 });
