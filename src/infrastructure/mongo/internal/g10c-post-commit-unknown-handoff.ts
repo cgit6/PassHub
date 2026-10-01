@@ -42,6 +42,39 @@ export interface G10cPostCommitUnknownConfirmationAction {
 
 export type G10cPostCommitUnknownConfirmationOutcome = OperationUnknownCommitConfirmationOutcome;
 
+/**
+ * The deliberately narrow result of resending the original commit command.
+ * A resolved driver command confirms the transaction outcome; a rejected
+ * command remains unknown and must proceed to the later canonical-read phase.
+ */
+export type G10cRetainedOriginalCommitAttemptResult = Readonly<{
+  readonly delivery: 'COMMIT_CONFIRMED' | 'REJECTED_STILL_UNKNOWN';
+  readonly attempt: number;
+  readonly timeoutMs: number;
+}>;
+
+export type G10cRetainedOriginalCommitTerminatorErrorCode =
+  | 'TERMINATOR_CLOSED'
+  | 'TERMINATOR_NOT_INITIAL';
+
+export class G10cRetainedOriginalCommitTerminatorError extends Error {
+  readonly code: G10cRetainedOriginalCommitTerminatorErrorCode;
+
+  constructor(code: G10cRetainedOriginalCommitTerminatorErrorCode, message: string) {
+    super(message);
+    this.name = 'G10cRetainedOriginalCommitTerminatorError';
+    this.code = code;
+  }
+}
+
+/**
+ * A single, retained-session attempt to resend the original commit.  It owns
+ * no cleanup, canonical read, or result interpretation authority.
+ */
+export interface G10cRetainedOriginalCommitTerminator {
+  attemptOriginalCommit(): Promise<G10cRetainedOriginalCommitAttemptResult>;
+}
+
 /** The adapter-facing, synchronous receiver for an opaque handoff only. */
 export interface G10cPostCommitUnknownHandoffSink {
   retain(handoff: G10cPostCommitUnknownHandoff): void;
@@ -77,6 +110,8 @@ interface HandoffState {
   readonly confirmation: OperationUnknownCommitConfirmation;
   readonly sink: G10cPostCommitUnknownHandoffSink;
   status: 'RETAINED' | 'TAKEN';
+  originalCommitTerminatorClaimed: boolean;
+  confirmationActionAdmitted: boolean;
 }
 
 interface ConfirmationActionState {
@@ -88,6 +123,7 @@ interface ConfirmationActionState {
 const concreteAdapters = new WeakSet<object>();
 const attachedSinks = new WeakMap<object, G10cPostCommitUnknownHandoffSink>();
 const bundleSinks = new WeakSet<object>();
+const ownerSinks = new WeakMap<object, G10cPostCommitUnknownHandoffSink>();
 const handoffs = new WeakMap<object, HandoffState>();
 const handedOffContexts = new WeakMap<object, WeakSet<object>>();
 const confirmationActions = new WeakMap<object, ConfirmationActionState>();
@@ -166,6 +202,8 @@ export function handoffG10cPostCommitUnknown(
     confirmation,
     sink,
     status: 'RETAINED',
+    originalCommitTerminatorClaimed: false,
+    confirmationActionAdmitted: false,
   });
   sink.retain(handoff);
 }
@@ -206,6 +244,7 @@ export function createG10cPostCommitUnknownHandoffBundle(): G10cPostCommitUnknow
     ): G10cPostCommitUnknownConfirmationAction {
       const state = requireTakenHandoff(sink, handoff);
       const admission = admitOperationUnknownCommitConfirmationAction(state.binding, state.confirmation);
+      state.confirmationActionAdmitted = true;
       const action = Object.freeze({
         kind: admission.context.kind,
         attempt: admission.context.attempt,
@@ -230,7 +269,80 @@ export function createG10cPostCommitUnknownHandoffBundle(): G10cPostCommitUnknow
       actionState.active = false;
     },
   });
+  ownerSinks.set(owner as object, sink);
   return Object.freeze({ sink, owner });
+}
+
+/**
+ * Create the first G10c command sender for a taken handoff.  It can only be
+ * claimed before any other confirmation action, which makes the ledger's
+ * first prescribed action unambiguously ORIGINAL_COMMIT.  The retained Mongo
+ * session stays encapsulated here; callers receive neither it nor a raw
+ * budget permit.
+ */
+export function createG10cRetainedOriginalCommitTerminator(
+  owner: G10cPostCommitUnknownHandoffOwner,
+  handoff: G10cPostCommitUnknownHandoff,
+): G10cRetainedOriginalCommitTerminator {
+  const sink = ownerSinks.get(owner as object);
+  if (sink === undefined) {
+    throw new TypeError('G10c retained original commit terminator owner is foreign');
+  }
+  const state = requireTakenHandoff(sink, handoff);
+  if (state.originalCommitTerminatorClaimed || state.confirmationActionAdmitted) {
+    throw new G10cRetainedOriginalCommitTerminatorError(
+      'TERMINATOR_NOT_INITIAL',
+      'G10c retained original commit terminator requires the initial confirmation action',
+    );
+  }
+  state.originalCommitTerminatorClaimed = true;
+  const commitTransaction = state.session.commitTransaction.bind(state.session);
+  let closed = false;
+
+  return Object.freeze({
+    attemptOriginalCommit: async (): Promise<G10cRetainedOriginalCommitAttemptResult> => {
+      if (closed) {
+        throw new G10cRetainedOriginalCommitTerminatorError(
+          'TERMINATOR_CLOSED',
+          'G10c retained original commit terminator cannot send a second command',
+        );
+      }
+      closed = true;
+
+      const action = owner.admitNextConfirmation(handoff);
+      if (action.kind !== 'ORIGINAL_COMMIT') {
+        // The construction guard above makes this unreachable for an honest
+        // owner.  Never route a canonical-read permit to commitTransaction.
+        owner.settleConfirmation(handoff, action, 'STILL_UNKNOWN');
+        throw new G10cRetainedOriginalCommitTerminatorError(
+          'TERMINATOR_NOT_INITIAL',
+          'G10c retained original commit terminator was not prescribed an original commit',
+        );
+      }
+
+      try {
+        await commitTransaction({ timeoutMS: action.timeoutMs });
+      } catch (_error: unknown) {
+        // A driver/transport rejection does not establish no effect.  Keep
+        // the handoff in the unknown state for the canonical-read phase.
+        owner.settleConfirmation(handoff, action, 'STILL_UNKNOWN');
+        return Object.freeze({
+          delivery: 'REJECTED_STILL_UNKNOWN',
+          attempt: action.attempt,
+          timeoutMs: action.timeoutMs,
+        });
+      }
+      // A resolved resend is Mongo's confirmation of the same retained
+      // transaction.  Settlement is deliberately outside the send catch:
+      // an owner/budget failure must not be recast as a transport failure.
+      owner.settleConfirmation(handoff, action, 'CANONICAL_RESULT');
+      return Object.freeze({
+        delivery: 'COMMIT_CONFIRMED',
+        attempt: action.attempt,
+        timeoutMs: action.timeoutMs,
+      });
+    },
+  });
 }
 
 function requireHandoff(handoff: G10cPostCommitUnknownHandoff): HandoffState {
