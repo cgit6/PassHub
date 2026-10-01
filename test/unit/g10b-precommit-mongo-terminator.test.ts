@@ -1,206 +1,130 @@
 import type { ClientSession } from 'mongodb';
 
 import {
-  createBudgetLedger,
-  type BudgetLedger,
-} from '../../src/access/application/internal/budget-ledger.js';
-import {
-  createPrecommitTerminationLifecycle,
-  type PrecommitTerminationLifecycle,
-} from '../../src/access/application/internal/precommit-termination-lifecycle.js';
-import {
   G10bPrecommitMongoTerminatorError,
   createG10bPrecommitMongoTerminator,
 } from '../../src/infrastructure/mongo/internal/g10b-precommit-mongo-terminator.js';
+import type { G10bScopedPersistencePrecommitAuthority } from '../../src/infrastructure/mongo/internal/g10b-scoped-persistence-sidecar.js';
 
-class Clock {
-  nowMs(): number { return 1_000; }
-}
-
-interface Deferred {
-  readonly promise: Promise<void>;
-  readonly resolve: () => void;
-}
-
-function deferred(): Deferred {
-  let resolvePromise!: () => void;
-  const promise = new Promise<void>((resolve) => { resolvePromise = resolve; });
-  return { promise, resolve: resolvePromise };
-}
-
-function createLifecycle(ownerFence: { readonly assertCurrent: () => void } = { assertCurrent: () => undefined }): PrecommitTerminationLifecycle {
-  const ledger: BudgetLedger = createBudgetLedger({
-    clock: new Clock(),
-    ownerFence,
-    operationId: 'g10b-mongo-terminator',
-    assertContinuationEvidence: () => undefined,
+function authority(outcome: 'NO_EFFECT_CONFIRMED' | 'STILL_UNKNOWN' = 'NO_EFFECT_CONFIRMED'): {
+  readonly authority: G10bScopedPersistencePrecommitAuthority;
+  readonly abortOnce: jest.Mock;
+  readonly terminate: jest.Mock;
+} {
+  const abortOnce = jest.fn(async (send: (context: { readonly timeoutMs: number; readonly attempt: number }) => Promise<void> | void) => {
+    await send({ timeoutMs: 2_000, attempt: 0 });
+    return outcome;
   });
-  const round = ledger.beginRound();
-  ledger.finishRound(round);
-  ledger.startConfirmation('PRECOMMIT_CLEANUP');
-  return createPrecommitTerminationLifecycle({ ledger, ownerFence });
+  const terminate = jest.fn(() => undefined);
+  return {
+    authority: { abortOnce, terminate },
+    abortOnce,
+    terminate,
+  };
 }
 
 describe('G10b internal Mongo precommit terminator', () => {
-  test('synchronously seals caller scope, records a synchronous driver abort exception as uncertain, and calls the high-level driver API exactly once', async () => {
+  test('uses one authority-owned abort with its fixed timeout, terminally settles, then ends session', async () => {
     const calls: string[] = [];
-    const lifecycle = createLifecycle();
-    const abortTransaction = jest.fn((options?: { readonly timeoutMS?: number }) => {
-      calls.push(`abort:${options?.timeoutMS ?? 'missing'}`);
-      throw new Error('driver abort exception');
-    });
-    const endSession = jest.fn(async () => {
-      expect(lifecycle.snapshot()).toMatchObject({ phase: 'TERMINATED', activeGroup: false, abortCommandInFlight: false });
-      calls.push('endSession');
-    });
-    const session = { abortTransaction, endSession } as unknown as Pick<ClientSession, 'abortTransaction' | 'endSession'>;
+    const h = authority();
     const terminator = createG10bPrecommitMongoTerminator({
-      session,
-      lifecycle,
-      scopeFence: { sealPrecommitScope: () => { calls.push('scope-sealed'); } },
+      authority: h.authority,
+      session: {
+        abortTransaction: jest.fn(async (options?: { readonly timeoutMS?: number }) => { calls.push(`abort:${options?.timeoutMS}`); }),
+        endSession: jest.fn(async () => { calls.push('end'); }),
+        inTransaction: jest.fn(() => false),
+      } as unknown as Pick<ClientSession, 'abortTransaction' | 'endSession' | 'inTransaction'>,
+    });
+
+    await expect(terminator.terminatePrecommit()).resolves.toEqual({ outcome: 'NO_EFFECT_CONFIRMED', abortAttempts: 1 });
+    expect(calls).toEqual(['abort:2000', 'end']);
+    expect(h.abortOnce).toHaveBeenCalledTimes(1);
+    expect(h.terminate).toHaveBeenCalledWith('NO_EFFECT_CONFIRMED');
+  });
+
+  test('preserves terminal STILL_UNKNOWN from a settled authority abort and still ends session once', async () => {
+    const h = authority('STILL_UNKNOWN');
+    const abortTransaction = jest.fn(async () => undefined);
+    const endSession = jest.fn(async () => undefined);
+    const terminator = createG10bPrecommitMongoTerminator({
+      authority: h.authority,
+      session: { abortTransaction, endSession, inTransaction: jest.fn(() => false) } as unknown as Pick<ClientSession, 'abortTransaction' | 'endSession' | 'inTransaction'>,
     });
 
     await expect(terminator.terminatePrecommit()).resolves.toEqual({ outcome: 'STILL_UNKNOWN', abortAttempts: 1 });
-    expect(calls).toEqual(['scope-sealed', 'abort:2000', 'endSession']);
     expect(abortTransaction).toHaveBeenCalledTimes(1);
-    expect(lifecycle.snapshot()).toMatchObject({ phase: 'TERMINATED', activeGroup: false, abortCommandInFlight: false });
-
-    await expect(terminator.terminatePrecommit()).rejects.toBeInstanceOf(G10bPrecommitMongoTerminatorError);
-    await expect(terminator.terminatePrecommit()).rejects.toMatchObject({ code: 'TERMINATOR_CLOSED' });
-    expect(calls).toEqual(['scope-sealed', 'abort:2000', 'endSession']);
+    expect(h.terminate).toHaveBeenCalledWith('STILL_UNKNOWN');
+    expect(endSession).toHaveBeenCalledTimes(1);
   });
 
-  test('does not begin endSession while the lifecycle-owned abort Promise remains unsettled', async () => {
-    const calls: string[] = [];
-    const pending = deferred();
-    const lifecycle = createLifecycle();
-    const session = {
-      abortTransaction: jest.fn(() => { calls.push('abort'); return pending.promise; }),
-      endSession: jest.fn(async () => {
-        expect(lifecycle.snapshot()).toMatchObject({ phase: 'TERMINATED', activeGroup: false, abortCommandInFlight: false });
-        calls.push('endSession');
-      }),
-    } as unknown as Pick<ClientSession, 'abortTransaction' | 'endSession'>;
+  test('does not terminally settle or end session when authority abort admission is unsafe', async () => {
+    const failure = new Error('authority became unsafe');
+    const abortOnce = jest.fn(async () => { throw failure; });
+    const terminate = jest.fn();
+    const abortTransaction = jest.fn(async () => undefined);
+    const endSession = jest.fn(async () => undefined);
     const terminator = createG10bPrecommitMongoTerminator({
-      session,
-      lifecycle,
-      scopeFence: { sealPrecommitScope: () => { calls.push('scope-sealed'); } },
+      authority: { abortOnce, terminate } as unknown as G10bScopedPersistencePrecommitAuthority,
+      session: { abortTransaction, endSession, inTransaction: jest.fn(() => false) } as unknown as Pick<ClientSession, 'abortTransaction' | 'endSession' | 'inTransaction'>,
     });
 
-    const result = terminator.terminatePrecommit();
-    await Promise.resolve();
-    expect(calls).toEqual(['scope-sealed', 'abort']);
-    expect(lifecycle.snapshot()).toMatchObject({ activeGroup: true, abortCommandInFlight: true });
-
-    pending.resolve();
-    await expect(result).resolves.toEqual({ outcome: 'NO_EFFECT_CONFIRMED', abortAttempts: 1 });
-    expect(calls).toEqual(['scope-sealed', 'abort', 'endSession']);
-    expect(lifecycle.snapshot()).toMatchObject({ phase: 'TERMINATED', activeGroup: false, abortCommandInFlight: false });
+    await expect(terminator.terminatePrecommit()).rejects.toBe(failure);
+    expect(abortTransaction).not.toHaveBeenCalled();
+    expect(terminate).not.toHaveBeenCalled();
+    expect(endSession).not.toHaveBeenCalled();
   });
 
-  test('closes its API before a pending endSession settles, so it cannot issue a late abort', async () => {
-    const calls: string[] = [];
-    const ending = deferred();
-    const lifecycle = createLifecycle();
-    const abortTransaction = jest.fn(async () => { calls.push('abort'); });
-    const endSession = jest.fn(() => { calls.push('endSession'); return ending.promise; });
+  test('closes before endSession settles and cannot issue a second high-level abort', async () => {
+    let release!: () => void;
+    const ending = new Promise<void>((resolve) => { release = resolve; });
+    const h = authority();
+    const abortTransaction = jest.fn(async () => undefined);
+    const endSession = jest.fn(() => ending);
     const terminator = createG10bPrecommitMongoTerminator({
-      session: { abortTransaction, endSession } as unknown as Pick<ClientSession, 'abortTransaction' | 'endSession'>,
-      lifecycle,
-      scopeFence: { sealPrecommitScope: () => { calls.push('scope-sealed'); } },
+      authority: h.authority,
+      session: { abortTransaction, endSession, inTransaction: jest.fn(() => false) } as unknown as Pick<ClientSession, 'abortTransaction' | 'endSession' | 'inTransaction'>,
     });
 
-    const result = terminator.terminatePrecommit();
+    const running = terminator.terminatePrecommit();
     await new Promise<void>((resolve) => { setImmediate(resolve); });
-    expect(calls).toEqual(['scope-sealed', 'abort', 'endSession']);
     await expect(terminator.terminatePrecommit()).rejects.toMatchObject({ code: 'TERMINATOR_CLOSED' });
-    expect(calls).toEqual(['scope-sealed', 'abort', 'endSession']);
-
-    ending.resolve();
-    await expect(result).resolves.toEqual({ outcome: 'NO_EFFECT_CONFIRMED', abortAttempts: 1 });
-    expect(calls).toEqual(['scope-sealed', 'abort', 'endSession']);
-  });
-
-  test('rejects an asynchronous scope fence before any ClientSession command', async () => {
-    const abortTransaction = jest.fn(async () => undefined);
-    const endSession = jest.fn(async () => undefined);
-    const lifecycle = createLifecycle();
-    const terminator = createG10bPrecommitMongoTerminator({
-      session: { abortTransaction, endSession } as unknown as Pick<ClientSession, 'abortTransaction' | 'endSession'>,
-      lifecycle,
-      scopeFence: { sealPrecommitScope: (() => Promise.resolve()) as unknown as () => void },
-    });
-
-    await expect(terminator.terminatePrecommit()).rejects.toMatchObject({ code: 'SCOPE_FENCE_INVALID' });
-    expect(abortTransaction).not.toHaveBeenCalled();
-    expect(endSession).not.toHaveBeenCalled();
-    expect(lifecycle.snapshot()).toMatchObject({ phase: 'OPEN', activeGroup: false });
-  });
-
-  test('does not allow a presealed unknown-commit lifecycle to enter the abort seam', async () => {
-    const abortTransaction = jest.fn(async () => undefined);
-    const endSession = jest.fn(async () => undefined);
-    const sealPrecommitScope = jest.fn(() => undefined);
-    const lifecycle = createLifecycle();
-    lifecycle.sealScope('COMMIT_UNKNOWN');
-    const terminator = createG10bPrecommitMongoTerminator({
-      session: { abortTransaction, endSession } as unknown as Pick<ClientSession, 'abortTransaction' | 'endSession'>,
-      lifecycle,
-      scopeFence: { sealPrecommitScope },
-    });
-
-    await expect(terminator.terminatePrecommit()).rejects.toMatchObject({ code: 'UNKNOWN_COMMIT_FORBIDDEN' });
-    expect(sealPrecommitScope).not.toHaveBeenCalled();
-    expect(abortTransaction).not.toHaveBeenCalled();
-    expect(endSession).not.toHaveBeenCalled();
-  });
-
-  test('an asynchronous driver abort rejection is terminal STILL_UNKNOWN, precedes endSession, and never gets a second high-level call', async () => {
-    const calls: string[] = [];
-    const lifecycle = createLifecycle();
-    const abortTransaction = jest.fn(async () => {
-      calls.push('abort');
-      throw new Error('abort failed');
-    });
-    const endSession = jest.fn(async () => {
-      expect(lifecycle.snapshot()).toMatchObject({ phase: 'TERMINATED', activeGroup: false, abortCommandInFlight: false });
-      calls.push('endSession');
-    });
-    const terminator = createG10bPrecommitMongoTerminator({
-      session: { abortTransaction, endSession } as unknown as Pick<ClientSession, 'abortTransaction' | 'endSession'>,
-      lifecycle,
-      scopeFence: { sealPrecommitScope: () => { calls.push('scope-sealed'); } },
-    });
-
-    await expect(terminator.terminatePrecommit()).resolves.toEqual({ outcome: 'STILL_UNKNOWN', abortAttempts: 1 });
-    expect(calls).toEqual(['scope-sealed', 'abort', 'endSession']);
     expect(abortTransaction).toHaveBeenCalledTimes(1);
-    expect(lifecycle.snapshot()).toMatchObject({ phase: 'TERMINATED', activeGroup: false, abortCommandInFlight: false });
-
-    await expect(terminator.terminatePrecommit()).rejects.toMatchObject({ code: 'TERMINATOR_CLOSED' });
-    expect(calls).toEqual(['scope-sealed', 'abort', 'endSession']);
+    release();
+    await expect(running).resolves.toEqual({ outcome: 'NO_EFFECT_CONFIRMED', abortAttempts: 1 });
   });
 
-  test('propagates a lifecycle owner failure after a driver callback without retrying or ending the session', async () => {
-    let ownerIsStale = false;
-    const ownerFence = {
-      assertCurrent: () => {
-        if (ownerIsStale) throw new Error('owner became stale while settling abort');
-      },
-    };
-    const lifecycle = createLifecycle(ownerFence);
-    const abortTransaction = jest.fn(async () => { ownerIsStale = true; });
-    const endSession = jest.fn(async () => undefined);
+  test('reports an endSession failure only after authority terminal settlement', async () => {
+    const h = authority();
+    const endFailure = new Error('end failed');
     const terminator = createG10bPrecommitMongoTerminator({
-      session: { abortTransaction, endSession } as unknown as Pick<ClientSession, 'abortTransaction' | 'endSession'>,
-      lifecycle,
-      scopeFence: { sealPrecommitScope: () => undefined },
+      authority: h.authority,
+      session: {
+        abortTransaction: jest.fn(async () => undefined),
+        endSession: jest.fn(async () => { throw endFailure; }),
+        inTransaction: jest.fn(() => false),
+      } as unknown as Pick<ClientSession, 'abortTransaction' | 'endSession' | 'inTransaction'>,
     });
 
-    await expect(terminator.terminatePrecommit()).rejects.toMatchObject({ code: 'OWNER_STALE' });
-    expect(abortTransaction).toHaveBeenCalledTimes(1);
-    expect(endSession).not.toHaveBeenCalled();
-    expect(lifecycle.snapshot()).toMatchObject({ frozen: true, activeGroup: true, abortCommandsAdmitted: 1 });
+    await expect(terminator.terminatePrecommit()).rejects.toMatchObject<Partial<G10bPrecommitMongoTerminatorError>>({
+      code: 'END_SESSION_FAILED', cause: endFailure,
+    });
+    expect(h.terminate).toHaveBeenCalledWith('NO_EFFECT_CONFIRMED');
   });
 
+  test('does not end a session that remains active after terminal authority settlement', async () => {
+    const h = authority();
+    const endSession = jest.fn(async () => undefined);
+    const terminator = createG10bPrecommitMongoTerminator({
+      authority: h.authority,
+      session: {
+        abortTransaction: jest.fn(async () => undefined),
+        endSession,
+        inTransaction: jest.fn(() => true),
+      } as unknown as Pick<ClientSession, 'abortTransaction' | 'endSession' | 'inTransaction'>,
+    });
+
+    await expect(terminator.terminatePrecommit()).rejects.toMatchObject({ code: 'SESSION_STILL_ACTIVE' });
+    expect(h.terminate).toHaveBeenCalledWith('NO_EFFECT_CONFIRMED');
+    expect(endSession).not.toHaveBeenCalled();
+  });
 });

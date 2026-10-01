@@ -5,10 +5,18 @@ import {
   executeOperationCrud,
   executeOperationInitialCommit,
   finishOperationExecutionRound,
+  executeOperationPrecommitAbort,
+  reserveOperationPrecommitAbortGroup,
+  startOperationPrecommitTermination,
+  terminateOperationPrecommit,
   type OperationBudgetBinding,
+  type OperationPrecommitAbortGroup,
+  type OperationPrecommitTermination,
   type OperationBudgetRound,
   type OperationExecutionCommandContext,
 } from '../../../access/application/internal/operation-budget-binding.js';
+import type { NativePrecommitOutcome } from '../../../access/application/internal/budget-ledger.js';
+import type { PrecommitAbortCommandContext } from '../../../access/application/internal/precommit-termination-lifecycle.js';
 import type { G04bMongoPersistenceAdapter } from '../g04b-persistence-adapter.js';
 
 /**
@@ -26,6 +34,17 @@ export interface G10bScopedPersistenceExecutionFacade {
   executeCrud<T>(send: (context: OperationExecutionCommandContext) => T | PromiseLike<T>): Promise<T>;
   executeInitialCommit<T>(send: (context: OperationExecutionCommandContext) => T | PromiseLike<T>): Promise<T>;
   finish(): void;
+  beginPrecommitTermination(): G10bScopedPersistencePrecommitAuthority;
+}
+
+/**
+ * One sealed transaction's binding-owned authority for exactly one high-level
+ * native precommit abort.  Mongo receives this narrow authority, never the
+ * binding, round, or raw precommit permits.
+ */
+export interface G10bScopedPersistencePrecommitAuthority {
+  abortOnce(send: (context: PrecommitAbortCommandContext) => void | PromiseLike<void>): Promise<NativePrecommitOutcome>;
+  terminate(outcome: NativePrecommitOutcome): void;
 }
 
 declare const g10bScopedPersistenceBindingResolverBrand: unique symbol;
@@ -46,7 +65,23 @@ const attachedResolvers = new WeakMap<object, G10bScopedPersistenceBindingResolv
 const resolverFunctions = new WeakMap<object, ResolveBinding>();
 const captureObservers = new WeakMap<object, ObserveBindingCapture>();
 const scopedTransactionBegunAdapters = new WeakSet<object>();
-const executionFacades = new WeakMap<object, { readonly binding: OperationBudgetBinding; readonly round: OperationBudgetRound; active: boolean }>();
+interface ExecutionFacadeState {
+  readonly binding: OperationBudgetBinding;
+  readonly round: OperationBudgetRound;
+  active: boolean;
+  sealed: boolean;
+}
+
+interface PrecommitAuthorityState {
+  readonly facade: ExecutionFacadeState;
+  readonly precommit: OperationPrecommitTermination;
+  readonly group: OperationPrecommitAbortGroup;
+  active: boolean;
+  abortInvoked: boolean;
+}
+
+const executionFacades = new WeakMap<object, ExecutionFacadeState>();
+const precommitAuthorities = new WeakMap<object, PrecommitAuthorityState>();
 
 /** Create a composition-owned resolver that can be used only as this sidecar. */
 export function createG10bScopedPersistenceBindingResolver(
@@ -162,8 +197,19 @@ export function createG10bScopedPersistenceExecutionFacade(
       finishOperationExecutionRound(state.binding, state.round);
       state.active = false;
     },
+    beginPrecommitTermination: (): G10bScopedPersistencePrecommitAuthority => {
+      const state = requireExecutionFacade(facade);
+      // Seal the transaction-local facade before touching the binding's
+      // precommit lifecycle: no subsequent CRUD or commit can race abort.
+      state.sealed = true;
+      finishOperationExecutionRound(state.binding, state.round);
+      state.active = false;
+      const precommit = startOperationPrecommitTermination(state.binding);
+      const group = reserveOperationPrecommitAbortGroup(state.binding, precommit);
+      return createPrecommitAuthority(state, precommit, group);
+    },
   }) as G10bScopedPersistenceExecutionFacade;
-  executionFacades.set(facade as object, { binding: operationBinding, round, active: true });
+  executionFacades.set(facade as object, { binding: operationBinding, round, active: true, sealed: false });
   return facade;
 }
 
@@ -187,10 +233,53 @@ async function executeFacadeCommand<T>(
   return result;
 }
 
-function requireExecutionFacade(
-  facade: G10bScopedPersistenceExecutionFacade,
-): { readonly binding: OperationBudgetBinding; readonly round: OperationBudgetRound; active: boolean } {
+function requireExecutionFacade(facade: G10bScopedPersistenceExecutionFacade): ExecutionFacadeState {
   const state = executionFacades.get(facade as object);
-  if (state === undefined || !state.active) throw new TypeError('G10b execution facade is no longer active');
+  if (state === undefined || !state.active || state.sealed) throw new TypeError('G10b execution facade is no longer active');
+  return state;
+}
+
+function createPrecommitAuthority(
+  facade: ExecutionFacadeState,
+  precommit: OperationPrecommitTermination,
+  group: OperationPrecommitAbortGroup,
+): G10bScopedPersistencePrecommitAuthority {
+  const authority = Object.freeze({
+    abortOnce: async (send: (context: PrecommitAbortCommandContext) => void | PromiseLike<void>): Promise<NativePrecommitOutcome> => {
+      const state = requirePrecommitAuthority(authority);
+      if (state.abortInvoked) throw new TypeError('G10b precommit authority abort was already invoked');
+      state.abortInvoked = true;
+      let senderFailure: unknown = undefined;
+      try {
+        await executeOperationPrecommitAbort(state.facade.binding, state.group, async (context) => {
+          try {
+            await send(context);
+          } catch (error: unknown) {
+            senderFailure = error;
+            throw error;
+          }
+        });
+        return 'NO_EFFECT_CONFIRMED';
+      } catch (error: unknown) {
+        // The lower layer settles a sender rejection before exposing it.  An
+        // authority/lifecycle failure is not terminally safe and must remain
+        // visible to the terminator, which will consequently not endSession.
+        if (senderFailure === error) return 'STILL_UNKNOWN';
+        throw error;
+      }
+    },
+    terminate: (outcome: NativePrecommitOutcome): void => {
+      const state = requirePrecommitAuthority(authority);
+      terminateOperationPrecommit(state.facade.binding, state.group, outcome);
+      state.active = false;
+    },
+  }) as G10bScopedPersistencePrecommitAuthority;
+  precommitAuthorities.set(authority as object, { facade, precommit, group, active: true, abortInvoked: false });
+  return authority;
+}
+
+function requirePrecommitAuthority(authority: G10bScopedPersistencePrecommitAuthority): PrecommitAuthorityState {
+  const state = precommitAuthorities.get(authority as object);
+  if (state === undefined || !state.active) throw new TypeError('G10b precommit authority is no longer active');
   return state;
 }

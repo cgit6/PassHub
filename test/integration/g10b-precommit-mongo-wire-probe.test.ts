@@ -150,15 +150,28 @@ describe('G10b true MongoDB precommit wire probe', () => {
         ledger,
         ownerFence: { assertCurrent: () => undefined },
       });
-      let scopeSealed = false;
+      let group: ReturnType<typeof lifecycle.reserveAbortGroup> | undefined;
       const terminator = createG10bPrecommitMongoTerminator({
         session,
-        lifecycle,
-        scopeFence: { sealPrecommitScope: () => { scopeSealed = true; } },
+        authority: {
+          abortOnce: async (send) => {
+            lifecycle.sealScope('PRECOMMIT');
+            group = lifecycle.reserveAbortGroup();
+            try {
+              await lifecycle.executeAbort(group, send);
+              return 'NO_EFFECT_CONFIRMED' as const;
+            } catch {
+              return 'STILL_UNKNOWN' as const;
+            }
+          },
+          terminate: (outcome) => {
+            if (group === undefined) throw new Error('wire probe precommit abort group is missing');
+            lifecycle.terminate(group, outcome);
+          },
+        },
       });
 
       await expect(terminator.terminatePrecommit()).resolves.toEqual({ outcome: 'NO_EFFECT_CONFIRMED', abortAttempts: 1 });
-      expect(scopeSealed).toBe(true);
       expect(lifecycle.snapshot()).toMatchObject({ phase: 'TERMINATED', activeGroup: false, abortCommandInFlight: false });
 
       // The observer deliberately connects directly to MongoDB, independent

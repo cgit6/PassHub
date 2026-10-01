@@ -8,7 +8,7 @@ import {
 } from '../../src/infrastructure/mongo/internal/g10b-scoped-persistence-sidecar.js';
 import { attachG10bG04bPersistenceSidecar } from '../../src/composition/internal/g10b-g04b-persistence-wire.js';
 import { createAccessScopeContext } from '../../src/shared/access-scope-context.js';
-import { createOperationBudgetBindingFactory, type OperationBudgetBinding } from '../../src/access/application/internal/operation-budget-binding.js';
+import { OperationBudgetBindingError, createOperationBudgetBindingFactory, type OperationBudgetBinding } from '../../src/access/application/internal/operation-budget-binding.js';
 import { createWriteOperationCoordinatorBundle, type WriteOperationContext } from '../../src/access/application/internal/write-operation-coordinator.js';
 
 const SCOPE = () => createAccessScopeContext({
@@ -22,17 +22,22 @@ interface MongoHarness {
   readonly startSession: jest.Mock;
   readonly startTransaction: jest.Mock;
   readonly commitTransaction: jest.Mock;
+  readonly abortTransaction: jest.Mock;
+  readonly endSession: jest.Mock;
 }
 
 function mongoHarness(): MongoHarness {
-  const startTransaction = jest.fn();
-  const commitTransaction = jest.fn(async () => undefined);
+  let transactionActive = false;
+  const startTransaction = jest.fn(() => { transactionActive = true; });
+  const commitTransaction = jest.fn(async () => { transactionActive = false; });
+  const abortTransaction = jest.fn(async () => { transactionActive = false; });
+  const endSession = jest.fn(async () => undefined);
   const session = {
     startTransaction,
     commitTransaction,
-    inTransaction: jest.fn(() => true),
-    abortTransaction: jest.fn(async () => undefined),
-    endSession: jest.fn(async () => undefined),
+    inTransaction: jest.fn(() => transactionActive),
+    abortTransaction,
+    endSession,
   } as unknown as ClientSession;
   const startSession = jest.fn(() => session);
   return {
@@ -44,23 +49,31 @@ function mongoHarness(): MongoHarness {
     startSession,
     startTransaction,
     commitTransaction,
+    abortTransaction,
+    endSession,
   };
 }
 
-async function withActiveBinding<T>(work: (binding: OperationBudgetBinding) => T | Promise<T>): Promise<T> {
+interface MutableBudgetClock {
+  value: number;
+  nowMs(): number;
+}
+
+async function withActiveBinding<T>(work: (binding: OperationBudgetBinding, clock: MutableBudgetClock) => T | Promise<T>): Promise<T> {
   let value!: T;
   let failure: unknown;
+  const clock: MutableBudgetClock = { value: 1_000, nowMs(): number { return this.value; } };
   const bundle = createWriteOperationCoordinatorBundle({
-    clock: { nowMs: () => 1_000 },
+    clock,
     executors: {
       managementCreate: async (_input, context: WriteOperationContext, settlement) => {
         try {
           const binding = createOperationBudgetBindingFactory({
-            clock: { nowMs: () => 1_000 },
+            clock,
             assertContinuationEvidence: () => undefined,
             config: { singleCommandMs: 123 },
           }).bind(context);
-          value = await work(binding);
+          value = await work(binding, clock);
           settlement.businessResultPersisted('g10b-sidecar-test');
         } catch (error: unknown) {
           failure = error;
@@ -240,6 +253,207 @@ describe('G10b G04b scoped-persistence sidecar', () => {
       const recovery = createG10bScopedPersistenceExecutionFacade(binding);
       expect(recovery).toBeDefined();
       recovery!.finish();
+    });
+  });
+
+  test('seals the facade before binding-owned precommit admission and permits one 2s abort authority callback', async () => {
+    await withActiveBinding(async (binding) => {
+      const facade = createG10bScopedPersistenceExecutionFacade(binding);
+      const authority = facade!.beginPrecommitTermination();
+      await expect(facade!.executeCrud(() => undefined)).rejects.toThrow(/no longer active/i);
+
+      const commands: Array<Readonly<{ timeoutMs: number; attempt: number }>> = [];
+      await expect(authority.abortOnce((command) => { commands.push(command); })).resolves.toBe('NO_EFFECT_CONFIRMED');
+      expect(commands).toEqual([{ timeoutMs: 2_000, attempt: 0 }]);
+      await expect(authority.abortOnce(() => undefined)).rejects.toThrow(/already invoked/i);
+      authority.terminate('NO_EFFECT_CONFIRMED');
+    });
+  });
+
+  test('uses binding-owned precommit authority for attached fail and discard without a raw abort fallback', async () => {
+    await withActiveBinding(async (binding) => {
+      const failureHarness = mongoHarness();
+      const failingAdapter = new G04bMongoPersistenceAdapter(failureHarness.client, 'g10b_sidecar_precommit_fail');
+      (failingAdapter as unknown as { collections: unknown }).collections = {
+        sources: { findOne: jest.fn(async () => { throw new Error('read failed'); }) },
+      };
+      attachG10bScopedPersistenceBindingResolver(
+        failingAdapter,
+        createG10bScopedPersistenceBindingResolver(() => binding),
+      );
+
+      await expect(failingAdapter.readSourceFacts(SCOPE(), 'source-1')).rejects.toMatchObject({ name: 'G04bTransactionError' });
+      expect(failureHarness.abortTransaction).toHaveBeenCalledTimes(1);
+      expect(failureHarness.abortTransaction).toHaveBeenCalledWith({ timeoutMS: 2_000 });
+      expect(failureHarness.endSession).toHaveBeenCalledTimes(1);
+
+      // The previous original write's binding is terminal. Use a distinct
+      // active binding to prove the discard path itself owns the same group.
+    });
+
+    await withActiveBinding(async (binding) => {
+      const discardHarness = mongoHarness();
+      const adapter = new G04bMongoPersistenceAdapter(discardHarness.client, 'g10b_sidecar_precommit_discard');
+      (adapter as unknown as { collections: unknown }).collections = {
+        sources: { findOne: jest.fn(async () => ({ _id: 'source-1', direction: 'ENTRY', active: true, incarnation: 'source-incarnation', version: 0 })) },
+      };
+      attachG10bScopedPersistenceBindingResolver(
+        adapter,
+        createG10bScopedPersistenceBindingResolver(() => binding),
+      );
+      const scope = SCOPE();
+      await adapter.readSourceFacts(scope, 'source-1');
+      await adapter.discard(scope);
+      await adapter.discard(scope);
+
+      expect(discardHarness.abortTransaction).toHaveBeenCalledTimes(1);
+      expect(discardHarness.abortTransaction).toHaveBeenCalledWith({ timeoutMS: 2_000 });
+      expect(discardHarness.endSession).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  test('holds an attached transaction at the G10c boundary after initial commit invocation', async () => {
+    await withActiveBinding(async (binding) => {
+      const harness = mongoHarness();
+      const commitFailure = new Error('initial commit failed');
+      harness.commitTransaction.mockImplementation(async () => { throw commitFailure; });
+      const adapter = new G04bMongoPersistenceAdapter(harness.client, 'g10b_sidecar_initial_commit_hold');
+      const toArray = jest.fn(async () => []);
+      (adapter as unknown as { collections: unknown }).collections = {
+        faceSlots: { find: jest.fn(() => ({ limit: jest.fn(() => ({ toArray })) })) },
+      };
+      attachG10bScopedPersistenceBindingResolver(
+        adapter,
+        createG10bScopedPersistenceBindingResolver(() => binding),
+      );
+      const scope = SCOPE();
+      await adapter.readMapping(scope, 'qualification-1');
+      const internal = adapter as unknown as {
+        readonly transactions: WeakMap<object, object>;
+        commit(context: object, transaction: object): Promise<void>;
+      };
+      const state = internal.transactions.get(scope as object);
+      await expect(internal.commit(scope as object, state!)).rejects.toMatchObject({
+        name: 'G04bTransactionError', cause: commitFailure,
+      });
+      expect((state as { readonly initialCommitInvoked: boolean }).initialCommitInvoked).toBe(true);
+      await adapter.discard(scope);
+
+      expect(harness.abortTransaction).not.toHaveBeenCalled();
+      expect(harness.endSession).not.toHaveBeenCalled();
+      expect(internal.transactions.get(scope as object)).toBe(state);
+    });
+  });
+
+  test('routes a deadline-rejected initial commit admission through one attached precommit abort', async () => {
+    await withActiveBinding(async (binding, clock) => {
+      const harness = mongoHarness();
+      const adapter = new G04bMongoPersistenceAdapter(harness.client, 'g10b_sidecar_initial_deadline');
+      const toArray = jest.fn(async () => []);
+      (adapter as unknown as { collections: unknown }).collections = {
+        faceSlots: { find: jest.fn(() => ({ limit: jest.fn(() => ({ toArray })) })) },
+      };
+      attachG10bScopedPersistenceBindingResolver(
+        adapter,
+        createG10bScopedPersistenceBindingResolver(() => binding),
+      );
+      const scope = SCOPE();
+      await adapter.readMapping(scope, 'qualification-1');
+      // The first CRUD started execution at 1,000; 16,000 is beyond the
+      // fixed 15s execution deadline, so initial sender admission is denied.
+      clock.value = 16_000;
+      const internal = adapter as unknown as {
+        readonly transactions: WeakMap<object, object>;
+        commit(context: object, transaction: object): Promise<void>;
+      };
+      const state = internal.transactions.get(scope as object);
+
+      await expect(internal.commit(scope as object, state!)).rejects.toMatchObject({ name: 'G04bTransactionError' });
+      expect(harness.commitTransaction).not.toHaveBeenCalled();
+      expect(harness.abortTransaction).toHaveBeenCalledTimes(1);
+      expect(harness.abortTransaction).toHaveBeenCalledWith({ timeoutMS: 2_000 });
+      expect(harness.endSession).toHaveBeenCalledTimes(1);
+      expect(internal.transactions.get(scope as object)).toBeUndefined();
+    });
+  });
+
+  test('keeps a genuinely stale binding held before the initial sender, with no abort or endSession', async () => {
+    const harness = mongoHarness();
+    const adapter = new G04bMongoPersistenceAdapter(harness.client, 'g10b_sidecar_initial_genuine_owner_stale');
+    const toArray = jest.fn(async () => []);
+    (adapter as unknown as { collections: unknown }).collections = {
+      faceSlots: { find: jest.fn(() => ({ limit: jest.fn(() => ({ toArray })) })) },
+    };
+    let scope!: ReturnType<typeof SCOPE>;
+    let state!: object;
+    const internal = adapter as unknown as {
+      readonly transactions: WeakMap<object, object>;
+      commit(context: object, transaction: object): Promise<void>;
+    };
+
+    await withActiveBinding(async (binding) => {
+      attachG10bScopedPersistenceBindingResolver(
+        adapter,
+        createG10bScopedPersistenceBindingResolver(() => binding),
+      );
+      scope = SCOPE();
+      await adapter.readMapping(scope, 'qualification-1');
+      state = internal.transactions.get(scope as object)!;
+    });
+
+    // The coordinator has now settled, so this is the genuine captured
+    // binding's owner fence—not a synthetic facade rejection.
+    await expect(internal.commit(scope as object, state)).rejects.toMatchObject({ name: 'G04bTransactionError' });
+    expect(harness.commitTransaction).not.toHaveBeenCalled();
+    expect(harness.abortTransaction).not.toHaveBeenCalled();
+    expect(harness.endSession).not.toHaveBeenCalled();
+    expect(internal.transactions.get(scope as object)).toBe(state);
+  });
+
+  test('routes a synthetic pre-sender adapter facade rejection through authority cleanup before any sender call', async () => {
+    await withActiveBinding(async (binding) => {
+      const harness = mongoHarness();
+      const adapter = new G04bMongoPersistenceAdapter(harness.client, 'g10b_sidecar_initial_owner_stale');
+      const toArray = jest.fn(async () => []);
+      (adapter as unknown as { collections: unknown }).collections = {
+        faceSlots: { find: jest.fn(() => ({ limit: jest.fn(() => ({ toArray })) })) },
+      };
+      attachG10bScopedPersistenceBindingResolver(
+        adapter,
+        createG10bScopedPersistenceBindingResolver(() => binding),
+      );
+      const scope = SCOPE();
+      await adapter.readMapping(scope, 'qualification-1');
+      const internal = adapter as unknown as {
+        readonly transactions: WeakMap<object, object>;
+        commit(context: object, transaction: object): Promise<void>;
+      };
+      const state = internal.transactions.get(scope as object) as {
+        g10bExecutionFacade: unknown;
+      };
+      const staleOwner = new OperationBudgetBindingError('OWNER_STALE', 'owner became stale before initial sender');
+      const authority = {
+        abortOnce: async (send: (context: { readonly timeoutMs: number; readonly attempt: number }) => Promise<void> | void) => {
+          await send({ timeoutMs: 2_000, attempt: 0 });
+          return 'NO_EFFECT_CONFIRMED' as const;
+        },
+        terminate: () => undefined,
+      };
+      state.g10bExecutionFacade = {
+        executeCrud: async () => undefined,
+        executeInitialCommit: async () => { throw staleOwner; },
+        finish: () => undefined,
+        beginPrecommitTermination: () => authority,
+      };
+
+      await expect(internal.commit(scope as object, state)).rejects.toMatchObject({
+        name: 'G04bTransactionError', cause: staleOwner,
+      });
+      expect(harness.commitTransaction).not.toHaveBeenCalled();
+      expect(harness.abortTransaction).toHaveBeenCalledTimes(1);
+      expect(harness.abortTransaction).toHaveBeenCalledWith({ timeoutMS: 2_000 });
+      expect(harness.endSession).toHaveBeenCalledTimes(1);
+      expect(internal.transactions.get(scope as object)).toBeUndefined();
     });
   });
 

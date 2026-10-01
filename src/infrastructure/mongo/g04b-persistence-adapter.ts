@@ -58,6 +58,7 @@ import {
   type G10bScopedPersistenceBinding,
   type G10bScopedPersistenceExecutionFacade,
 } from './internal/g10b-scoped-persistence-sidecar.js';
+import { createG10bPrecommitMongoTerminator } from './internal/g10b-precommit-mongo-terminator.js';
 
 export const G04B_MONGO_VERSION = '8.0.32';
 export const G04B_DEFAULT_DATABASE = 'passhub_g04b_atomic';
@@ -242,6 +243,14 @@ export class G04bMongoPersistenceAdapter
   public async discard(context: AccessScopeContext): Promise<void> {
     const state = this.transactions.get(context as object);
     if (state === undefined) return;
+    if (state.g10bScopedPersistenceBinding !== undefined) {
+      // An invoked initial commit is the G10c confirmation boundary. No
+      // native abort, endSession, map cleanup, or late command is allowed.
+      if (state.initialCommitInvoked) return;
+      await this.terminateAttachedPrecommit(state);
+      this.transactions.delete(context as object);
+      return;
+    }
     this.transactions.delete(context as object);
     this.finishG10bExecutionRound(state);
     let abortError: unknown = null;
@@ -1039,12 +1048,33 @@ export class G04bMongoPersistenceAdapter
             state.initialCommitInvoked = true;
             await state.session.commitTransaction({ timeoutMS: timeoutMs });
           });
-        } finally { this.finishG10bExecutionRound(state); }
+        } finally {
+          // Admission can fail before the sender starts (for example an
+          // execution deadline or owner fence). Retain its active facade so
+          // the attached precommit authority can finish the round, reserve
+          // cleanup, and issue the one budgeted abort. Once the sender has
+          // begun, this is instead the G10c confirmation boundary.
+          if (state.initialCommitInvoked) this.finishG10bExecutionRound(state);
+        }
       }
       this.transactions.delete(context as object);
       await state.session.endSession();
     } catch (error: unknown) {
       const facts = classifyG04bTransactionError(error, 'commit');
+      if (state.g10bScopedPersistenceBinding !== undefined && state.initialCommitInvoked) {
+        // G10c owns unknown/failed initial-commit confirmation. Do not clean
+        // up this session or scope from G10b's precommit-only boundary.
+        throw new G04bTransactionError(facts, error);
+      }
+      if (state.g10bScopedPersistenceBinding !== undefined) {
+        try {
+          await this.terminateAttachedPrecommit(state);
+          this.transactions.delete(context as object);
+        } catch (terminationError: unknown) {
+          throw new G04bTransactionError(classifyG04bTransactionError(terminationError, 'abort'), terminationError);
+        }
+        throw new G04bTransactionError(facts, error);
+      }
       this.transactions.delete(context as object);
       await state.session.endSession().catch(() => undefined);
       throw new G04bTransactionError(facts, error);
@@ -1053,6 +1083,24 @@ export class G04bMongoPersistenceAdapter
 
   private async fail(context: AccessScopeContext, state: TransactionState, error: unknown): Promise<never> {
     const facts = error instanceof G04bTransactionError ? error.facts : classifyG04bTransactionError(error, state.stage);
+    if (state.g10bScopedPersistenceBinding !== undefined) {
+      // Once the initial sender starts, only G10c may decide confirmation or
+      // cleanup. Before that point, attached transactions have no raw abort
+      // fallback: their binding-owned authority owns the one abort group.
+      if (state.initialCommitInvoked) {
+        if (error instanceof G04bTransactionError) throw error;
+        throw new G04bTransactionError(facts, error);
+      }
+      state.stage = 'abort';
+      try {
+        await this.terminateAttachedPrecommit(state);
+        this.transactions.delete(context as object);
+      } catch (terminationError: unknown) {
+        throw new G04bTransactionError(classifyG04bTransactionError(terminationError, 'abort'), terminationError);
+      }
+      if (error instanceof G04bTransactionError) throw error;
+      throw new G04bTransactionError(facts, error);
+    }
     this.transactions.delete(context as object);
     this.finishG10bExecutionRound(state);
     let abortError: unknown = null;
@@ -1077,9 +1125,11 @@ export class G04bMongoPersistenceAdapter
     send: (timeoutMs: number | undefined) => Promise<T>,
   ): Promise<T> {
     const facade = state.g10bExecutionFacade;
-    return facade === undefined
-      ? send(undefined)
-      : facade.executeCrud(({ timeoutMs }) => send(timeoutMs));
+    if (facade !== undefined) return facade.executeCrud(({ timeoutMs }) => send(timeoutMs));
+    if (state.g10bScopedPersistenceBinding !== undefined) {
+      throw new G04bTechnicalError('G10b execution facade is unavailable for attached transaction CRUD');
+    }
+    return send(undefined);
   }
 
   private transactionDriverOptions(
@@ -1096,6 +1146,17 @@ export class G04bMongoPersistenceAdapter
     if (facade === undefined) return;
     state.g10bExecutionFacade = undefined;
     facade.finish();
+  }
+
+  private async terminateAttachedPrecommit(state: TransactionState): Promise<void> {
+    const facade = state.g10bExecutionFacade;
+    if (facade === undefined) {
+      throw new G04bTechnicalError('G10b precommit authority is unavailable for attached transaction cleanup');
+    }
+    const authority = facade.beginPrecommitTermination();
+    const terminator = createG10bPrecommitMongoTerminator({ session: state.session, authority });
+    await terminator.terminatePrecommit();
+    state.g10bExecutionFacade = undefined;
   }
 
   private dateFromClock(): Date {
