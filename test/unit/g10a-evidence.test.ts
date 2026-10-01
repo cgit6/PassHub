@@ -14,7 +14,10 @@ type EvidenceProvenance = Readonly<{
 
 type Evidence = Readonly<{
   collectG10aEvidenceProvenance(input: { root: string; git: (root: string, args: readonly string[]) => Promise<string> }): Promise<EvidenceProvenance>;
-  writeG10aEvidenceArtifacts(input: { root: string; outputRoot?: string; runId: string; provenance: EvidenceProvenance; resultStatus: 'PASS' | 'FAIL'; cleanupStatus: 'PASS' | 'FAIL' }): Promise<{ runId: string; artifactNames: readonly string[] }>;
+  writeG10aEvidenceArtifacts(input: { root: string; outputRoot?: string; runId: string; provenance: EvidenceProvenance; results: object; cleanup: object }): Promise<{ runId: string; artifactNames: readonly string[] }>;
+  createG10aEvidenceResults(input: { status: 'PASS' | 'FAIL'; phases: unknown[] }): object;
+  createG10aEvidenceCleanup(input: { status: 'PASS' | 'FAIL'; dockerContainersAbsent: boolean; composeContainersAbsent: boolean; composeNetworksAbsent: boolean }): object;
+  assertG10aEvidenceOutputRoot(input: { root: string; outputRoot?: string }): Promise<string>;
   runWithPrimaryFailure(input: { execute: () => Promise<unknown>; cleanup: () => Promise<void> }): Promise<unknown>;
 }>;
 
@@ -32,14 +35,17 @@ describe('G10a private evidence boundary', () => {
     const second = await evidence.collectG10aEvidenceProvenance({ root: fixture.root, git: cleanGit });
     expect(provenance).toEqual(second);
     const outputRoot = join(fixture.root, 'private-evidence-root');
+    await mkdir(outputRoot, { recursive: true, mode: 0o700 });
+    const results = goodResults(evidence);
+    const cleanup = evidence.createG10aEvidenceCleanup({ status: 'PASS', dockerContainersAbsent: true, composeContainersAbsent: true, composeNetworksAbsent: true });
 
     const written = await evidence.writeG10aEvidenceArtifacts({
       root: fixture.root,
       outputRoot,
       runId: 'g10a-20261001-a1b2c3d4',
       provenance,
-      resultStatus: 'PASS',
-      cleanupStatus: 'PASS',
+      results,
+      cleanup,
     });
     expect(written.artifactNames).toEqual(['manifest.json', 'results.json', 'cleanup.json']);
 
@@ -57,8 +63,7 @@ describe('G10a private evidence boundary', () => {
     expect(JSON.parse(cleanupJson)).toEqual({
       format: 'passhub.g10a.evidence-cleanup.v1',
       runId: written.runId,
-      status: 'PASS',
-      primaryFailurePrecedence: 'PRESERVED',
+      status: 'PASS', primaryFailurePrecedence: 'PRESERVED', dockerContainersAbsent: true, composeContainersAbsent: true, composeNetworksAbsent: true,
     });
     expect((await lstat(directory)).mode & 0o777).toBe(0o700);
     await Promise.all(written.artifactNames.map(async (name) => {
@@ -73,6 +78,16 @@ describe('G10a private evidence boundary', () => {
       root: fixture.root,
       git: async (_root, args) => args[0] === 'status' ? ' M package-lock.json\n' : 'a'.repeat(40),
     })).rejects.toThrow('clean tracked worktree');
+  });
+
+  test('requires an existing absolute 0700 same-user evidence root', async () => {
+    const fixture = await workspaceFixture(); cleanups.push(fixture.root);
+    const evidence = await loadEvidence();
+    await expect(evidence.assertG10aEvidenceOutputRoot({ root: fixture.root, outputRoot: join(fixture.root, 'missing-private-root') })).rejects.toThrow();
+    await expect(evidence.assertG10aEvidenceOutputRoot({ root: fixture.root, outputRoot: 'relative-private-root' })).rejects.toThrow('absolute path');
+    const outputRoot = join(fixture.root, 'private-evidence-root');
+    await mkdir(outputRoot, { mode: 0o700 });
+    await expect(evidence.assertG10aEvidenceOutputRoot({ root: fixture.root, outputRoot })).resolves.toBe(outputRoot);
   });
 
   test('preserves the primary failure even when cleanup also fails', async () => {
@@ -93,7 +108,7 @@ describe('G10a private evidence boundary', () => {
     const reserved = join(outputRoot, 'g10a-20261001-collision');
     await mkdir(reserved, { recursive: true, mode: 0o700 });
     await writeFile(join(reserved, 'preserved'), 'do-not-replace\n', { mode: 0o600 });
-    await expect(evidence.writeG10aEvidenceArtifacts({ root: fixture.root, outputRoot, runId: 'g10a-20261001-collision', provenance, resultStatus: 'PASS', cleanupStatus: 'PASS' })).rejects.toThrow('runId collision');
+    await expect(evidence.writeG10aEvidenceArtifacts({ root: fixture.root, outputRoot, runId: 'g10a-20261001-collision', provenance, results: goodResults(evidence), cleanup: goodCleanup(evidence) })).rejects.toThrow('runId collision');
     expect(await readFile(join(reserved, 'preserved'), 'utf8')).toBe('do-not-replace\n');
     expect(await lstat(join(outputRoot, '.g10a-20261001-collision.staging')).catch(() => undefined)).toBeUndefined();
   });
@@ -106,7 +121,7 @@ describe('G10a private evidence boundary', () => {
     const staging = join(outputRoot, '.g10a-20261001-staging.staging');
     await mkdir(staging, { recursive: true, mode: 0o700 });
     await writeFile(join(staging, 'preserved'), 'do-not-delete\n', { mode: 0o600 });
-    await expect(evidence.writeG10aEvidenceArtifacts({ root: fixture.root, outputRoot, runId: 'g10a-20261001-staging', provenance, resultStatus: 'PASS', cleanupStatus: 'PASS' })).rejects.toThrow('staging collision');
+    await expect(evidence.writeG10aEvidenceArtifacts({ root: fixture.root, outputRoot, runId: 'g10a-20261001-staging', provenance, results: goodResults(evidence), cleanup: goodCleanup(evidence) })).rejects.toThrow('staging collision');
     expect(await readFile(join(staging, 'preserved'), 'utf8')).toBe('do-not-delete\n');
   });
 
@@ -117,11 +132,11 @@ describe('G10a private evidence boundary', () => {
     const outputRoot = join(fixture.root, 'private-evidence-root');
     await mkdir(outputRoot, { recursive: true, mode: 0o700 });
     await chmod(outputRoot, 0o750);
-    await expect(evidence.writeG10aEvidenceArtifacts({ root: fixture.root, outputRoot, runId: 'g10a-20261001-permissions', provenance, resultStatus: 'PASS', cleanupStatus: 'PASS' })).rejects.toThrow('exactly mode 0700');
+    await expect(evidence.writeG10aEvidenceArtifacts({ root: fixture.root, outputRoot, runId: 'g10a-20261001-permissions', provenance, results: goodResults(evidence), cleanup: goodCleanup(evidence) })).rejects.toThrow('exactly mode 0700');
 
     await chmod(outputRoot, 0o700);
     const tainted = { ...provenance, message: 'mongodb://must-not-be-accepted/secret' } as unknown as EvidenceProvenance;
-    await expect(evidence.writeG10aEvidenceArtifacts({ root: fixture.root, outputRoot, runId: 'g10a-20261001-tainted', provenance: tainted, resultStatus: 'PASS', cleanupStatus: 'PASS' })).rejects.toThrow('unexpected fields');
+    await expect(evidence.writeG10aEvidenceArtifacts({ root: fixture.root, outputRoot, runId: 'g10a-20261001-tainted', provenance: tainted, results: goodResults(evidence), cleanup: goodCleanup(evidence) })).rejects.toThrow('unexpected fields');
   });
 
   test('rejects symlinked G10a inventory and mismatched runner pin', async () => {
@@ -133,6 +148,26 @@ describe('G10a private evidence boundary', () => {
     await rm(join(fixture.root, 'src', 'runtime', 'internal', 'runtime-alias.ts'));
     await writeFile(join(fixture.root, 'scripts', 'test-g10a-integration.mjs'), `const nodeImage = 'node:24.21.0-bookworm-slim@sha256:${'d'.repeat(64)}';\n`);
     await expect(evidence.collectG10aEvidenceProvenance({ root: fixture.root, git: cleanGit })).rejects.toThrow('Node pin sources disagree');
+
+    await writeFile(join(fixture.root, 'scripts', 'test-g10a-integration.mjs'), `const nodeImage = 'node:24.21.0-bookworm-slim@sha256:${'a'.repeat(64)}';\n`);
+    await writeFile(join(fixture.root, 'infra', 'toolchain-images.json'), JSON.stringify({ images: {
+      node: `node:24.21.1-bookworm-slim@sha256:${'a'.repeat(64)}`,
+      mongo: `mongo:8.0.32-noble@sha256:${'b'.repeat(64)}`,
+    } }));
+    await expect(evidence.collectG10aEvidenceProvenance({ root: fixture.root, git: cleanGit })).rejects.toThrow('Node 24.21.0 bookworm-slim');
+
+    await writeFile(join(fixture.root, 'infra', 'toolchain-images.json'), JSON.stringify({ images: {
+      node: `node:24.21.0-bookworm-slim@sha256:${'a'.repeat(64)}`,
+      mongo: `mongo:8.0.33-noble@sha256:${'b'.repeat(64)}`,
+    } }));
+    await expect(evidence.collectG10aEvidenceProvenance({ root: fixture.root, git: cleanGit })).rejects.toThrow('Mongo 8.0.32 noble');
+  });
+
+  test('enforces PASS and FAIL result/cleanup semantics instead of only field shape', async () => {
+    const evidence = await loadEvidence();
+    expect(() => evidence.createG10aEvidenceResults({ status: 'PASS', phases: [phase('test:g10a:unit', 0, 1, 1, 1)] })).toThrow('PASS results are incomplete');
+    expect(() => evidence.createG10aEvidenceResults({ status: 'FAIL', phases: [phase('test:g10a:unit', 0, 1, 1, 1)] })).toThrow('FAIL results require a failed phase');
+    expect(() => evidence.createG10aEvidenceCleanup({ status: 'PASS', dockerContainersAbsent: false, composeContainersAbsent: true, composeNetworksAbsent: true })).toThrow('status does not match outcomes');
   });
 });
 
@@ -153,8 +188,12 @@ async function workspaceFixture(): Promise<{ readonly root: string }> {
   await writeFile(join(root, 'src', 'runtime', 'internal', 'runtime-control.ts'), 'export const control = 1;\n');
   await writeFile(join(root, 'test', 'unit', 'g10a-owner.test.ts'), 'test(\'owner\', () => undefined);\n');
   await writeFile(join(root, 'package-lock.json'), '{"lockfileVersion":3}\n');
+  await writeFile(join(root, 'package.json'), '{"name":"fixture"}\n');
+  await writeFile(join(root, 'tsconfig.json'), '{"compilerOptions":{}}\n');
   await writeFile(join(root, 'scripts', 'test-g10a-integration.mjs'), `const nodeImage = 'node:24.21.0-bookworm-slim@sha256:${'a'.repeat(64)}';\n`);
   await writeFile(join(root, 'scripts', 'internal-g10a-evidence.mjs'), 'export {};\n');
+  await writeFile(join(root, 'scripts', 'test-g10a-evidence.mjs'), 'export {};\n');
+  await writeFile(join(root, 'scripts', 'internal-g10a-evidence-runner.mjs'), 'export {};\n');
   await writeFile(join(root, 'infra', 'toolchain-images.json'), JSON.stringify({ images: {
     node: `node:24.21.0-bookworm-slim@sha256:${'a'.repeat(64)}`,
     mongo: `mongo:8.0.32-noble@sha256:${'b'.repeat(64)}`,
@@ -163,6 +202,13 @@ async function workspaceFixture(): Promise<{ readonly root: string }> {
   await Promise.all(['unit', 'socket', 'integration'].map(async (tier) => writeFile(join(root, `jest.g10a.${tier}.config.cjs`), 'module.exports = {};\n')));
   return { root };
 }
+
+function phase(identifier: string, exitCode: number, durationMs: number, suiteCount: number | null, testCount: number | null) {
+  return { identifier, exitCode, durationMs, suiteCount, testCount };
+}
+
+function goodResults(evidence: Evidence): object { return evidence.createG10aEvidenceResults({ status: 'PASS', phases: [phase('test:g10a:unit', 0, 1, 1, 1), phase('test:g10a:socket', 0, 1, 1, 1), phase('test:g10a:integration', 0, 1, 1, 1)] }); }
+function goodCleanup(evidence: Evidence): object { return evidence.createG10aEvidenceCleanup({ status: 'PASS', dockerContainersAbsent: true, composeContainersAbsent: true, composeNetworksAbsent: true }); }
 
 async function cleanGit(_root: string, args: readonly string[]): Promise<string> {
   if (args[0] === 'status') return '';
