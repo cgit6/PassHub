@@ -1,19 +1,89 @@
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { MongoClient } from 'mongodb';
 
-import { G04bMongoPersistenceAdapter } from '../../src/infrastructure/mongo/g04b-persistence-adapter.js';
+import { createAccessComposition } from '../../src/composition/access-composition.js';
+import { HumanPrincipal, type HumanRole } from '../../src/auth/domain/index.js';
+import type { HumanAuthCapability } from '../../src/auth/application/index.js';
+import type { ManagementDataPort } from '../../src/access/ports/access-ports.js';
+import {
+  createAdmissionWorkHandoffBundle,
+  createG07bRouteComposition,
+  createG08aManagementComposition,
+  createG09aQueryComposition,
+  createHttpResponsePlanBundle,
+  createQueryApplication,
+  createUnknownRecognitionCoordinatorBundle,
+  createWriterQuiescence,
+} from '../../src/composition/internal/index.js';
+import { createG10aAdmissionRuntimeComposition } from '../../src/composition/internal/g10a-admission-runtime-composition.js';
+import { createG10aRuntimeHttpApplication } from '../../src/composition/internal/g10a-runtime-http-application.js';
+import { createOperationRegistry, createOperationRegistryCapabilityIssuer } from '../../src/access/application/internal/operation-registry.js';
+import { G04B_QUALIFICATIONS_COLLECTION, G04bMongoPersistenceAdapter, createG04bFixture } from '../../src/infrastructure/mongo/index.js';
 import { createG10aDriverLogBinding } from '../../src/composition/internal/g10a-driver-log-binding.js';
 import { createG10aRuntimeOwner } from '../../src/composition/internal/g10a-runtime-owner.js';
 import { RUNTIME_CONTROL_SOCKET_FILE_NAME } from '../../src/runtime/internal/runtime-control-socket-path.js';
 import { validateRuntimeLogRecord } from '../../src/runtime/internal/runtime-log-schema.js';
+import { dispatchRuntimeControlProtocol, type RuntimeControlProtocolFrame } from '../../src/runtime/internal/runtime-control-protocol.js';
+import type { RuntimeControl } from '../../src/runtime/internal/runtime-control.js';
 
 const URI = process.env.G10A_MONGO_URI ?? 'mongodb://127.0.0.1:27029/?replicaSet=rs0';
 const EPOCH = '11111111-1111-4111-8111-111111111111';
 const RUN = '22222222-2222-4222-8222-222222222222';
+const ACCOUNT_ID = '33333333-3333-4333-8333-333333333333';
+
+class HarnessAuth implements HumanAuthCapability {
+  readonly operator = new HumanPrincipal();
+  login(): Promise<{ accessToken: string }> { return Promise.resolve({ accessToken: 'unused' }); }
+  verifyAccessToken(value: string): Promise<HumanPrincipal> { return value === 'operator' ? Promise.resolve(this.operator) : Promise.reject(new Error('invalid token')); }
+  facts(principal: HumanPrincipal): { userId: string; role: HumanRole } {
+    if (principal !== this.operator) throw new Error('unknown principal');
+    return { userId: ACCOUNT_ID, role: 'OPERATOR' };
+  }
+  assertRole(principal: HumanPrincipal, role: HumanRole): void {
+    if (principal !== this.operator || role !== 'OPERATOR') throw new Error('forbidden');
+  }
+}
+
+function deferred<T>(): { readonly promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void;
+  return { promise: new Promise<T>((done) => { resolve = done; }), resolve };
+}
+
+function sendHttp(port: number, method: 'GET' | 'POST', path: string, body?: Record<string, unknown>): Promise<{ readonly status: number; readonly body: Record<string, unknown> }> {
+  const wire = body === undefined ? undefined : JSON.stringify(body);
+  return new Promise((resolve, reject) => {
+    const request = httpRequest({
+      host: '127.0.0.1', port, method, path, agent: false,
+      headers: {
+        Authorization: 'Bearer operator',
+        ...(wire === undefined ? {} : { 'Content-Type': 'application/json', 'Content-Length': String(Buffer.byteLength(wire)) }),
+        ...(method === 'POST' ? { 'PassHub-Dataset-Epoch': EPOCH } : {}),
+      },
+    }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on('data', (chunk: Buffer) => chunks.push(chunk));
+      response.once('end', () => resolve({
+        status: response.statusCode ?? 0,
+        body: JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>,
+      }));
+    });
+    request.once('error', reject);
+    request.end(wire);
+  });
+}
+
+async function status(control: RuntimeControl): Promise<ReturnType<RuntimeControl['snapshot']>> {
+  const text = `${JSON.stringify({ v: 'c1', requestControlId: '99999999-9999-4999-8999-999999999999', command: 'STATUS', epoch: EPOCH, run: RUN })}\n`;
+  const frame: RuntimeControlProtocolFrame = Object.freeze({ text, utf8Valid: true, hasBom: false, singleFinalLf: true, byteLength: Buffer.byteLength(text) });
+  const response = await dispatchRuntimeControlProtocol(control, frame);
+  if (response === undefined || !response.ok || response.snapshot === null) throw new Error('expected STATUS snapshot');
+  return response.snapshot;
+}
 
 /**
  * This is intentionally an independent true-driver integration seam, not a
@@ -105,5 +175,148 @@ describe('G10a true MongoDB driver command monitoring', () => {
     // private composite key. Concurrent real finds instead prove that each
     // emitted read record retains the read identity and lifecycle balances.
     expect(records.filter((record) => record.route === 'QUERY' && record.commandName === 'find' && record.code === 'DRIVER_STARTED').length).toBeGreaterThanOrEqual(13);
+  });
+
+  test('closes one true HTTP G07→G08→G04b management path and a true query path under the same G10 owner', async () => {
+    const runtimeParent = await mkdtemp(join(tmpdir(), 'passhub-g10a-http-mongo-'));
+    const database = `passhub_g10a_http_closed_loop_${process.pid}`.slice(0, 63);
+    const now = Date.now();
+    const adapter = new G04bMongoPersistenceAdapter(client, database, { nowMs: () => Date.now() });
+    await adapter.ensureSchema();
+    const seeded = createG04bFixture(now);
+    const fixture = Object.freeze({
+      ...seeded,
+      datasetEpoch: EPOCH,
+      metadata: Object.freeze({ ...seeded.metadata, datasetEpoch: EPOCH }),
+    });
+    await adapter.clearAndSeed(fixture);
+    const stageEntered = deferred<void>();
+    const stageRelease = deferred<void>();
+    let delayOnce = true;
+    const managementPort: ManagementDataPort = Object.freeze({
+      readQualification: adapter.readQualification.bind(adapter),
+      readMapping: adapter.readMapping.bind(adapter),
+      async stageManagementChange(...args: Parameters<ManagementDataPort['stageManagementChange']>) {
+        const [context, plan] = args;
+        if (delayOnce) {
+          delayOnce = false;
+          stageEntered.resolve();
+          await stageRelease.promise;
+        }
+        return adapter.stageManagementChange(context, plan);
+      },
+      discard: adapter.discard.bind(adapter),
+    });
+    const auth = new HarnessAuth();
+    const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
+    const handoff = createAdmissionWorkHandoffBundle();
+    const quiescence = createWriterQuiescence({ clock: { nowMs: Date.now } });
+    const access = createAccessComposition({ management: managementPort, query: adapter, epoch: EPOCH });
+    const management = createG08aManagementComposition({ auth, manageQualifications: access.manageQualifications, responsePlans: plans, workHandoff: handoff });
+    const query = createG09aQueryComposition({
+      currentDatasetEpoch: EPOCH,
+      auth,
+      queryApplication: createQueryApplication({ data: adapter, writerQuiescence: quiescence, epoch: EPOCH }),
+      responsePlans: plans,
+      workHandoff: handoff,
+      writerQuiescence: quiescence,
+    });
+    const rejected = async () => Object.freeze({ kind: 'REJECTED' as const, response: plans.technical.issue('INVALID_REQUEST') });
+    const routes = createG07bRouteComposition({
+      login: Object.freeze({ validate: rejected, login: async () => plans.technical.issue('INVALID_REQUEST') }),
+      query,
+      management: Object.freeze({ validate: management.validator.validate, management: management.work.management }),
+      recognition: Object.freeze({ validate: rejected, recognition: async () => ({ disposition: 'KNOWN_NO_EFFECT' as const, response: plans.technical.issue('INVALID_REQUEST') }) }),
+    });
+    const capabilities = createOperationRegistryCapabilityIssuer({
+      registryId: `g10a-http-${process.pid}`,
+      datasetEpoch: EPOCH,
+      processRunId: RUN,
+      ownerId: '44444444-4444-4444-8444-444444444444',
+      sameArtifact: () => true,
+    });
+    const registry = createOperationRegistry({
+      capabilities,
+      writeRunClaim: capabilities.issueWriteRunClaim('WRITABLE'),
+      assertOwnerCurrent: () => undefined,
+      assertContinuationEvidence: () => undefined,
+    });
+    const owner = createG10aRuntimeOwner({
+      epoch: EPOCH, run: RUN,
+      logDirectory: join(runtimeParent, 'logs'),
+      controlDirectory: join(runtimeParent, 'control'),
+      controlSocketPath: join(runtimeParent, 'control', RUNTIME_CONTROL_SOCKET_FILE_NAME),
+      monotonicClock: { nowMs: () => performance.now() },
+      awaitObservation: () => undefined,
+    });
+    let control: RuntimeControl | undefined;
+    let runtimeHttp: Awaited<ReturnType<typeof createG10aRuntimeHttpApplication>> | undefined;
+    try {
+      runtimeHttp = await createG10aRuntimeHttpApplication({
+        runtimeOwner: owner,
+        createAcceptedHandler: (runtime) => {
+          const composed = createG10aAdmissionRuntimeComposition({
+            epoch: EPOCH, run: RUN,
+            monotonicClock: { nowMs: () => performance.now() }, awaitObservation: () => undefined,
+            runtime,
+            admission: {
+              currentDatasetEpoch: EPOCH,
+              registry,
+              registryCapabilities: capabilities,
+              responsePlans: plans,
+              workHandoff: handoff,
+              unknownRecognition: createUnknownRecognitionCoordinatorBundle().handler,
+              validator: routes.validator,
+              work: routes.work,
+              writerQuiescence: quiescence,
+            },
+          });
+          control = composed.control;
+          return composed.handler;
+        },
+      });
+      await runtimeHttp.application.nestApplication.listen(0, '127.0.0.1');
+      const address = runtimeHttp.application.server.address();
+      if (address === null || typeof address === 'string') throw new Error('HTTP server did not bind a port');
+      const managementRequest = sendHttp(address.port, 'POST', '/qualifications', {
+        displayName: 'G10a closed-loop qualification',
+        validFrom: new Date(Date.now() + 1_000).toISOString(),
+        validUntil: new Date(Date.now() + 3_600_000).toISOString(),
+        face: null,
+      });
+      await stageEntered.promise;
+      if (control === undefined) throw new Error('runtime control was not captured');
+      await expect(status(control)).resolves.toMatchObject({ issuedPersistence: 1, activeQueryReads: 0 });
+      stageRelease.resolve();
+      await expect(managementRequest).resolves.toMatchObject({ status: 201, body: { operation: 'CREATE' } });
+      await expect(status(control)).resolves.toMatchObject({ issuedPersistence: 0 });
+
+      const queryResponse = await sendHttp(address.port, 'GET', '/qualifications');
+      expect(queryResponse.status).toBe(200);
+      expect(await client.db(database).collection(G04B_QUALIFICATIONS_COLLECTION).findOne({ displayName: 'G10a closed-loop qualification' })).not.toBeNull();
+      const runtime = await owner.start();
+      await runtime.runtimeLogSink.flush();
+      const records = (await readFile(join(runtimeParent, 'logs', 'runtime.log'), 'utf8'))
+        .split('\n').filter((line) => line.length > 0)
+        .map((line) => validateRuntimeLogRecord(JSON.parse(line) as unknown));
+      const registered = records.find((record) => record.code === 'OPERATION_REGISTERED');
+      if (registered === undefined) throw new Error('missing operation registration');
+      const writer = records.filter((record) => record.requestUUID === registered.requestUUID);
+      expect(writer.map((record) => record.code)).toEqual(expect.arrayContaining([
+        'REQUEST_ACCEPTED', 'OPERATION_REGISTERED',
+        'BUSINESS_STEP_REGISTERED', 'BUSINESS_STEP_ISSUED', 'BUSINESS_STEP_SETTLED',
+        'DRIVER_STARTED', 'DRIVER_SUCCEEDED',
+      ]));
+      expect(writer.every((record) => record.operationUUID === null || record.operationUUID === registered.operationUUID)).toBe(true);
+      expect(writer.filter((record) => record.code !== 'REQUEST_ACCEPTED').every((record) => record.ownerRef === registered.ownerRef)).toBe(true);
+      expect(writer.filter((record) => record.kind === 'DRIVER').length).toBeGreaterThan(0);
+      const queryDriver = records.filter((record) => record.kind === 'DRIVER' && record.route === 'QUERY');
+      expect(queryDriver.length).toBeGreaterThan(0);
+      expect(queryDriver.every((record) => record.requestUUID !== null && record.operationUUID === null && record.ownerRef === null)).toBe(true);
+    } finally {
+      await runtimeHttp?.close().catch(() => undefined);
+      await client.db(database).dropDatabase().catch(() => undefined);
+      await rm(runtimeParent, { recursive: true, force: true });
+    }
   });
 });
