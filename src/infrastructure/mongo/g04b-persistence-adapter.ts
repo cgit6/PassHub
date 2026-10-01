@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 
 import {
   MongoClient,
@@ -60,8 +61,11 @@ import {
 } from './internal/g10b-scoped-persistence-sidecar.js';
 import { createG10bPrecommitMongoTerminator } from './internal/g10b-precommit-mongo-terminator.js';
 import {
+  createG10cRecognitionExpectedImageCapture,
   handoffG10cPostCommitUnknown,
+  prepareG10cRecognitionExpectedImage,
   registerG10cConcreteG04bMongoPersistenceAdapter,
+  type G10cRecognitionExpectedImageCapture,
 } from './internal/g10c-post-commit-unknown-handoff.js';
 
 export const G04B_MONGO_VERSION = '8.0.32';
@@ -166,6 +170,8 @@ interface TransactionState {
   readonly sourceGuards: Map<string, { incarnation: string; version: number }>;
   readonly qualifications: Map<string, G04bQualificationDocument>;
   readonly mappings: Map<string, FaceMappingSnapshot | null>;
+  /** Present only after a newly persisted recognition Event has been staged. */
+  recognitionEvent: G04bEventDocument | null;
   stage: G04bTransactionStage;
 }
 
@@ -211,6 +217,7 @@ export class G04bMongoPersistenceAdapter
   private readonly database: Db;
   private collections: G04bCollections | null = null;
   private readonly transactions = new WeakMap<object, TransactionState>();
+  private readonly g10cRecognitionExpectedImageCapture: G10cRecognitionExpectedImageCapture;
 
   public constructor(
     private readonly client: MongoClient,
@@ -221,6 +228,7 @@ export class G04bMongoPersistenceAdapter
     this.database = client.db(databaseName);
     registerG10bConcreteG04bMongoPersistenceAdapter(this);
     registerG10cConcreteG04bMongoPersistenceAdapter(this);
+    this.g10cRecognitionExpectedImageCapture = createG10cRecognitionExpectedImageCapture(this);
     bindG10aMongoCommandMonitoring(client);
   }
 
@@ -428,6 +436,7 @@ export class G04bMongoPersistenceAdapter
     const state = await this.begin(context);
     try {
       const result = await this.applyRecognitionResult(state, plan);
+      await this.prepareG10cRecognitionExpectedImage(context, state, result);
       await this.commit(context, state);
       return result;
     } catch (error: unknown) {
@@ -471,6 +480,23 @@ export class G04bMongoPersistenceAdapter
   /** Read-only snapshot lookup used after an unknown/competing commit. */
   public async readCanonicalSnapshot(sourceId: string, externalEventId: string): Promise<G04bCanonicalSnapshot | null> {
     const result = await this.readCanonicalSnapshotInternal(sourceId, externalEventId);
+    return result === null ? null : redactCanonical(result);
+  }
+
+  /**
+   * Internal G10c-only observation seam.  Its idempotency pair remains inside
+   * the adapter boundary; callers receive the same redacted coherent image as
+   * the ordinary canonical reader, with one bounded Mongo command budget.
+   */
+  public async readG10cCanonicalSnapshot(
+    sourceId: string,
+    externalEventId: string,
+    timeoutMs: number,
+  ): Promise<G04bCanonicalSnapshot | null> {
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_000) {
+      throw new G04bTechnicalError('G10c canonical timeout must be an integer from 1 to 2000ms');
+    }
+    const result = await this.readCanonicalSnapshotInternal(sourceId, externalEventId, timeoutMs);
     return result === null ? null : redactCanonical(result);
   }
 
@@ -588,34 +614,61 @@ export class G04bMongoPersistenceAdapter
     return result;
   }
 
-  private async readCanonicalSnapshotInternal(sourceId: string, externalEventId: string): Promise<{
+  private async readCanonicalSnapshotInternal(sourceId: string, externalEventId: string, timeoutMs?: number): Promise<{
     readonly event: G04bEventDocument;
     readonly qualification: QualificationSnapshot | null;
     readonly mapping: FaceMappingSnapshot | null;
     readonly guardVersions: Readonly<{ qr: number; face: number }>;
   } | null> {
     const session = this.client.startSession();
+    const deadline = timeoutMs === undefined ? null : performance.now() + timeoutMs;
+    const optionsForNextCommand = (): { readonly session: ClientSession; readonly timeoutMS?: number } => {
+      if (deadline === null) return { session };
+      const remaining = Math.floor(deadline - performance.now());
+      if (remaining < 1) throw new G04bTechnicalError('G10c canonical observation deadline elapsed before driver command');
+      return { session, timeoutMS: remaining };
+    };
+    const commitCurrentTransaction = async (): Promise<void> => {
+      if (deadline === null) await session.commitTransaction();
+      else await session.commitTransaction({ timeoutMS: optionsForNextCommand().timeoutMS! });
+    };
     try {
-      session.startTransaction({ readConcern: { level: 'snapshot' }, readPreference: 'primary' });
+      session.startTransaction({
+        readConcern: { level: 'snapshot' },
+        readPreference: 'primary',
+        writeConcern: { w: 'majority', j: true },
+      });
       const collections = this.requireCollections();
-      const event = await collections.events.findOne({ sourceId, externalEventId }, { session });
+      const event = await collections.events.findOne({ sourceId, externalEventId }, optionsForNextCommand());
       if (event === null) {
-        await session.commitTransaction();
+        await commitCurrentTransaction();
         return null;
       }
       const qualificationDocument = event.qualificationId === null
         ? null
-        : await collections.qualifications.findOne({ _id: event.qualificationId }, { session });
+        : await collections.qualifications.findOne({ _id: event.qualificationId }, optionsForNextCommand());
       const qualification = qualificationDocument === null ? null : toQualificationSnapshot(qualificationDocument);
       const mapping = event.qualificationId === null
         ? null
-        : mappingFromSlots(await collections.faceSlots.find({ qualificationId: { $eq: event.qualificationId, $type: 'string' } }, { session }).toArray(), event.qualificationId);
-      const metadata = await collections.metadata.findOne({ _id: 'system' }, { session });
+        : mappingFromSlots(await collections.faceSlots.find({ qualificationId: { $eq: event.qualificationId, $type: 'string' } }, optionsForNextCommand()).toArray(), event.qualificationId);
+      const metadata = await collections.metadata.findOne({ _id: 'system' }, optionsForNextCommand());
       if (metadata === null) throw new G04bTechnicalError('metadata system document is missing');
-      await session.commitTransaction();
+      await commitCurrentTransaction();
       return { event, qualification, mapping, guardVersions: { qr: metadata.qrGuardVersion, face: metadata.faceGuardVersion } };
     } catch (error: unknown) {
-      if (session.inTransaction()) await session.abortTransaction().catch(() => undefined);
+      // This observer never touches the retained original-write session. Its
+      // own transaction is terminated explicitly under the same remaining
+      // canonical-action deadline; no fresh timeout or unbounded raw abort is
+      // introduced on a failed observation.
+      if (session.inTransaction()) {
+        if (deadline === null) await session.abortTransaction().catch(() => undefined);
+        else {
+          try {
+            const remaining = optionsForNextCommand().timeoutMS!;
+            await session.abortTransaction({ timeoutMS: remaining });
+          } catch (_cleanupError: unknown) { /* original read failure wins */ }
+        }
+      }
       throw error;
     } finally {
       await session.endSession();
@@ -859,6 +912,7 @@ export class G04bMongoPersistenceAdapter
     await this.executeCrud(state, async (timeoutMs) => this.requireCollections().events.insertOne(
       document, this.transactionDriverOptions(state, timeoutMs),
     ));
+    state.recognitionEvent = document;
     await this.ensureSlotCount(state);
     return {
       status: 'COMMITTED',
@@ -1030,6 +1084,7 @@ export class G04bMongoPersistenceAdapter
       initialCommitInvoked: false,
       datasetEpoch: claims.epoch,
       sourceFacts: new Map(), sourceGuards: new Map(), qualifications: new Map(), mappings: new Map(), stage: 'begin',
+      recognitionEvent: null,
     };
     try {
       session.startTransaction(G04B_TRANSACTION_OPTIONS);
@@ -1040,6 +1095,54 @@ export class G04bMongoPersistenceAdapter
       await session.endSession();
       throw new G04bTransactionError(classifyG04bTransactionError(error, 'begin'), error);
     }
+  }
+
+  /**
+   * Capture the exact image produced by this recognition transaction before
+   * its first commit command.  The later G10c worker never receives a plan or
+   * caller-provided image; it can only observe this frozen transaction-local
+   * result through the opaque handoff.
+   */
+  private async prepareG10cRecognitionExpectedImage(
+    context: AccessScopeContext,
+    state: TransactionState,
+    result: G04bRecognitionResult,
+  ): Promise<void> {
+    if (state.g10bScopedPersistenceBinding === undefined || result.status !== 'COMMITTED') return;
+    const event = state.recognitionEvent;
+    if (event === null) throw new G04bTechnicalError('G10c recognition event image is missing before commit');
+    const qualificationId = event.qualificationId;
+    const qualificationDocument = qualificationId === null
+      ? null
+      : await this.executeCrud(state, async (timeoutMs) => this.requireCollections().qualifications.findOne(
+        { _id: qualificationId }, this.transactionDriverOptions(state, timeoutMs),
+      ));
+    const qualification = qualificationDocument === null ? null : toQualificationSnapshot(qualificationDocument);
+    const mapping = qualificationId === null
+      ? null
+      : mappingFromSlots(await this.executeCrud(state, async (timeoutMs) => this.requireCollections().faceSlots.find(
+        { qualificationId: { $eq: qualificationId, $type: 'string' } }, this.transactionDriverOptions(state, timeoutMs),
+      ).toArray()), qualificationId);
+    const metadata = await this.executeCrud(state, async (timeoutMs) => this.requireCollections().metadata.findOne(
+      { _id: 'system' }, this.transactionDriverOptions(state, timeoutMs),
+    ));
+    if (metadata === null) throw new G04bTechnicalError('metadata system document is missing');
+    prepareG10cRecognitionExpectedImage(this.g10cRecognitionExpectedImageCapture, context, {
+      sourceId: event.sourceId,
+      externalEventId: event.externalEventId,
+      event: {
+        direction: event.direction,
+        kind: event.kind,
+        outcome: event.outcome,
+        reasonCode: event.reasonCode,
+        receivedAtMs: event.receivedAt.getTime(),
+        qualificationId: event.qualificationId,
+        presenceTransition: event.presenceTransition,
+      },
+      qualification,
+      mapping,
+      guardVersions: { qr: metadata.qrGuardVersion, face: metadata.faceGuardVersion },
+    });
   }
 
   private async commit(context: AccessScopeContext, state: TransactionState): Promise<void> {

@@ -40,6 +40,7 @@ export type OperationBudgetBindingErrorCode =
   | 'INVALID_COMMAND'
   | 'INVALID_PRECOMMIT'
   | 'INVALID_UNKNOWN_COMMIT'
+  | 'CANONICAL_READ_NOT_DUE'
   | 'PRECOMMIT_ALREADY_STARTED'
   | 'UNKNOWN_COMMIT_ALREADY_STARTED'
   | 'OWNER_STALE'
@@ -448,6 +449,33 @@ export function assertOperationUnknownCommitConfirmationCurrent(
     const unknownCommit = requireUnknownCommit(state, confirmation);
     if (state.unknownCommit !== unknownCommit) {
       failClosed(state, 'INVALID_UNKNOWN_COMMIT', 'unknown commit confirmation is not current');
+    }
+  });
+}
+
+/**
+ * A read-only G10c phase probe.  It deliberately issues no confirmation
+ * permit: a canonical worker that arrives while ORIGINAL_COMMIT is due must
+ * not consume or settle that other command's slot/cadence.
+ */
+export function assertOperationUnknownCommitCanonicalReadDue(
+  binding: OperationBudgetBinding,
+  confirmation: OperationUnknownCommitConfirmation,
+): void {
+  const state = requireBinding(binding);
+  transition(state, () => {
+    const unknownCommit = requireUnknownCommit(state, confirmation);
+    if (state.unknownCommit !== unknownCommit) {
+      failClosed(state, 'INVALID_UNKNOWN_COMMIT', 'unknown commit confirmation is not current');
+    }
+    try {
+      state.ledger.assertNextUnknownConfirmationKind('CANONICAL_READ');
+    } catch (error: unknown) {
+      throw new OperationBudgetBindingError(
+        'CANONICAL_READ_NOT_DUE',
+        'canonical read is not the current prescribed confirmation action',
+        { cause: error },
+      );
     }
   });
 }

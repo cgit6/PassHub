@@ -141,6 +141,8 @@ export interface BudgetLedger {
   admitExecutionCommand(permit: RoundPermit, kind: ExecutionCommandKind): ExecutionCommandPermit;
   finishExecutionCommand(permit: ExecutionCommandPermit): void;
   startConfirmation(origin: ConfirmationOrigin): void;
+  /** Read-only exact-due probe; it allocates no confirmation permit. */
+  assertNextUnknownConfirmationKind(kind: ConfirmationKind): void;
   admitNextUnknownConfirmation(): ConfirmationPermit;
   settleStillUnknown(permit: ConfirmationPermit): void;
   settleConfirmed(permit: ConfirmationPermit): void;
@@ -485,6 +487,34 @@ export function createBudgetLedger(options: BudgetLedgerOptions): BudgetLedger {
       confirmationStartMs = nowMs;
       confirmationDeadlineMs = addDeadline(nowMs, config.confirmationMs);
       confirmationNextAtMs = nowMs;
+    }),
+
+    assertNextUnknownConfirmationKind: (expectedKind: ConfirmationKind): void => transition(() => {
+      if (expectedKind !== 'ORIGINAL_COMMIT' && expectedKind !== 'CANONICAL_READ') {
+        throw denial('CONFIRMATION_NOT_DUE', 'confirmation kind is invalid');
+      }
+      if (confirmationStartMs === null || confirmationDeadlineMs === null || confirmationNextAtMs === null) {
+        throw denial('CONFIRMATION_NOT_STARTED', 'confirmation has not started');
+      }
+      if (!unknownResultSeen) throw denial('CONFIRMATION_NOT_STARTED', 'unknown-result confirmation has not started');
+      if (confirmationConfirmed || confirmationResult === 'NO_EFFECT_CONFIRMED') {
+        throw denial('CONFIRMATION_ALREADY_CONFIRMED', 'confirmation is already confirmed');
+      }
+      if (confirmationCommand !== null) throw denial('CONFIRMATION_IN_FLIGHT', 'confirmation command is in flight');
+      if (nativeGroup !== null) throw denial('NATIVE_GROUP_ACTIVE', 'confirmation is blocked by an active native group');
+      if (confirmationSlotsRemaining < 1) throw denial('CONFIRMATION_SLOTS_EXHAUSTED', 'confirmation slots are exhausted');
+      const nowMs = readNow();
+      if (nowMs < confirmationNextAtMs) throw denial('CONFIRMATION_NOT_DUE', 'confirmation is not due yet');
+      const remainingMs = confirmationDeadlineMs - nowMs;
+      const actualKind: ConfirmationKind = confirmationAttempt % 2 === 0 ? 'ORIGINAL_COMMIT' : 'CANONICAL_READ';
+      if (actualKind !== expectedKind) throw denial('CONFIRMATION_NOT_DUE', 'a different confirmation command is due');
+      if (actualKind === 'ORIGINAL_COMMIT' && remainingMs < config.singleCommandMs) {
+        throw denial('CONFIRMATION_WINDOW', 'original confirmation requires two seconds remaining');
+      }
+      if (remainingMs < 1) throw denial('CONFIRMATION_WINDOW', 'confirmation window has passed');
+      if ((actualKind === 'ORIGINAL_COMMIT' ? config.singleCommandMs : Math.min(config.singleCommandMs, remainingMs)) < 1) {
+        throw denial('CONFIRMATION_WINDOW', 'confirmation timeout would be zero');
+      }
     }),
 
     admitNextUnknownConfirmation: (): ConfirmationPermit => transition(() => {

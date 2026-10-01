@@ -1,10 +1,15 @@
 import type { ClientSession } from 'mongodb';
 
-import type { AccessScopeContext } from '../../../access/ports/index.js';
+import type {
+  AccessScopeContext,
+  FaceMappingSnapshot,
+  QualificationSnapshot,
+} from '../../../access/ports/index.js';
 import type { G10bScopedPersistenceBinding } from './g10b-scoped-persistence-sidecar.js';
 import { readAccessScopeContextClaims } from '../../../shared/access-scope-context.js';
 import {
   admitOperationUnknownCommitConfirmationAction,
+  assertOperationUnknownCommitCanonicalReadDue,
   assertOperationUnknownCommitConfirmationCurrent,
   settleOperationUnknownCommitConfirmationAction,
   startOperationUnknownCommitConfirmation,
@@ -102,6 +107,69 @@ export interface G10cPostCommitUnknownHandoffBundle {
   readonly owner: G10cPostCommitUnknownHandoffOwner;
 }
 
+/**
+ * The immutable result image produced by the original recognition write.
+ * It is deliberately installed by the concrete adapter before commit and is
+ * never accepted from a canonical worker.  Mongo-generated Event identity and
+ * recordedAt are not predictable before the original commit, so the trusted
+ * idempotency pair stays private to this material.
+ */
+export interface G10cRecognitionExpectedImage {
+  readonly sourceId: string;
+  readonly externalEventId: string;
+  readonly event: Readonly<{
+    direction: 'ENTRY' | 'EXIT';
+    kind: 'QR_SCANNED' | 'FACE_MATCHED' | 'FACE_UNKNOWN';
+    outcome: 'ACCEPTED' | 'REJECTED';
+    reasonCode: string;
+    receivedAtMs: number;
+    qualificationId: string | null;
+    presenceTransition: Readonly<{
+      from: 'NOT_ENTERED' | 'INSIDE' | 'EXITED';
+      to: 'NOT_ENTERED' | 'INSIDE' | 'EXITED';
+    }> | null;
+  }>;
+  readonly qualification: QualificationSnapshot | null;
+  readonly mapping: FaceMappingSnapshot | null;
+  readonly guardVersions: Readonly<{ qr: number; face: number }>;
+}
+
+declare const g10cRecognitionImageCaptureBrand: unique symbol;
+
+/** Adapter-private capability; ordinary recovery workers cannot prepare data. */
+export interface G10cRecognitionExpectedImageCapture {
+  readonly [g10cRecognitionImageCaptureBrand]: never;
+}
+
+/**
+ * Internal G10c composition seam: validate that a confirmation worker owns
+ * this exact taken handoff before it can admit a canonical-read action.  It
+ * intentionally returns no state, session, or persistence authority.
+ */
+export function assertG10cPostCommitUnknownHandoffOwnership(
+  owner: G10cPostCommitUnknownHandoffOwner,
+  handoff: G10cPostCommitUnknownHandoff,
+): void {
+  const sink = ownerSinks.get(owner as object);
+  if (sink === undefined) throw new TypeError('G10c post-commit unknown handoff owner is foreign');
+  requireTakenHandoff(sink, handoff);
+}
+
+/**
+ * Private, opaque phase probe for the canonical-read worker.  It validates
+ * the original owner and asks the ledger whether CANONICAL_READ (not merely
+ * some next action) is due without allocating a permit.
+ */
+export function assertG10cPostCommitUnknownCanonicalReadDue(
+  owner: G10cPostCommitUnknownHandoffOwner,
+  handoff: G10cPostCommitUnknownHandoff,
+): void {
+  const sink = ownerSinks.get(owner as object);
+  if (sink === undefined) throw new TypeError('G10c post-commit unknown handoff owner is foreign');
+  const state = requireTakenHandoff(sink, handoff);
+  assertOperationUnknownCommitCanonicalReadDue(state.binding, state.confirmation);
+}
+
 interface HandoffState {
   readonly adapter: G04bMongoPersistenceAdapter;
   readonly scope: AccessScopeContext;
@@ -112,6 +180,7 @@ interface HandoffState {
   status: 'RETAINED' | 'TAKEN';
   originalCommitTerminatorClaimed: boolean;
   confirmationActionAdmitted: boolean;
+  readonly expectedImage: G10cRecognitionExpectedImage | null;
 }
 
 interface ConfirmationActionState {
@@ -127,6 +196,9 @@ const ownerSinks = new WeakMap<object, G10cPostCommitUnknownHandoffSink>();
 const handoffs = new WeakMap<object, HandoffState>();
 const handedOffContexts = new WeakMap<object, WeakSet<object>>();
 const confirmationActions = new WeakMap<object, ConfirmationActionState>();
+const preparedExpectedImages = new WeakMap<object, WeakMap<object, G10cRecognitionExpectedImage>>();
+const expectedImageCaptures = new WeakMap<object, G04bMongoPersistenceAdapter>();
+const adapterExpectedImageCaptures = new WeakMap<object, G10cRecognitionExpectedImageCapture>();
 
 /** Called only by the concrete G04b adapter constructor. */
 export function registerG10cConcreteG04bMongoPersistenceAdapter(
@@ -157,6 +229,46 @@ export function attachG10cPostCommitUnknownHandoffSink(
     throw new TypeError('G10c post-commit unknown handoff sink is already attached');
   }
   attachedSinks.set(adapter as object, sink);
+}
+
+/**
+ * Concrete adapter-only preparation seam.  The original transaction installs
+ * its own deterministic result image before the first commit command.  The
+ * scope key prevents a recovery worker from supplying a different image after
+ * the outcome becomes unknown.
+ */
+export function createG10cRecognitionExpectedImageCapture(
+  adapter: G04bMongoPersistenceAdapter,
+): G10cRecognitionExpectedImageCapture {
+  if (!concreteAdapters.has(adapter as object)) {
+    throw new TypeError('G10c expected image requires a concrete G04b Mongo persistence adapter');
+  }
+  if (adapterExpectedImageCaptures.has(adapter as object)) {
+    throw new TypeError('G10c expected image capture is already bound to this adapter');
+  }
+  const capture = Object.freeze({}) as G10cRecognitionExpectedImageCapture;
+  expectedImageCaptures.set(capture as object, adapter);
+  adapterExpectedImageCaptures.set(adapter as object, capture);
+  return capture;
+}
+
+export function prepareG10cRecognitionExpectedImage(
+  capture: G10cRecognitionExpectedImageCapture,
+  scope: AccessScopeContext,
+  image: G10cRecognitionExpectedImage,
+): void {
+  const adapter = expectedImageCaptures.get(capture as object);
+  if (adapter === undefined) throw new TypeError('G10c expected image capture capability is foreign');
+  const claims = readAccessScopeContextClaims(scope);
+  if (claims === null || claims.owner.length === 0) throw new TypeError('G10c expected image scope is untrusted');
+  assertExpectedImage(image);
+  let byScope = preparedExpectedImages.get(adapter as object);
+  if (byScope === undefined) {
+    byScope = new WeakMap<object, G10cRecognitionExpectedImage>();
+    preparedExpectedImages.set(adapter as object, byScope);
+  }
+  if (byScope.has(scope as object)) throw new TypeError('G10c expected image is already prepared for this scope');
+  byScope.set(scope as object, freezeExpectedImage(image));
 }
 
 /**
@@ -194,6 +306,7 @@ export function handoffG10cPostCommitUnknown(
   }
   contexts.add(scope as object);
   const handoff = Object.freeze({}) as G10cPostCommitUnknownHandoff;
+  const expectedImage = preparedExpectedImages.get(adapter as object)?.get(scope as object) ?? null;
   handoffs.set(handoff as object, {
     adapter,
     scope,
@@ -204,8 +317,49 @@ export function handoffG10cPostCommitUnknown(
     status: 'RETAINED',
     originalCommitTerminatorClaimed: false,
     confirmationActionAdmitted: false,
+    expectedImage,
   });
   sink.retain(handoff);
+}
+
+/** Refuse to spend a confirmation slot when the original write has no image. */
+export function assertG10cPostCommitUnknownCanonicalMaterial(
+  owner: G10cPostCommitUnknownHandoffOwner,
+  handoff: G10cPostCommitUnknownHandoff,
+): void {
+  const sink = ownerSinks.get(owner as object);
+  if (sink === undefined) throw new TypeError('G10c post-commit unknown handoff owner is foreign');
+  if (requireTakenHandoff(sink, handoff).expectedImage === null) {
+    throw new TypeError('G10c canonical confirmation material is unavailable');
+  }
+}
+
+/**
+ * The only path that performs the canonical Mongo observation.  It keeps the
+ * adapter, private idempotency anchor and expected image together in the
+ * taken handoff; callers never inject a reader or result object.
+ */
+export async function confirmG10cPostCommitUnknownCanonicalResult(
+  owner: G10cPostCommitUnknownHandoffOwner,
+  handoff: G10cPostCommitUnknownHandoff,
+  timeoutMs: number,
+): Promise<'MATCHED' | 'INCONCLUSIVE'> {
+  const sink = ownerSinks.get(owner as object);
+  if (sink === undefined) throw new TypeError('G10c post-commit unknown handoff owner is foreign');
+  const state = requireTakenHandoff(sink, handoff);
+  if (state.expectedImage === null) throw new TypeError('G10c canonical confirmation material is unavailable');
+  try {
+    const snapshot = await state.adapter.readG10cCanonicalSnapshot(
+      state.expectedImage.sourceId,
+      state.expectedImage.externalEventId,
+      timeoutMs,
+    );
+    return snapshot !== null && matchesRecognitionExpectedImage(snapshot, state.expectedImage)
+      ? 'MATCHED'
+      : 'INCONCLUSIVE';
+  } catch (_error: unknown) {
+    return 'INCONCLUSIVE';
+  }
 }
 
 export function createG10cPostCommitUnknownHandoffBundle(): G10cPostCommitUnknownHandoffBundle {
@@ -380,4 +534,106 @@ function requireConfirmationAction(
     throw new TypeError('G10c post-commit unknown confirmation action is foreign or stale');
   }
   return state;
+}
+
+function assertExpectedImage(image: G10cRecognitionExpectedImage): void {
+  if (!isPlainRecord(image) || !nonEmptyString(image.sourceId) || !nonEmptyString(image.externalEventId)
+    || !isPlainRecord(image.event) || !nonEmptyString(image.event.reasonCode)
+    || !Number.isSafeInteger(image.event.receivedAtMs)
+    || !isPlainRecord(image.guardVersions)
+    || !validVersion(image.guardVersions.qr) || !validVersion(image.guardVersions.face)) {
+    throw new TypeError('G10c recognition expected image is invalid');
+  }
+}
+
+function freezeExpectedImage(image: G10cRecognitionExpectedImage): G10cRecognitionExpectedImage {
+  return Object.freeze({
+    sourceId: image.sourceId,
+    externalEventId: image.externalEventId,
+    event: Object.freeze({
+      direction: image.event.direction,
+      kind: image.event.kind,
+      outcome: image.event.outcome,
+      reasonCode: image.event.reasonCode,
+      receivedAtMs: image.event.receivedAtMs,
+      qualificationId: image.event.qualificationId,
+      presenceTransition: image.event.presenceTransition === null ? null : Object.freeze({
+        from: image.event.presenceTransition.from,
+        to: image.event.presenceTransition.to,
+      }),
+    }),
+    qualification: image.qualification === null ? null : Object.freeze({
+      qualificationId: image.qualification.qualificationId,
+      incarnation: image.qualification.incarnation,
+      version: image.qualification.version,
+      state: Object.freeze({ ...image.qualification.state }),
+    }),
+    mapping: image.mapping === null ? null : Object.freeze({ ...image.mapping }),
+    guardVersions: Object.freeze({ qr: image.guardVersions.qr, face: image.guardVersions.face }),
+  });
+}
+
+function matchesRecognitionExpectedImage(
+  snapshot: import('../g04b-persistence-adapter.js').G04bCanonicalSnapshot,
+  expected: G10cRecognitionExpectedImage,
+): boolean {
+  const event = snapshot.event;
+  return event.sourceId === expected.sourceId
+    && event.direction === expected.event.direction
+    && event.kind === expected.event.kind
+    && event.outcome === expected.event.outcome
+    && event.reasonCode === expected.event.reasonCode
+    && event.receivedAtMs === expected.event.receivedAtMs
+    && event.qualificationId === expected.event.qualificationId
+    && sameTransition(event.presenceTransition, expected.event.presenceTransition)
+    && sameQualification(snapshot.qualification, expected.qualification)
+    && sameMapping(snapshot.mapping, expected.mapping)
+    && snapshot.guardVersions.qr === expected.guardVersions.qr
+    && snapshot.guardVersions.face === expected.guardVersions.face;
+}
+
+function sameQualification(left: QualificationSnapshot | null, right: QualificationSnapshot | null): boolean {
+  return left === null || right === null
+    ? left === right
+    : left.qualificationId === right.qualificationId
+      && left.incarnation === right.incarnation
+      && left.version === right.version
+      && left.state.validFromMs === right.state.validFromMs
+      && left.state.validUntilMs === right.state.validUntilMs
+      && left.state.presence === right.state.presence
+      && left.state.enteredAtMs === right.state.enteredAtMs
+      && left.state.exitedAtMs === right.state.exitedAtMs
+      && left.state.revokedAtMs === right.state.revokedAtMs
+      && left.state.revocationReason === right.state.revocationReason
+      && left.state.expiredTerminalAtMs === right.state.expiredTerminalAtMs;
+}
+
+function sameMapping(left: FaceMappingSnapshot | null, right: FaceMappingSnapshot | null): boolean {
+  return left === null || right === null
+    ? left === right
+    : left.qualificationId === right.qualificationId
+      && left.qualificationIncarnation === right.qualificationIncarnation
+      && left.mappingIncarnation === right.mappingIncarnation
+      && left.version === right.version;
+}
+
+function sameTransition(
+  left: Readonly<{ from: 'NOT_ENTERED' | 'INSIDE' | 'EXITED'; to: 'NOT_ENTERED' | 'INSIDE' | 'EXITED' }> | null,
+  right: G10cRecognitionExpectedImage['event']['presenceTransition'],
+): boolean {
+  return left === null || right === null
+    ? left === right
+    : left.from === right.from && left.to === right.to;
+}
+
+function validVersion(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && Object.getPrototypeOf(value) === Object.prototype;
 }
