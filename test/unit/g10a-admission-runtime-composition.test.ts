@@ -49,6 +49,7 @@ function makeComposition(
   workOverride?: Partial<AdmissionWorkPort>,
   validateOverride?: (input: AdmissionValidationInput) => Promise<AdmissionValidationResult>,
   onManagementContext?: (context: Parameters<AdmissionWorkPort['management']>[1]) => void,
+  managementRateLimit = 10,
 ) {
   const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
   const handoff = createAdmissionWorkHandoffBundle();
@@ -74,6 +75,17 @@ function makeComposition(
     if (input.routeId === 'QUALIFICATION_LIST') {
       return Object.freeze({ kind: 'QUERY', accountId: 'viewer-1', workInput: handoff.issuer.issue(input.routeId) });
     }
+    if (input.routeId === 'AUTH_LOGIN') {
+      return Object.freeze({ kind: 'LOGIN', workInput: handoff.issuer.issue(input.routeId) });
+    }
+    if (input.routeId === 'RECOGNITION_ATTEMPT') {
+      return Object.freeze({
+        kind: 'RECOGNITION',
+        registryKey: capabilities.issueKey('source-1', 'event-1'),
+        comparisonArtifact: capabilities.issueComparisonArtifact(Object.freeze({ digest: 'same' })),
+        workInput: handoff.issuer.issue(input.routeId),
+      });
+    }
     return Object.freeze({ kind: 'REJECTED', response: plans.technical.issue('INVALID_REQUEST') });
   };
   const validate = validateOverride === undefined
@@ -93,7 +105,7 @@ function makeComposition(
     login: { perKey: 10, global: 10, maxKeys: 2 },
     query: { perKey: 10, global: 10 },
     recognition: { perKey: 10, global: 10 },
-    management: { perKey: 10, global: 10 },
+    management: { perKey: managementRateLimit, global: managementRateLimit },
   });
   const defaults: AdmissionWorkPort = {
     login: () => Promise.resolve(plans.business.issue(200, { ok: true })),
@@ -102,7 +114,11 @@ function makeComposition(
       onManagementContext?.(context);
       return Promise.resolve({ disposition: 'KNOWN_NO_EFFECT', response: plans.technical.issue('INVALID_REQUEST') });
     },
-    recognition: () => Promise.resolve({ disposition: 'KNOWN_NO_EFFECT', response: plans.technical.issue('INVALID_REQUEST') }),
+    recognition: () => Promise.resolve({
+      disposition: 'BUSINESS_RESULT_PERSISTED',
+      originalResponse: plans.business.issue(200, { ok: true }),
+      replayResponse: plans.business.issue(200, { ok: true }),
+    }),
   };
   const admission = {
     currentDatasetEpoch: EPOCH,
@@ -152,6 +168,24 @@ function invokeQuery(handler: ReturnType<typeof createG10aAdmissionRuntimeCompos
     (() => undefined) as never,
   );
   return response;
+}
+
+function invokeLogin(handler: ReturnType<typeof createG10aAdmissionRuntimeComposition>['handler']): void {
+  handler(
+    Object.freeze({ method: 'POST', body: null, query: [], headers: { datasetEpoch: EPOCH } }),
+    { originalUrl: '/auth/login', url: '/auth/login', socket: { remoteAddress: '127.0.0.1' } } as never,
+    new FakeResponse() as never,
+    (() => undefined) as never,
+  );
+}
+
+function invokeRecognition(handler: ReturnType<typeof createG10aAdmissionRuntimeComposition>['handler']): void {
+  handler(
+    Object.freeze({ method: 'POST', body: null, query: [], headers: { datasetEpoch: EPOCH } }),
+    { originalUrl: '/recognition/attempts', url: '/recognition/attempts', socket: { remoteAddress: '127.0.0.1' } } as never,
+    new FakeResponse() as never,
+    (() => undefined) as never,
+  );
 }
 
 describe('G10a A4 admission runtime composition', () => {
@@ -217,8 +251,40 @@ describe('G10a A4 admission runtime composition', () => {
     }
   });
 
-  test('settles the one G08 lifecycle log and issued lease when the writer throws synchronously', async () => {
+  test('settles the one G08 lifecycle log and issued lease when the writer rejects asynchronously', async () => {
     const parent = await mkdtemp(join(tmpdir(), 'passhub-g10a-admission-step-throw-'));
+    const owner = createG10aRuntimeOwner({
+      epoch: EPOCH, run: RUN,
+      logDirectory: join(parent, 'logs'), controlDirectory: join(parent, 'control'),
+      controlSocketPath: join(parent, 'control', RUNTIME_CONTROL_SOCKET_FILE_NAME),
+      monotonicClock: { nowMs: () => performance.now() }, awaitObservation: () => undefined,
+    });
+    try {
+      const runtime = await owner.start();
+      const fixture = makeComposition({ management: () => Promise.reject(new Error('opaque asynchronous failure')) });
+      const composed = createG10aAdmissionRuntimeComposition({
+        epoch: EPOCH, run: RUN, monotonicClock: { nowMs: () => performance.now() }, awaitObservation: () => undefined,
+        admission: fixture.admission, runtime,
+      });
+      invoke(composed.handler);
+      await flush();
+      await runtime.runtimeLogSink.flush();
+      expect(runtime.control.snapshot().issuedPersistence).toBe(0);
+      const records = (await readFile(join(parent, 'logs', 'runtime.log'), 'utf8'))
+        .split('\n').filter((line) => line.length > 0)
+        .map((line) => validateRuntimeLogRecord(JSON.parse(line) as unknown));
+      expect(records.map((record) => record.code)).toEqual([
+        'REQUEST_ACCEPTED', 'OPERATION_REGISTERED',
+        'BUSINESS_STEP_REGISTERED', 'BUSINESS_STEP_ISSUED', 'BUSINESS_STEP_SETTLED',
+      ]);
+    } finally {
+      await owner.close().catch(() => undefined);
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  test('settles the one G08 lifecycle log and issued lease when the writer throws synchronously', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'passhub-g10a-admission-step-sync-throw-'));
     const owner = createG10aRuntimeOwner({
       epoch: EPOCH, run: RUN,
       logDirectory: join(parent, 'logs'), controlDirectory: join(parent, 'control'),
@@ -243,6 +309,138 @@ describe('G10a A4 admission runtime composition', () => {
         'REQUEST_ACCEPTED', 'OPERATION_REGISTERED',
         'BUSINESS_STEP_REGISTERED', 'BUSINESS_STEP_ISSUED', 'BUSINESS_STEP_SETTLED',
       ]);
+    } finally {
+      await owner.close().catch(() => undefined);
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  test('only logs the first original when a second independent writer is rate-rejected before G08', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'passhub-g10a-admission-rate-'));
+    const owner = createG10aRuntimeOwner({
+      epoch: EPOCH, run: RUN,
+      logDirectory: join(parent, 'logs'), controlDirectory: join(parent, 'control'),
+      controlSocketPath: join(parent, 'control', RUNTIME_CONTROL_SOCKET_FILE_NAME),
+      monotonicClock: { nowMs: () => performance.now() }, awaitObservation: () => undefined,
+    });
+    try {
+      const runtime = await owner.start();
+      let managementCalls = 0;
+      const fixture = makeComposition({ management: () => {
+        managementCalls += 1;
+        return Promise.resolve({ disposition: 'KNOWN_NO_EFFECT', response: fixture.plans.technical.issue('INVALID_REQUEST') });
+      } }, undefined, undefined, 1);
+      const composed = createG10aAdmissionRuntimeComposition({
+        epoch: EPOCH, run: RUN, monotonicClock: { nowMs: () => performance.now() }, awaitObservation: () => undefined,
+        admission: fixture.admission, runtime,
+      });
+      invoke(composed.handler);
+      await flush();
+      invoke(composed.handler);
+      await flush();
+      await runtime.runtimeLogSink.flush();
+      expect(runtime.control.snapshot().issuedPersistence).toBe(0);
+      const records = (await readFile(join(parent, 'logs', 'runtime.log'), 'utf8'))
+        .split('\n').filter((line) => line.length > 0)
+        .map((line) => validateRuntimeLogRecord(JSON.parse(line) as unknown));
+      const registrations = records.filter((record) => record.code === 'OPERATION_REGISTERED');
+      const steps = records.filter((record) => record.code.startsWith('BUSINESS_STEP_'));
+      expect(registrations).toHaveLength(2);
+      expect(registrations[0]?.operationUUID).not.toBe(registrations[1]?.operationUUID);
+      expect(managementCalls).toBe(1);
+      expect(steps.map((record) => record.code)).toEqual([
+        'BUSINESS_STEP_REGISTERED', 'BUSINESS_STEP_ISSUED', 'BUSINESS_STEP_SETTLED',
+      ]);
+      expect(new Set(steps.map((record) => record.operationUUID))).toEqual(new Set([registrations[0]?.operationUUID]));
+    } finally {
+      await owner.close().catch(() => undefined);
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  test('does not create business-step logs in a legacy composition without an owner runtime', async () => {
+    const lines: string[] = [];
+    const sink = new RuntimeLogSink({ write: async (line) => { lines.push(line); } });
+    let managementCalls = 0;
+    const fixture = makeComposition({ management: () => {
+      managementCalls += 1;
+      return Promise.resolve({ disposition: 'KNOWN_NO_EFFECT', response: fixture.plans.technical.issue('INVALID_REQUEST') });
+    } });
+    const composed = createG10aAdmissionRuntimeComposition({
+      epoch: EPOCH, run: RUN, monotonicClock: { nowMs: () => 0 }, awaitObservation: () => undefined,
+      admission: fixture.admission, runtimeLogSink: sink,
+    });
+    invoke(composed.handler);
+    await flush();
+    await sink.flush();
+    expect(managementCalls).toBe(1);
+    expect(lines).toEqual([]);
+  });
+
+  test('does not create business-step logs for query or login paths', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'passhub-g10a-admission-read-'));
+    const owner = createG10aRuntimeOwner({
+      epoch: EPOCH, run: RUN,
+      logDirectory: join(parent, 'logs'), controlDirectory: join(parent, 'control'),
+      controlSocketPath: join(parent, 'control', RUNTIME_CONTROL_SOCKET_FILE_NAME),
+      monotonicClock: { nowMs: () => performance.now() }, awaitObservation: () => undefined,
+    });
+    try {
+      const runtime = await owner.start();
+      let queryCalls = 0;
+      let loginCalls = 0;
+      const fixture = makeComposition({
+        query: () => { queryCalls += 1; return Promise.resolve(fixture.plans.business.issue(200, { query: true })); },
+        login: () => { loginCalls += 1; return Promise.resolve(fixture.plans.business.issue(200, { login: true })); },
+      });
+      const composed = createG10aAdmissionRuntimeComposition({
+        epoch: EPOCH, run: RUN, monotonicClock: { nowMs: () => performance.now() }, awaitObservation: () => undefined,
+        admission: fixture.admission, runtime,
+      });
+      invokeQuery(composed.handler);
+      invokeLogin(composed.handler);
+      await flush();
+      await runtime.runtimeLogSink.flush();
+      expect(queryCalls).toBe(1);
+      expect(loginCalls).toBe(1);
+      const records = (await readFile(join(parent, 'logs', 'runtime.log'), 'utf8'))
+        .split('\n').filter((line) => line.length > 0)
+        .map((line) => validateRuntimeLogRecord(JSON.parse(line) as unknown));
+      expect(records.map((record) => record.code)).toEqual(['REQUEST_ACCEPTED', 'REQUEST_ACCEPTED']);
+      expect(records.map((record) => record.route)).toEqual(['QUERY', 'LOGIN']);
+      expect(records.every((record) => !record.code.startsWith('BUSINESS_STEP_'))).toBe(true);
+    } finally {
+      await owner.close().catch(() => undefined);
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  test('records one complete lifecycle around an original recognition G08 promise', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'passhub-g10a-admission-recognition-'));
+    const owner = createG10aRuntimeOwner({
+      epoch: EPOCH, run: RUN,
+      logDirectory: join(parent, 'logs'), controlDirectory: join(parent, 'control'),
+      controlSocketPath: join(parent, 'control', RUNTIME_CONTROL_SOCKET_FILE_NAME),
+      monotonicClock: { nowMs: () => performance.now() }, awaitObservation: () => undefined,
+    });
+    try {
+      const runtime = await owner.start();
+      const fixture = makeComposition();
+      const composed = createG10aAdmissionRuntimeComposition({
+        epoch: EPOCH, run: RUN, monotonicClock: { nowMs: () => performance.now() }, awaitObservation: () => undefined,
+        admission: fixture.admission, runtime,
+      });
+      invokeRecognition(composed.handler);
+      await flush();
+      await runtime.runtimeLogSink.flush();
+      const records = (await readFile(join(parent, 'logs', 'runtime.log'), 'utf8'))
+        .split('\n').filter((line) => line.length > 0)
+        .map((line) => validateRuntimeLogRecord(JSON.parse(line) as unknown));
+      expect(records.map((record) => record.code)).toEqual([
+        'REQUEST_ACCEPTED', 'OPERATION_REGISTERED',
+        'BUSINESS_STEP_REGISTERED', 'BUSINESS_STEP_ISSUED', 'BUSINESS_STEP_SETTLED',
+      ]);
+      expect(records.filter((record) => record.code.startsWith('BUSINESS_STEP_')).every((record) => record.route === 'RECOGNITION')).toBe(true);
     } finally {
       await owner.close().catch(() => undefined);
       await rm(parent, { recursive: true, force: true });
