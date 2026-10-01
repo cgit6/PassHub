@@ -16,6 +16,8 @@ import {
   type AdmissionWorkPort,
 } from '../../src/composition/internal/index.js';
 import { createG10aAdmissionRuntimeComposition } from '../../src/composition/internal/g10a-admission-runtime-composition.js';
+import { createG10aOperationIdentityBinding } from '../../src/composition/internal/g10a-operation-identity-binding.js';
+import { createG10aIngressIdentityHandler } from '../../src/composition/internal/g10a-ingress-identity.js';
 import { createG10aRuntimeOwner } from '../../src/composition/internal/g10a-runtime-owner.js';
 import { RUNTIME_CONTROL_SOCKET_FILE_NAME } from '../../src/runtime/internal/runtime-control-socket-path.js';
 import { dispatchRuntimeControlProtocol, type RuntimeControlProtocolFrame } from '../../src/runtime/internal/runtime-control-protocol.js';
@@ -227,6 +229,86 @@ describe('G10a A4 admission runtime composition', () => {
     });
   });
 
+  test('writes one attributable OPERATION_BLOCKED only when the real handler cleanup lifecycle becomes blocked', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'passhub-g10a-admission-blocked-'));
+    const owner = createG10aRuntimeOwner({
+      epoch: EPOCH, run: RUN,
+      logDirectory: join(parent, 'logs'), controlDirectory: join(parent, 'control'),
+      controlSocketPath: join(parent, 'control', RUNTIME_CONTROL_SOCKET_FILE_NAME),
+      monotonicClock: { nowMs: () => performance.now() }, awaitObservation: () => undefined,
+    });
+    try {
+      const backing = createAdmissionResourceLedger();
+      const resources = Object.freeze({
+        ...backing,
+        releaseOrigin: () => { throw new Error('origin cleanup failed'); },
+      }) as AdmissionResourceLedger;
+      const fixture = makeComposition(undefined, undefined, undefined, 10, false, resources);
+      const composed = createG10aAdmissionRuntimeComposition({
+        epoch: EPOCH, run: RUN, monotonicClock: { nowMs: () => performance.now() }, awaitObservation: () => undefined,
+        admission: fixture.admission, runtime: await owner.start(),
+      });
+      invoke(composed.handler);
+      await flush(); await flush(); await flush();
+      await owner.start().then((runtime) => runtime.runtimeLogSink.flush());
+      const records = await readRuntimeRecords(parent);
+      const blocked = records.filter((record) => record.code === 'OPERATION_BLOCKED');
+      expect(blocked).toHaveLength(1);
+      expect(blocked[0]).toMatchObject({
+        kind: 'RUNTIME', phase: 'ADMISSION', route: 'MANAGEMENT_CREATE',
+        requestUUID: expect.stringMatching(/^[0-9a-f-]{36}$/u),
+        operationUUID: expect.stringMatching(/^[0-9a-f-]{36}$/u),
+        ownerRef: expect.stringMatching(/^[0-9a-f-]{36}$/u),
+        datasetEpoch: EPOCH, processRunId: RUN,
+        round: null, group: null, budgetRemainingMs: null, budgetRemainingUnits: null,
+        commandName: null, driverRequestId: null, requestControlId: null, controlId: null, revision: null,
+      });
+      expect(records.filter((record) => record.code === 'OPERATION_REGISTERED')).toHaveLength(1);
+      await expect(statusSnapshot(composed.control)).resolves.toMatchObject({ writers: { blocked: 1 } });
+    } finally {
+      await owner.close().catch(() => undefined);
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  test('makes the private blocked producer receipt-exact and idempotent', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'passhub-g10a-operation-blocked-bridge-'));
+    const owner = createG10aRuntimeOwner({
+      epoch: EPOCH, run: RUN,
+      logDirectory: join(parent, 'logs'), controlDirectory: join(parent, 'control'),
+      controlSocketPath: join(parent, 'control', RUNTIME_CONTROL_SOCKET_FILE_NAME),
+      monotonicClock: { nowMs: () => performance.now() }, awaitObservation: () => undefined,
+    });
+    try {
+      const runtime = await owner.start();
+      let capturedAccepted: Parameters<ReturnType<typeof createG10aIngressIdentityHandler>>[0] | undefined;
+      const ingress = createG10aIngressIdentityHandler({
+        runtime,
+        handler: (accepted) => { capturedAccepted = accepted; },
+      });
+      const accepted = Object.freeze({ method: 'POST' as const, body: null, query: [], headers: { datasetEpoch: EPOCH } });
+      ingress(accepted, { originalUrl: '/qualifications', url: '/qualifications' } as never, new FakeResponse() as never, (() => undefined) as never);
+      if (capturedAccepted === undefined) throw new Error('expected captured ingress');
+      const receipt = Object.freeze({ operationId: '44444444-4444-4444-8444-444444444444', receivedAtMs: 0, registeredAtMonotonicMs: 0, sequence: 0n });
+      const foreignReceipt = Object.freeze({ ...receipt });
+      const binding = createG10aOperationIdentityBinding(runtime);
+      binding.blocked(receipt); // Unregistered lifecycle facts cannot fabricate a log.
+      binding.bind(capturedAccepted, receipt);
+      binding.blocked(foreignReceipt); // Same operationId but not the coordinator receipt.
+      binding.blocked(receipt);
+      binding.blocked(receipt); // Repeated callbacks cannot duplicate the event.
+      binding.settled(receipt);
+      binding.blocked(receipt); // Settled operations retain no attribution state.
+      await runtime.runtimeLogSink.flush();
+      expect((await readRuntimeRecords(parent)).map((record) => record.code)).toEqual([
+        'REQUEST_ACCEPTED', 'OPERATION_REGISTERED', 'OPERATION_BLOCKED',
+      ]);
+    } finally {
+      await owner.close().catch(() => undefined);
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
   test('STATUS reads the real coordinator lifecycle counters through the nominal internal source', async () => {
     const first = deferred<{ readonly disposition: 'KNOWN_NO_EFFECT'; readonly response: unknown }>();
     const second = deferred<{ readonly disposition: 'KNOWN_NO_EFFECT'; readonly response: unknown }>();
@@ -412,6 +494,7 @@ describe('G10a A4 admission runtime composition', () => {
         .split('\n').filter((line) => line.length > 0)
         .map((line) => validateRuntimeLogRecord(JSON.parse(line) as unknown));
       const registrations = records.filter((record) => record.code === 'OPERATION_REGISTERED');
+      expect(records.filter((record) => record.code === 'OPERATION_BLOCKED')).toHaveLength(0);
       const steps = records.filter((record) => record.code.startsWith('BUSINESS_STEP_'));
       expect(registrations).toHaveLength(2);
       expect(registrations[0]?.operationUUID).not.toBe(registrations[1]?.operationUUID);
@@ -713,3 +796,9 @@ describe('G10a A4 admission runtime composition', () => {
     expect(rateLimited.composition.control.snapshot().activeQueryReads).toBe(0);
   });
 });
+
+async function readRuntimeRecords(parent: string) {
+  return (await readFile(join(parent, 'logs', 'runtime.log'), 'utf8'))
+    .split('\n').filter((line) => line.length > 0)
+    .map((line) => validateRuntimeLogRecord(JSON.parse(line) as unknown));
+}

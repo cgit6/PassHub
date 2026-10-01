@@ -354,6 +354,12 @@ export function createG07bAdmissionHandler(
   const bindOperationIdentity = operationIdentityBinding === undefined
     ? undefined
     : captureConstructionMethod(operationIdentityBinding, 'bind', 'G10a operation identity binding').bind(operationIdentityBinding) as G10aOperationIdentityBinding['bind'];
+  const blockOperationIdentity = operationIdentityBinding === undefined
+    ? undefined
+    : captureConstructionMethod(operationIdentityBinding, 'blocked', 'G10a operation identity binding').bind(operationIdentityBinding) as G10aOperationIdentityBinding['blocked'];
+  const settleOperationIdentity = operationIdentityBinding === undefined
+    ? undefined
+    : captureConstructionMethod(operationIdentityBinding, 'settled', 'G10a operation identity binding').bind(operationIdentityBinding) as G10aOperationIdentityBinding['settled'];
   const businessStepLogBinding = options.businessStepLogBinding;
   if (businessStepLogBinding !== undefined) assertG10aBusinessStepLogBinding(businessStepLogBinding);
   const beginBusinessStepLog = businessStepLogBinding === undefined
@@ -541,15 +547,29 @@ export function createG07bAdmissionHandler(
     }
   };
 
+  const markBlocked = (value: WriteOperationRegistrationReceipt): void => {
+    writerQuiescence.lifecycle.blocked(value);
+    try { if (runtimeCounterBridge !== undefined) notifyRuntimeLiveCounterBridge(runtimeCounterBridge); } catch {}
+  };
+  const observeSettled = (value: WriteOperationRegistrationReceipt): void => {
+    try { settleOperationIdentity?.(value); } catch { /* attribution cleanup cannot change lifecycle */ }
+  };
+
   let wakeCoordinator = (): void => undefined;
   const lifecycleObserver = Object.freeze({
     registered(value: WriteOperationRegistrationReceipt): void { writerQuiescence.lifecycle.registered(value); try { if (runtimeCounterBridge !== undefined) notifyRuntimeLiveCounterBridge(runtimeCounterBridge); } catch {} },
     queued(value: WriteOperationRegistrationReceipt): void { writerQuiescence.lifecycle.queued(value); try { if (runtimeCounterBridge !== undefined) notifyRuntimeLiveCounterBridge(runtimeCounterBridge); } catch {} },
     started(value: WriteOperationRegistrationReceipt): void { writerQuiescence.lifecycle.started(value); try { if (runtimeCounterBridge !== undefined) notifyRuntimeLiveCounterBridge(runtimeCounterBridge); } catch {} },
-    blocked(value: WriteOperationRegistrationReceipt): void { writerQuiescence.lifecycle.blocked(value); try { if (runtimeCounterBridge !== undefined) notifyRuntimeLiveCounterBridge(runtimeCounterBridge); } catch {} },
+    blocked(value: WriteOperationRegistrationReceipt): void {
+      markBlocked(value);
+      // The coordinator's own blocked lifecycle callback is the sole producer
+      // for OPERATION_BLOCKED.  In particular, a manual gate remains QUEUED.
+      try { blockOperationIdentity?.(value); } catch { /* observability is best effort */ }
+    },
     settled(event: WriteOperationLifecycleEvent): void {
       if (event.disposition === 'UNKNOWN_EFFECT') {
         writerQuiescence.lifecycle.settled(event.receipt, event.disposition);
+        observeSettled(event.receipt);
         try { if (runtimeCounterBridge !== undefined) notifyRuntimeLiveCounterBridge(runtimeCounterBridge); } catch {}
         return;
       }
@@ -558,14 +578,17 @@ export function createG07bAdmissionHandler(
         try {
           releaseOrigin(lease);
         } catch (error: unknown) {
-          writerQuiescence.lifecycle.blocked(event.receipt);
-          try { if (runtimeCounterBridge !== undefined) notifyRuntimeLiveCounterBridge(runtimeCounterBridge); } catch {}
+          // Keep STATUS fail-closed immediately; the coordinator will then
+          // emit its actual `blocked(receipt)` lifecycle callback, which is
+          // the sole OPERATION_BLOCKED producer.
+          markBlocked(event.receipt);
           throw error;
         }
         originByOperation.delete(event.receipt.operationId);
       }
       // State is removed only after every external cleanup step succeeds.
       writerQuiescence.lifecycle.settled(event.receipt, event.disposition);
+      observeSettled(event.receipt);
       try { if (runtimeCounterBridge !== undefined) notifyRuntimeLiveCounterBridge(runtimeCounterBridge); } catch {}
     },
   });

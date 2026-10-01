@@ -10,13 +10,24 @@ import { assertG10aRuntimeCapabilities, type G10aRuntimeCapabilities } from './g
 /** Internal-only bridge between one coordinator receipt and its ingress fact. */
 export interface G10aOperationIdentityBinding {
   bind(accepted: AcceptedIngress, receipt: WriteOperationRegistrationReceipt): RuntimeIdentity;
+  /** Records the coordinator's fail-closed BLOCKED lifecycle transition once. */
+  blocked(receipt: WriteOperationRegistrationReceipt): void;
+  /** Releases a completed coordinator receipt's private attribution state. */
+  settled(receipt: WriteOperationRegistrationReceipt): void;
 }
 
 const bindings = new WeakSet<object>();
 const boundIngresses = new WeakSet<object>();
 
+interface BoundOperation {
+  readonly receipt: WriteOperationRegistrationReceipt;
+  readonly identity: RuntimeIdentity;
+  blockedLogged: boolean;
+}
+
 export function createG10aOperationIdentityBinding(runtime: G10aRuntimeCapabilities): G10aOperationIdentityBinding {
   assertG10aRuntimeCapabilities(runtime);
+  const operations = new Map<string, BoundOperation>();
   const binding = Object.freeze({
     bind(accepted: AcceptedIngress, receipt: WriteOperationRegistrationReceipt): RuntimeIdentity {
       const ingress = getG10aIngressIdentity(accepted);
@@ -38,20 +49,44 @@ export function createG10aOperationIdentityBinding(runtime: G10aRuntimeCapabilit
         throw new TypeError('G10a operation identity is inconsistent');
       }
       boundIngresses.add(ingress as object);
-      try {
-        runtime.runtimeLogSink.append(createRuntimeLogRecord({
-          schemaVersion: 'g10a.log.v1', timestamp: new Date().toISOString(), kind: 'RUNTIME', code: 'OPERATION_REGISTERED',
-          requestUUID: issued.requestUUID, operationUUID: issued.operationUUID, datasetEpoch: issued.datasetEpoch,
-          processRunId: issued.processRunId, ownerRef: issued.ownerRef, route: issued.route, phase: 'ADMISSION',
-          round: null, group: null, budgetRemainingMs: null, budgetRemainingUnits: null, commandName: null,
-          driverRequestId: null, requestControlId: null, controlId: null, revision: null,
-        }));
-      } catch { /* logging is best effort and cannot change admission */ }
+      if (operations.has(receipt.operationId)) throw new TypeError('G10a operation receipt is already bound');
+      operations.set(receipt.operationId, { receipt, identity, blockedLogged: false });
+      appendAdmissionLog(runtime, issued, 'OPERATION_REGISTERED');
       return identity;
+    },
+    blocked(receipt: WriteOperationRegistrationReceipt): void {
+      const operation = operations.get(receipt.operationId);
+      // Only the original coordinator receipt can produce a BLOCKED record.
+      // A repeated lifecycle callback is observationally idempotent.
+      if (operation === undefined || operation.receipt !== receipt || operation.blockedLogged) return;
+      operation.blockedLogged = true;
+      try {
+        appendAdmissionLog(runtime, runtime.identityIssuer.read(operation.identity), 'OPERATION_BLOCKED');
+      } catch { /* logging is best effort and cannot change lifecycle outcome */ }
+    },
+    settled(receipt: WriteOperationRegistrationReceipt): void {
+      const operation = operations.get(receipt.operationId);
+      if (operation?.receipt === receipt) operations.delete(receipt.operationId);
     },
   });
   bindings.add(binding);
   return binding;
+}
+
+function appendAdmissionLog(
+  runtime: G10aRuntimeCapabilities,
+  identity: ReturnType<G10aRuntimeCapabilities['identityIssuer']['read']>,
+  code: 'OPERATION_REGISTERED' | 'OPERATION_BLOCKED',
+): void {
+  try {
+    runtime.runtimeLogSink.append(createRuntimeLogRecord({
+      schemaVersion: 'g10a.log.v1', timestamp: new Date().toISOString(), kind: 'RUNTIME', code,
+      requestUUID: identity.requestUUID, operationUUID: identity.operationUUID, datasetEpoch: identity.datasetEpoch,
+      processRunId: identity.processRunId, ownerRef: identity.ownerRef, route: identity.route, phase: 'ADMISSION',
+      round: null, group: null, budgetRemainingMs: null, budgetRemainingUnits: null, commandName: null,
+      driverRequestId: null, requestControlId: null, controlId: null, revision: null,
+    }));
+  } catch { /* logging is best effort and cannot change admission */ }
 }
 
 export function assertG10aOperationIdentityBinding(value: unknown): asserts value is G10aOperationIdentityBinding {
