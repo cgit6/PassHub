@@ -54,10 +54,13 @@ function mongoHarness(): MongoHarness {
   };
 }
 
-async function withActiveBinding<T>(work: (binding: OperationBudgetBinding) => T | Promise<T>): Promise<T> {
+async function withActiveBinding<T>(
+  work: (binding: OperationBudgetBinding) => T | Promise<T>,
+  options: { readonly nowMs?: () => number } = {},
+): Promise<T> {
   let value!: T;
   let failure: unknown;
-  const clock = { nowMs: () => 1_000 };
+  const clock = { nowMs: options.nowMs ?? (() => 1_000) };
   const bundle = createWriteOperationCoordinatorBundle({
     clock,
     executors: {
@@ -210,12 +213,106 @@ describe('G10c post-initial-commit unknown handoff seam', () => {
     const scope = SCOPE();
     handoffG10cPostCommitUnknown(adapter, scope, {} as ClientSession, binding);
     const [handoff] = bundle.owner.pending();
+    const taken = bundle.owner.take(handoff!);
     current = false;
 
-    expect(() => bundle.owner.take(handoff!)).toThrow(expect.objectContaining({ code: 'OWNER_STALE' }));
-    expect(bundle.owner.pending()).toEqual([handoff]);
+    expect(() => bundle.owner.admitNextConfirmation(taken)).toThrow(expect.objectContaining({ code: 'OWNER_STALE' }));
+    expect(bundle.owner.pending()).toEqual([]);
     expect(h.commitTransaction).not.toHaveBeenCalled();
     expect(h.abortTransaction).not.toHaveBeenCalled();
     expect(h.endSession).not.toHaveBeenCalled();
+  });
+
+  test('admits and settles only ledger-prescribed, serial confirmation actions without exposing raw permits', async () => {
+    let nowMs = 1_000;
+    await withActiveBinding((binding) => {
+      const h = mongoHarness();
+      const adapter = new G04bMongoPersistenceAdapter(h.client, 'g10c_confirmation_actions');
+      const bundle = createG10cPostCommitUnknownHandoffBundle();
+      attachG10cPostCommitUnknownHandoffSink(adapter, bundle.sink);
+      const round = beginOperationExecutionRound(binding);
+      finishOperationExecutionRound(binding, round);
+      handoffG10cPostCommitUnknown(adapter, SCOPE(), {} as ClientSession, binding);
+
+      const handoff = bundle.owner.take(bundle.owner.pending()[0]!);
+      const first = bundle.owner.admitNextConfirmation(handoff);
+      expect(first).toMatchObject({ kind: 'ORIGINAL_COMMIT', attempt: 0, timeoutMs: 123 });
+      expect(Object.isFrozen(first)).toBe(true);
+      expect('raw' in (first as object)).toBe(false);
+      expect('session' in (first as object)).toBe(false);
+      expect(() => bundle.owner.admitNextConfirmation(handoff)).toThrow(/in flight/i);
+      expect(() => bundle.owner.settleConfirmation(handoff, Object.freeze({}) as never, 'STILL_UNKNOWN'))
+        .toThrow(/foreign or stale/i);
+
+      bundle.owner.settleConfirmation(handoff, first, 'STILL_UNKNOWN');
+      expect(() => bundle.owner.settleConfirmation(handoff, first, 'STILL_UNKNOWN')).toThrow(/foreign or stale/i);
+      expect(() => bundle.owner.admitNextConfirmation(handoff)).toThrow(/not due/i);
+
+      nowMs += 1_000;
+      const second = bundle.owner.admitNextConfirmation(handoff);
+      expect(second).toMatchObject({ kind: 'CANONICAL_READ', attempt: 1, timeoutMs: 123 });
+      bundle.owner.settleConfirmation(handoff, second, 'CANONICAL_RESULT');
+      expect(() => bundle.owner.admitNextConfirmation(handoff)).toThrow(/already confirmed/i);
+
+      expect(h.commitTransaction).not.toHaveBeenCalled();
+      expect(h.abortTransaction).not.toHaveBeenCalled();
+      expect(h.endSession).not.toHaveBeenCalled();
+    }, { nowMs: () => nowMs });
+  });
+
+  test('rechecks the original owner before settling an already-admitted action', () => {
+    const h = mongoHarness();
+    const adapter = new G04bMongoPersistenceAdapter(h.client, 'g10c_confirmation_settlement_owner');
+    const bundle = createG10cPostCommitUnknownHandoffBundle();
+    attachG10cPostCommitUnknownHandoffSink(adapter, bundle.sink);
+    let current = true;
+    const assertCurrent = (): void => {
+      if (!current) throw new Error('owner is stale');
+    };
+    const owner = Object.freeze({ assertCurrent });
+    const context = Object.freeze({
+      operationId: '55555555-5555-4555-8555-555555555555',
+      receivedAtMs: 1_000,
+      sequence: 1n,
+      owner,
+      assertCurrent,
+    });
+    registerTrustedWriteOperationContext(context);
+    const binding = createOperationBudgetBindingFactory({
+      clock: { nowMs: () => 1_000 }, assertContinuationEvidence: () => undefined,
+    }).bind(context);
+    const round = beginOperationExecutionRound(binding);
+    finishOperationExecutionRound(binding, round);
+    handoffG10cPostCommitUnknown(adapter, SCOPE(), {} as ClientSession, binding);
+    const handoff = bundle.owner.take(bundle.owner.pending()[0]!);
+    const action = bundle.owner.admitNextConfirmation(handoff);
+    current = false;
+
+    expect(() => bundle.owner.settleConfirmation(handoff, action, 'STILL_UNKNOWN'))
+      .toThrow(expect.objectContaining({ code: 'OWNER_STALE' }));
+    expect(h.commitTransaction).not.toHaveBeenCalled();
+    expect(h.abortTransaction).not.toHaveBeenCalled();
+    expect(h.endSession).not.toHaveBeenCalled();
+  });
+
+  test('maps NO_EFFECT_CONFIRMED to the terminal ledger settlement', async () => {
+    await withActiveBinding((binding) => {
+      const h = mongoHarness();
+      const adapter = new G04bMongoPersistenceAdapter(h.client, 'g10c_confirmation_no_effect');
+      const bundle = createG10cPostCommitUnknownHandoffBundle();
+      attachG10cPostCommitUnknownHandoffSink(adapter, bundle.sink);
+      const round = beginOperationExecutionRound(binding);
+      finishOperationExecutionRound(binding, round);
+      handoffG10cPostCommitUnknown(adapter, SCOPE(), {} as ClientSession, binding);
+
+      const handoff = bundle.owner.take(bundle.owner.pending()[0]!);
+      const action = bundle.owner.admitNextConfirmation(handoff);
+      expect(action).toMatchObject({ kind: 'ORIGINAL_COMMIT', attempt: 0, timeoutMs: 123 });
+      bundle.owner.settleConfirmation(handoff, action, 'NO_EFFECT_CONFIRMED');
+      expect(() => bundle.owner.admitNextConfirmation(handoff)).toThrow(/no-effect result/i);
+      expect(h.commitTransaction).not.toHaveBeenCalled();
+      expect(h.abortTransaction).not.toHaveBeenCalled();
+      expect(h.endSession).not.toHaveBeenCalled();
+    });
   });
 });

@@ -43,7 +43,13 @@ export {
   type OperationPrecommitAbortGroup,
   startOperationUnknownCommitConfirmation,
   assertOperationUnknownCommitConfirmationCurrent,
+  admitOperationUnknownCommitConfirmationAction,
+  settleOperationUnknownCommitConfirmationAction,
   type OperationUnknownCommitConfirmation,
+  type OperationUnknownCommitConfirmationAction,
+  type OperationUnknownCommitConfirmationActionContext,
+  type OperationUnknownCommitConfirmationAdmission,
+  type OperationUnknownCommitConfirmationOutcome,
 } from './operation-budget-binding.js';
 
 export {

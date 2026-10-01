@@ -4,9 +4,13 @@ import type { AccessScopeContext } from '../../../access/ports/index.js';
 import type { G10bScopedPersistenceBinding } from './g10b-scoped-persistence-sidecar.js';
 import { readAccessScopeContextClaims } from '../../../shared/access-scope-context.js';
 import {
+  admitOperationUnknownCommitConfirmationAction,
   assertOperationUnknownCommitConfirmationCurrent,
+  settleOperationUnknownCommitConfirmationAction,
   startOperationUnknownCommitConfirmation,
   type OperationBudgetBinding,
+  type OperationUnknownCommitConfirmationAction,
+  type OperationUnknownCommitConfirmationOutcome,
   type OperationUnknownCommitConfirmation,
 } from '../../../access/application/internal/operation-budget-binding.js';
 import type { G04bMongoPersistenceAdapter } from '../g04b-persistence-adapter.js';
@@ -22,6 +26,22 @@ export interface G10cPostCommitUnknownHandoff {
   readonly [g10cPostCommitUnknownHandoffBrand]: never;
 }
 
+declare const g10cPostCommitUnknownConfirmationActionBrand: unique symbol;
+
+/**
+ * The future G10c sender sees only the next command's safe facts.  Its raw
+ * BudgetLedger permit, ClientSession, and persistence authority stay private
+ * to this handoff boundary.
+ */
+export interface G10cPostCommitUnknownConfirmationAction {
+  readonly [g10cPostCommitUnknownConfirmationActionBrand]: never;
+  readonly kind: 'ORIGINAL_COMMIT' | 'CANONICAL_READ';
+  readonly attempt: number;
+  readonly timeoutMs: number;
+}
+
+export type G10cPostCommitUnknownConfirmationOutcome = OperationUnknownCommitConfirmationOutcome;
+
 /** The adapter-facing, synchronous receiver for an opaque handoff only. */
 export interface G10cPostCommitUnknownHandoffSink {
   retain(handoff: G10cPostCommitUnknownHandoff): void;
@@ -34,6 +54,14 @@ export interface G10cPostCommitUnknownHandoffSink {
 export interface G10cPostCommitUnknownHandoffOwner {
   pending(): readonly G10cPostCommitUnknownHandoff[];
   take(handoff: G10cPostCommitUnknownHandoff): G10cPostCommitUnknownHandoff;
+  admitNextConfirmation(
+    handoff: G10cPostCommitUnknownHandoff,
+  ): G10cPostCommitUnknownConfirmationAction;
+  settleConfirmation(
+    handoff: G10cPostCommitUnknownHandoff,
+    action: G10cPostCommitUnknownConfirmationAction,
+    outcome: G10cPostCommitUnknownConfirmationOutcome,
+  ): void;
 }
 
 export interface G10cPostCommitUnknownHandoffBundle {
@@ -51,11 +79,18 @@ interface HandoffState {
   status: 'RETAINED' | 'TAKEN';
 }
 
+interface ConfirmationActionState {
+  readonly handoff: G10cPostCommitUnknownHandoff;
+  readonly raw: OperationUnknownCommitConfirmationAction;
+  active: boolean;
+}
+
 const concreteAdapters = new WeakSet<object>();
 const attachedSinks = new WeakMap<object, G10cPostCommitUnknownHandoffSink>();
 const bundleSinks = new WeakSet<object>();
 const handoffs = new WeakMap<object, HandoffState>();
 const handedOffContexts = new WeakMap<object, WeakSet<object>>();
+const confirmationActions = new WeakMap<object, ConfirmationActionState>();
 
 /** Called only by the concrete G04b adapter constructor. */
 export function registerG10cConcreteG04bMongoPersistenceAdapter(
@@ -166,6 +201,34 @@ export function createG10cPostCommitUnknownHandoffBundle(): G10cPostCommitUnknow
       state.status = 'TAKEN';
       return handoff;
     },
+    admitNextConfirmation(
+      handoff: G10cPostCommitUnknownHandoff,
+    ): G10cPostCommitUnknownConfirmationAction {
+      const state = requireTakenHandoff(sink, handoff);
+      const admission = admitOperationUnknownCommitConfirmationAction(state.binding, state.confirmation);
+      const action = Object.freeze({
+        kind: admission.context.kind,
+        attempt: admission.context.attempt,
+        timeoutMs: admission.context.timeoutMs,
+      }) as G10cPostCommitUnknownConfirmationAction;
+      confirmationActions.set(action, { handoff, raw: admission.action, active: true });
+      return action;
+    },
+    settleConfirmation(
+      handoff: G10cPostCommitUnknownHandoff,
+      action: G10cPostCommitUnknownConfirmationAction,
+      outcome: G10cPostCommitUnknownConfirmationOutcome,
+    ): void {
+      const state = requireTakenHandoff(sink, handoff);
+      const actionState = requireConfirmationAction(handoff, action);
+      settleOperationUnknownCommitConfirmationAction(
+        state.binding,
+        state.confirmation,
+        actionState.raw,
+        outcome,
+      );
+      actionState.active = false;
+    },
   });
   return Object.freeze({ sink, owner });
 }
@@ -177,5 +240,32 @@ function requireHandoff(handoff: G10cPostCommitUnknownHandoff): HandoffState {
   }
   const state = handoffs.get(handoff as object);
   if (state === undefined) throw new TypeError('G10c post-commit unknown handoff is foreign or forged');
+  return state;
+}
+
+function requireTakenHandoff(
+  sink: G10cPostCommitUnknownHandoffSink,
+  handoff: G10cPostCommitUnknownHandoff,
+): HandoffState {
+  const state = requireHandoff(handoff);
+  if (state.sink !== sink || state.status !== 'TAKEN') {
+    throw new TypeError('G10c post-commit unknown handoff owner is foreign or stale');
+  }
+  assertOperationUnknownCommitConfirmationCurrent(state.binding, state.confirmation);
+  return state;
+}
+
+function requireConfirmationAction(
+  handoff: G10cPostCommitUnknownHandoff,
+  action: G10cPostCommitUnknownConfirmationAction,
+): ConfirmationActionState {
+  if ((typeof action !== 'object' && typeof action !== 'function') || action === null
+    || !Object.isFrozen(action)) {
+    throw new TypeError('G10c post-commit unknown confirmation action is invalid');
+  }
+  const state = confirmationActions.get(action as object);
+  if (state === undefined || state.handoff !== handoff || !state.active) {
+    throw new TypeError('G10c post-commit unknown confirmation action is foreign or stale');
+  }
   return state;
 }

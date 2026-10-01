@@ -2,6 +2,8 @@ import {
   createBudgetLedger,
   type BudgetLedger,
   type BudgetLedgerConfig,
+  type ConfirmationKind,
+  type ConfirmationPermit,
   type ContinuationEvidenceVerifier,
   type ExecutionCommandKind,
   type ExecutionCommandPermit,
@@ -59,6 +61,7 @@ declare const roundBrand: unique symbol;
 declare const precommitBrand: unique symbol;
 declare const precommitGroupBrand: unique symbol;
 declare const unknownCommitBrand: unique symbol;
+declare const unknownConfirmationActionBrand: unique symbol;
 
 /** Opaque, per-original-write capability.  It deliberately has no fields. */
 export interface OperationBudgetBinding {
@@ -102,6 +105,32 @@ export interface OperationUnknownCommitConfirmation {
 }
 
 /**
+ * Opaque, one-at-a-time confirmation command claim for the G10c owner.  The
+ * raw ledger permit remains module-private; callers receive only its safe
+ * command facts through the accompanying context.
+ */
+export interface OperationUnknownCommitConfirmationAction {
+  readonly [unknownConfirmationActionBrand]: never;
+}
+
+/** The only confirmation facts a future G10c sender may need. */
+export interface OperationUnknownCommitConfirmationActionContext {
+  readonly kind: ConfirmationKind;
+  readonly attempt: number;
+  readonly timeoutMs: number;
+}
+
+export interface OperationUnknownCommitConfirmationAdmission {
+  readonly action: OperationUnknownCommitConfirmationAction;
+  readonly context: OperationUnknownCommitConfirmationActionContext;
+}
+
+export type OperationUnknownCommitConfirmationOutcome =
+  | 'STILL_UNKNOWN'
+  | 'CANONICAL_RESULT'
+  | 'NO_EFFECT_CONFIRMED';
+
+/**
  * Composition/bootstrap-only inputs.  This is deliberately separate from
  * the context-level factory interface so no individual write can override
  * shared budget policy or trusted dependencies.
@@ -127,6 +156,7 @@ interface BindingState {
   readonly precommits: WeakMap<object, PrecommitState>;
   readonly groups: WeakMap<object, GroupState>;
   readonly unknownCommits: WeakMap<object, UnknownCommitState>;
+  readonly unknownConfirmationActions: WeakMap<object, UnknownConfirmationActionState>;
   frozen: boolean;
   transitioning: boolean;
   precommit: PrecommitState | null;
@@ -160,6 +190,15 @@ interface GroupState {
 
 interface UnknownCommitState {
   readonly binding: BindingState;
+  active: boolean;
+  action: UnknownConfirmationActionState | null;
+}
+
+interface UnknownConfirmationActionState {
+  readonly binding: BindingState;
+  readonly confirmation: UnknownCommitState;
+  readonly raw: ConfirmationPermit;
+  readonly context: OperationUnknownCommitConfirmationActionContext;
   active: boolean;
 }
 
@@ -279,6 +318,7 @@ function createBinding(
     precommits: new WeakMap<object, PrecommitState>(),
     groups: new WeakMap<object, GroupState>(),
     unknownCommits: new WeakMap<object, UnknownCommitState>(),
+    unknownConfirmationActions: new WeakMap<object, UnknownConfirmationActionState>(),
     frozen: false,
     transitioning: false,
     precommit: null,
@@ -387,7 +427,7 @@ export function startOperationUnknownCommitConfirmation(
       failClosed(state, 'OWNER_STALE', 'unknown commit lifecycle could not be sealed after confirmation started', error);
     }
     const token = Object.freeze({}) as OperationUnknownCommitConfirmation;
-    const unknownCommit: UnknownCommitState = { binding: state, active: true };
+    const unknownCommit: UnknownCommitState = { binding: state, active: true, action: null };
     state.unknownCommits.set(token, unknownCommit);
     state.unknownCommit = unknownCommit;
     return token;
@@ -409,6 +449,75 @@ export function assertOperationUnknownCommitConfirmationCurrent(
     if (state.unknownCommit !== unknownCommit) {
       failClosed(state, 'INVALID_UNKNOWN_COMMIT', 'unknown commit confirmation is not current');
     }
+  });
+}
+
+/**
+ * Admit exactly the ledger-prescribed next G10c confirmation command without
+ * exposing its raw permit.  The original operation owner is revalidated by
+ * the binding transition before the ledger can allocate an in-flight slot.
+ */
+export function admitOperationUnknownCommitConfirmationAction(
+  binding: OperationBudgetBinding,
+  confirmation: OperationUnknownCommitConfirmation,
+): OperationUnknownCommitConfirmationAdmission {
+  const state = requireBinding(binding);
+  return transition(state, () => {
+    const unknownCommit = requireUnknownCommit(state, confirmation);
+    if (state.unknownCommit !== unknownCommit) {
+      failClosed(state, 'INVALID_UNKNOWN_COMMIT', 'unknown commit confirmation is not current');
+    }
+    // The ledger reports a normal CONFIRMATION_IN_FLIGHT denial while an
+    // existing action is active.  Do not freeze that valid action merely
+    // because a caller asked too early; its owner must still be able to
+    // settle the original command.
+    const raw = state.ledger.admitNextUnknownConfirmation();
+    const action = Object.freeze({}) as OperationUnknownCommitConfirmationAction;
+    const context = Object.freeze({
+      kind: raw.kind,
+      attempt: raw.attempt,
+      timeoutMs: raw.timeoutMs,
+    }) as OperationUnknownCommitConfirmationActionContext;
+    const actionState: UnknownConfirmationActionState = {
+      binding: state,
+      confirmation: unknownCommit,
+      raw,
+      context,
+      active: true,
+    };
+    state.unknownConfirmationActions.set(action, actionState);
+    unknownCommit.action = actionState;
+    return Object.freeze({ action, context });
+  });
+}
+
+/**
+ * Settle one current G10c confirmation action.  Invalid, foreign, duplicate,
+ * or stale actions permanently close this operation's budget boundary rather
+ * than allowing a later command to run with ambiguous ownership.
+ */
+export function settleOperationUnknownCommitConfirmationAction(
+  binding: OperationBudgetBinding,
+  confirmation: OperationUnknownCommitConfirmation,
+  action: OperationUnknownCommitConfirmationAction,
+  outcome: OperationUnknownCommitConfirmationOutcome,
+): void {
+  const state = requireBinding(binding);
+  transition(state, () => {
+    const unknownCommit = requireUnknownCommit(state, confirmation);
+    if (state.unknownCommit !== unknownCommit) {
+      failClosed(state, 'INVALID_UNKNOWN_COMMIT', 'unknown commit confirmation is not current');
+    }
+    const actionState = requireUnknownConfirmationAction(state, action);
+    if (actionState.confirmation !== unknownCommit || unknownCommit.action !== actionState) {
+      failClosed(state, 'INVALID_UNKNOWN_COMMIT', 'unknown commit confirmation action is foreign or stale');
+    }
+    if (outcome === 'STILL_UNKNOWN') state.ledger.settleStillUnknown(actionState.raw);
+    else if (outcome === 'CANONICAL_RESULT') state.ledger.settleConfirmed(actionState.raw);
+    else if (outcome === 'NO_EFFECT_CONFIRMED') state.ledger.settleNoEffectConfirmed(actionState.raw);
+    else failClosed(state, 'INVALID_UNKNOWN_COMMIT', 'unknown commit confirmation outcome is invalid');
+    actionState.active = false;
+    unknownCommit.action = null;
   });
 }
 
@@ -556,6 +665,18 @@ function requireUnknownCommit(
     failClosed(state, 'INVALID_UNKNOWN_COMMIT', 'unknown commit confirmation provenance is invalid');
   }
   return unknownCommit as UnknownCommitState;
+}
+
+function requireUnknownConfirmationAction(
+  state: BindingState,
+  token: OperationUnknownCommitConfirmationAction,
+): UnknownConfirmationActionState {
+  if (!isObject(token)) failClosed(state, 'INVALID_UNKNOWN_COMMIT', 'unknown commit confirmation action is invalid');
+  const action = state.unknownConfirmationActions.get(token);
+  if (action === undefined || action.binding !== state || !action.active) {
+    failClosed(state, 'INVALID_UNKNOWN_COMMIT', 'unknown commit confirmation action provenance is invalid');
+  }
+  return action as UnknownConfirmationActionState;
 }
 
 function transition<T>(state: BindingState, work: () => T): T {
