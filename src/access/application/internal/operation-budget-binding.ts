@@ -454,6 +454,35 @@ export function assertOperationUnknownCommitConfirmationCurrent(
 }
 
 /**
+ * Proves that the retained unknown-commit lifecycle has reached one of its
+ * genuine terminal confirmation outcomes.  This is deliberately a
+ * read-only, owner-fenced assertion: it neither allocates a command permit
+ * nor authorizes a continuation.  G10c uses it immediately before releasing
+ * the retained Mongo session, so an in-flight or merely still-unknown result
+ * can never be mistaken for terminal cleanup authority.
+ */
+export function assertOperationUnknownCommitConfirmationTerminal(
+  binding: OperationBudgetBinding,
+  confirmation: OperationUnknownCommitConfirmation,
+): void {
+  const state = requireBinding(binding);
+  transition(state, () => {
+    const unknownCommit = requireUnknownCommit(state, confirmation);
+    if (state.unknownCommit !== unknownCommit) {
+      failClosed(state, 'INVALID_UNKNOWN_COMMIT', 'unknown commit confirmation is not current');
+    }
+    const snapshot = state.ledger.snapshot();
+    if (unknownCommit.action !== null || snapshot.confirmationInFlight) {
+      failClosed(state, 'INVALID_UNKNOWN_COMMIT', 'unknown commit confirmation has an action in flight');
+    }
+    if (snapshot.confirmationResult !== 'CANONICAL_RESULT'
+      && snapshot.confirmationResult !== 'NO_EFFECT_CONFIRMED') {
+      failClosed(state, 'INVALID_UNKNOWN_COMMIT', 'unknown commit confirmation has no terminal outcome');
+    }
+  });
+}
+
+/**
  * A read-only G10c phase probe.  It deliberately issues no confirmation
  * permit: a canonical worker that arrives while ORIGINAL_COMMIT is due must
  * not consume or settle that other command's slot/cadence.

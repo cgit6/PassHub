@@ -295,6 +295,51 @@ export class G04bMongoPersistenceAdapter
     if (abortError !== null) throw new G04bTransactionError(classifyG04bTransactionError(abortError, 'abort'), abortError);
   }
 
+  /**
+   * G10c-internal terminal release for a transaction whose initial commit was
+   * already invoked and whose outcome has subsequently been confirmed.  The
+   * opaque handoff keeps both arguments private from ordinary callers.  This
+   * method intentionally has no abort fallback: an active or uninspectable
+   * session is unsafe and must remain fail-closed for the recovery owner.
+   */
+  public async releaseG10cConfirmedRetainedTransaction(
+    context: AccessScopeContext,
+    session: ClientSession,
+  ): Promise<void> {
+    const state = this.transactions.get(context as object);
+    if (state === undefined || state.session !== session) {
+      throw new G04bTechnicalError('G10c retained transaction is missing or foreign');
+    }
+    if (state.g10bScopedPersistenceBinding === undefined
+      || !state.initialCommitInvoked
+      || state.g10bExecutionFacade !== undefined) {
+      throw new G04bTechnicalError('G10c retained transaction is not terminally releasable');
+    }
+
+    let active: boolean;
+    try {
+      active = state.session.inTransaction();
+    } catch (error: unknown) {
+      throw new G04bTechnicalError('G10c retained transaction activity cannot be verified', error);
+    }
+    if (typeof active !== 'boolean') {
+      throw new G04bTechnicalError('G10c retained transaction activity is invalid');
+    }
+    if (active) {
+      throw new G04bTechnicalError('G10c retained transaction is still active');
+    }
+
+    // Delete the only adapter reference before endSession.  If the driver
+    // reports a close error there is deliberately no retry or abort path that
+    // could issue a later command against an outcome already confirmed.
+    this.transactions.delete(context as object);
+    try {
+      await state.session.endSession();
+    } catch (error: unknown) {
+      throw new G04bTechnicalError('G10c retained transaction session release failed', error);
+    }
+  }
+
   public async assertMongo8032ReplicaSet(): Promise<void> {
     const buildInfo = await this.database.command({ buildInfo: 1 }) as { version?: unknown };
     if (buildInfo.version !== G04B_MONGO_VERSION) throw new G04bTechnicalError(`G04b requires MongoDB ${G04B_MONGO_VERSION}`);

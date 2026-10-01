@@ -11,6 +11,7 @@ import { readAccessScopeContextClaims } from '../../../shared/access-scope-conte
 import {
   admitOperationUnknownCommitConfirmationAction,
   assertOperationUnknownCommitCanonicalReadDue,
+  assertOperationUnknownCommitConfirmationTerminal,
   assertOperationUnknownCommitConfirmationCurrent,
   settleOperationUnknownCommitConfirmationAction,
   startOperationUnknownCommitConfirmation,
@@ -79,6 +80,15 @@ export class G10cRetainedOriginalCommitTerminatorError extends Error {
  */
 export interface G10cRetainedOriginalCommitTerminator {
   attemptOriginalCommit(): Promise<G10cRetainedOriginalCommitAttemptResult>;
+}
+
+/**
+ * The one terminal resource-release capability for a taken G10c handoff.
+ * It is available only after the binding has a genuine confirmed result and
+ * never exposes the retained session or an abort operation.
+ */
+export interface G10cPostCommitUnknownTerminalCleaner {
+  cleanupAfterConfirmedOutcome(): Promise<void>;
 }
 
 /** The adapter-facing, synchronous receiver for an opaque handoff only. */
@@ -203,6 +213,7 @@ interface HandoffState {
   status: 'RETAINED' | 'TAKEN';
   originalCommitTerminatorClaimed: boolean;
   confirmationActionAdmitted: boolean;
+  terminalCleanupClaimed: boolean;
   readonly expectedRecognitionImage: G10cRecognitionExpectedImage | null;
   readonly expectedManagementImage: G10cManagementExpectedImage | null;
 }
@@ -388,6 +399,7 @@ export function handoffG10cPostCommitUnknown(
     status: 'RETAINED',
     originalCommitTerminatorClaimed: false,
     confirmationActionAdmitted: false,
+    terminalCleanupClaimed: false,
     expectedRecognitionImage,
     expectedManagementImage,
   });
@@ -445,6 +457,58 @@ export async function confirmG10cPostCommitUnknownCanonicalResult(
   } catch (_error: unknown) {
     return 'INCONCLUSIVE';
   }
+}
+
+/**
+ * Claim the one terminal release path for a taken handoff.  The claim is made
+ * only after the owner-fenced budget lifecycle reports a confirmed result;
+ * this avoids treating a sender rejection, a delayed read, or an in-flight
+ * confirmation as permission to close the original Mongo session.
+ */
+export function createG10cPostCommitUnknownTerminalCleaner(
+  owner: G10cPostCommitUnknownHandoffOwner,
+  handoff: G10cPostCommitUnknownHandoff,
+): G10cPostCommitUnknownTerminalCleaner {
+  const sink = ownerSinks.get(owner as object);
+  if (sink === undefined) throw new TypeError('G10c terminal cleaner owner is foreign');
+  const state = requireTakenHandoff(sink, handoff);
+  assertOperationUnknownCommitConfirmationTerminal(state.binding, state.confirmation);
+  if (state.terminalCleanupClaimed) {
+    throw new TypeError('G10c terminal cleaner was already claimed');
+  }
+  state.terminalCleanupClaimed = true;
+  let closed = false;
+
+  return Object.freeze({
+    cleanupAfterConfirmedOutcome: async (): Promise<void> => {
+      if (closed) throw new TypeError('G10c terminal cleaner is closed');
+      closed = true;
+
+      // Recheck immediately before the only session operation.  A stale
+      // owner or an unexpectedly active confirmation freezes its own
+      // authority rather than releasing a session on ambiguous ownership.
+      try {
+        assertOperationUnknownCommitConfirmationTerminal(state.binding, state.confirmation);
+        await state.adapter.releaseG10cConfirmedRetainedTransaction(state.scope, state.session);
+      } finally {
+        // Whether session release succeeds or reports an unsafe driver error,
+        // this cleaner is terminally spent.  Drop recovery material and the
+        // opaque handoff so no code can retry, abort, or issue a late command
+        // against the original transaction.
+        releaseTerminalHandoffState(handoff, state);
+      }
+    },
+  });
+}
+
+/** Remove all recovery-only references after the adapter has ended the session. */
+function releaseTerminalHandoffState(
+  handoff: G10cPostCommitUnknownHandoff,
+  state: HandoffState,
+): void {
+  preparedExpectedImages.get(state.adapter as object)?.delete(state.scope as object);
+  preparedManagementImages.get(state.adapter as object)?.delete(state.scope as object);
+  handoffs.delete(handoff as object);
 }
 
 export function createG10cPostCommitUnknownHandoffBundle(): G10cPostCommitUnknownHandoffBundle {
