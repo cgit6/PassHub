@@ -194,11 +194,55 @@ describe('G10a A4 admission runtime composition', () => {
       const records = (await readFile(join(parent, 'logs', 'runtime.log'), 'utf8'))
         .split('\n').filter((line) => line.length > 0)
         .map((line) => validateRuntimeLogRecord(JSON.parse(line) as unknown));
-      expect(records.map((record) => record.code)).toEqual(['REQUEST_ACCEPTED', 'OPERATION_REGISTERED']);
+      expect(records.map((record) => record.code)).toEqual([
+        'REQUEST_ACCEPTED', 'OPERATION_REGISTERED',
+        'BUSINESS_STEP_REGISTERED', 'BUSINESS_STEP_ISSUED', 'BUSINESS_STEP_SETTLED',
+      ]);
       expect(records[1]).toMatchObject({
         requestUUID: records[0]?.requestUUID, route: 'MANAGEMENT_CREATE', phase: 'ADMISSION',
         operationUUID: expect.stringMatching(/^[0-9a-f-]{36}$/u), ownerRef: expect.stringMatching(/^[0-9a-f-]{36}$/u),
       });
+      for (const record of records.slice(2)) {
+        expect(record).toMatchObject({
+          kind: 'RUNTIME', phase: 'PERSISTENCE', route: 'MANAGEMENT_CREATE',
+          requestUUID: records[1]?.requestUUID, operationUUID: records[1]?.operationUUID,
+          ownerRef: records[1]?.ownerRef, datasetEpoch: EPOCH, processRunId: RUN,
+          round: null, group: null, budgetRemainingMs: null, budgetRemainingUnits: null,
+          commandName: null, driverRequestId: null,
+        });
+      }
+    } finally {
+      await owner.close().catch(() => undefined);
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  test('settles the one G08 lifecycle log and issued lease when the writer throws synchronously', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'passhub-g10a-admission-step-throw-'));
+    const owner = createG10aRuntimeOwner({
+      epoch: EPOCH, run: RUN,
+      logDirectory: join(parent, 'logs'), controlDirectory: join(parent, 'control'),
+      controlSocketPath: join(parent, 'control', RUNTIME_CONTROL_SOCKET_FILE_NAME),
+      monotonicClock: { nowMs: () => performance.now() }, awaitObservation: () => undefined,
+    });
+    try {
+      const runtime = await owner.start();
+      const fixture = makeComposition({ management: () => { throw new Error('opaque synchronous failure'); } });
+      const composed = createG10aAdmissionRuntimeComposition({
+        epoch: EPOCH, run: RUN, monotonicClock: { nowMs: () => performance.now() }, awaitObservation: () => undefined,
+        admission: fixture.admission, runtime,
+      });
+      invoke(composed.handler);
+      await flush();
+      await runtime.runtimeLogSink.flush();
+      expect(runtime.control.snapshot().issuedPersistence).toBe(0);
+      const records = (await readFile(join(parent, 'logs', 'runtime.log'), 'utf8'))
+        .split('\n').filter((line) => line.length > 0)
+        .map((line) => validateRuntimeLogRecord(JSON.parse(line) as unknown));
+      expect(records.map((record) => record.code)).toEqual([
+        'REQUEST_ACCEPTED', 'OPERATION_REGISTERED',
+        'BUSINESS_STEP_REGISTERED', 'BUSINESS_STEP_ISSUED', 'BUSINESS_STEP_SETTLED',
+      ]);
     } finally {
       await owner.close().catch(() => undefined);
       await rm(parent, { recursive: true, force: true });

@@ -79,6 +79,10 @@ import {
   assertG10aOperationIdentityBinding,
   type G10aOperationIdentityBinding,
 } from './g10a-operation-identity-binding.js';
+import {
+  assertG10aBusinessStepLogBinding,
+  type G10aBusinessStepLogBinding,
+} from './g10a-business-step-log-binding.js';
 import type { RuntimeIdentity } from '../../runtime/internal/runtime-control.js';
 import {
   captureConstructionMethod,
@@ -207,6 +211,8 @@ export interface G07bAdmissionHandlerOptions {
   readonly queryPermission?: unknown;
   /** Internal G10a bridge; binds a registered writer to its ingress identity. */
   readonly operationIdentityBinding?: unknown;
+  /** Internal G10a bridge; records exactly the full G08 writer-work lifecycle. */
+  readonly businessStepLogBinding?: unknown;
 }
 
 interface WriterInput {
@@ -329,6 +335,11 @@ export function createG07bAdmissionHandler(
   const bindOperationIdentity = operationIdentityBinding === undefined
     ? undefined
     : captureConstructionMethod(operationIdentityBinding, 'bind', 'G10a operation identity binding').bind(operationIdentityBinding) as G10aOperationIdentityBinding['bind'];
+  const businessStepLogBinding = options.businessStepLogBinding;
+  if (businessStepLogBinding !== undefined) assertG10aBusinessStepLogBinding(businessStepLogBinding);
+  const beginBusinessStepLog = businessStepLogBinding === undefined
+    ? undefined
+    : captureConstructionMethod(businessStepLogBinding, 'begin', 'G10a business step log binding').bind(businessStepLogBinding) as G10aBusinessStepLogBinding['begin'];
   assertOptions(options, validator, work, validatorValidate, loginWorkMethod, queryWorkMethod, managementWorkMethod, recognitionWorkMethod);
   const validatorIdentity = getQueryAdmissionIdentity(validatorValidate);
   const workIdentity = getQueryAdmissionIdentity(queryWorkMethod);
@@ -481,12 +492,24 @@ export function createG07bAdmissionHandler(
     }
   };
 
-  const invokeG08WriterWork = <T>(operation: () => Promise<T>): Promise<T> => {
+  const invokeG08WriterWork = <T>(operation: () => Promise<T>, identity: RuntimeIdentity | null): Promise<T> => {
     if (writerPermissionAcquire === undefined) return invokeNativePromise(operation);
     const lease = writerPermissionAcquire();
+    // The only G08 invocation seam.  Registration happens only after the
+    // current permission has synchronously issued the persistence lease, and
+    // all three calls remain non-awaiting best-effort observability.
+    let step: ReturnType<G10aBusinessStepLogBinding['begin']> | undefined;
+    if (identity !== null && beginBusinessStepLog !== undefined) {
+      try { step = beginBusinessStepLog(identity); } catch { /* never alter work */ }
+    }
     try {
-      return invokeNativePromise(operation).finally(() => lease.release());
+      try { step?.issued(); } catch { /* never alter work */ }
+      return invokeNativePromise(operation).finally(() => {
+        try { step?.settled(); } catch { /* never alter work */ }
+        lease.release();
+      });
     } catch (error) {
+      try { step?.settled(); } catch { /* never alter work */ }
       try { lease.release(); } catch { /* preserve the original synchronous boundary */ }
       throw error;
     }
@@ -580,7 +603,7 @@ export function createG07bAdmissionHandler(
     }
     try {
       const outcome = await invokeG08WriterWork(
-        () => managementWork(input.workInput, workContext(context, input.runtimeIdentity)),
+        () => managementWork(input.workInput, workContext(context, input.runtimeIdentity)), input.runtimeIdentity,
       );
       settleWriterOutcome(input.owner, settlement, outcome);
     } catch {
@@ -684,7 +707,7 @@ export function createG07bAdmissionHandler(
     let outcome: AdmissionRecognitionWriterOutcome;
     try {
       outcome = sanitizeRecognitionWriterOutcome(
-        await invokeG08WriterWork(() => recognitionWork(input.workInput, workContext(context, input.runtimeIdentity))),
+        await invokeG08WriterWork(() => recognitionWork(input.workInput, workContext(context, input.runtimeIdentity)), input.runtimeIdentity),
         renderResponsePlan,
       );
     } catch {
@@ -1768,6 +1791,7 @@ function captureOptions(options: G07bAdmissionHandlerOptions): G07bAdmissionHand
     writerPermission: captureOptionalConstructionProperty(options, 'writerPermission', 'G07b options'),
     queryPermission: captureOptionalConstructionProperty(options, 'queryPermission', 'G07b options'),
     operationIdentityBinding: captureOptionalConstructionProperty(options, 'operationIdentityBinding', 'G07b options'),
+    businessStepLogBinding: captureOptionalConstructionProperty(options, 'businessStepLogBinding', 'G07b options'),
   }) as G07bAdmissionHandlerOptions;
 }
 
