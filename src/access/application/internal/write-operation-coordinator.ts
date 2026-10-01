@@ -59,6 +59,45 @@ export interface WriteOperationSettlement<TResult> {
   businessResultPersisted(result: TResult): void;
   knownNoEffect(error: unknown): void;
   unknownEffect(error: unknown): void;
+  /**
+   * Records one eligible post-commit transport unknown and returns an opaque
+   * lease.  It deliberately does not settle the caller or advance FIFO work:
+   * a separate recovery owner must first adopt the lease and make the one
+   * terminal decision.
+   */
+  pausePostCommitUnknown(error: unknown): PostCommitUnknownRecoveryLease;
+}
+
+declare const postCommitUnknownRecoveryLeaseBrand: unique symbol;
+
+/**
+ * Opaque handoff from the current writer to the internal G10c recovery
+ * coordinator.  The lease has no public controls; it is usable only through
+ * an owner created for the same coordinator bundle.
+ */
+export interface PostCommitUnknownRecoveryLease {
+  readonly [postCommitUnknownRecoveryLeaseBrand]: never;
+}
+
+declare const postCommitUnknownRecoveryOwnerBrand: unique symbol;
+
+/** Internal nominal authority which can adopt one recovery lease. */
+export interface PostCommitUnknownRecoveryOwner {
+  readonly [postCommitUnknownRecoveryOwnerBrand]: never;
+  adopt(lease: PostCommitUnknownRecoveryLease): PostCommitUnknownRecoveryHandle;
+}
+
+declare const postCommitUnknownRecoveryHandleBrand: unique symbol;
+
+/**
+ * One adopted, still-current operation.  The recovery owner must choose one
+ * terminal path: publish the already-persisted result, or fail closed.
+ */
+export interface PostCommitUnknownRecoveryHandle {
+  readonly [postCommitUnknownRecoveryHandleBrand]: never;
+  assertCurrent(): void;
+  businessResultPersisted(result: unknown): void;
+  failClosed(error: unknown): void;
 }
 
 export type TrustedWriteExecutor<TInput, TResult> = (
@@ -177,7 +216,22 @@ interface Operation {
   input: unknown;
   prestartError: unknown;
   maintenanceValidationCanceled: boolean;
+  recoveryLease: PostCommitUnknownRecoveryLease | null;
+  recoveryPhase: 'NONE' | 'REQUESTED' | 'PAUSED' | 'TERMINAL';
 }
+
+interface RecoveryLeaseState {
+  readonly operation: Operation;
+  readonly access: CoordinatorRecoveryAccess;
+  adoptedBy: PostCommitUnknownRecoveryOwner | null;
+  handle: PostCommitUnknownRecoveryHandle | null;
+}
+
+interface CoordinatorRecoveryAccess {
+  createOwner(): PostCommitUnknownRecoveryOwner;
+}
+
+const coordinatorRecoveryAccesses = new WeakMap<object, CoordinatorRecoveryAccess>();
 
 const allowedKinds = new Set<WriteOperationKind>([
   'MANAGEMENT_CREATE',
@@ -243,11 +297,34 @@ export function createWriteOperationCoordinatorBundle<
   let deferredByGate = false;
   let blocked = false;
   let current: Operation | null = null;
+  const recoveryLeaseStates = new WeakMap<object, RecoveryLeaseState>();
 
   const assertCurrent = (operation: Operation): void => {
     if (current !== operation || !operation.active || operation.finalized) {
       throw new Error('write operation is not current');
     }
+  };
+
+  const requestPostCommitUnknownPause = (operation: Operation, error: unknown): PostCommitUnknownRecoveryLease => {
+    assertCurrent(operation);
+    if (error === undefined || error === null) {
+      throw new TypeError('post-commit unknown pause requires an error');
+    }
+    if (operation.recoveryPhase !== 'NONE' || operation.settlementCount !== 0 || operation.candidate !== null) {
+      throw new Error('post-commit unknown recovery pause was already decided');
+    }
+    const lease = Object.freeze({}) as PostCommitUnknownRecoveryLease;
+    operation.settlementCount = 1;
+    operation.candidate = { kind: 'UNKNOWN_EFFECT', error };
+    operation.recoveryLease = lease;
+    operation.recoveryPhase = 'REQUESTED';
+    recoveryLeaseStates.set(lease as object, {
+      operation,
+      access: recoveryAccess,
+      adoptedBy: null,
+      handle: null,
+    });
+    return lease;
   };
 
   const scheduleDrain = (): void => {
@@ -303,6 +380,7 @@ export function createWriteOperationCoordinatorBundle<
       if (position >= 0) queue.splice(position, 1);
       operation.finalized = true;
       operation.active = false;
+      operation.recoveryPhase = 'TERMINAL';
       if (current === operation) current = null;
       notifyBlocked(operation);
       operation.reject(error);
@@ -335,6 +413,7 @@ export function createWriteOperationCoordinatorBundle<
       businessResultPersisted: (result: unknown) => recordCandidate(operation, { kind: 'BUSINESS_RESULT_PERSISTED', result }),
       knownNoEffect: (error: unknown) => recordCandidate(operation, { kind: 'KNOWN_NO_EFFECT', error }),
       unknownEffect: (error: unknown) => recordCandidate(operation, { kind: 'UNKNOWN_EFFECT', error }),
+      pausePostCommitUnknown: (error: unknown) => requestPostCommitUnknownPause(operation, error),
     });
 
     let executionFailed = false;
@@ -344,6 +423,17 @@ export function createWriteOperationCoordinatorBundle<
     } catch (error: unknown) {
       executionFailed = true;
       executionError = error;
+    }
+
+    if (operation.recoveryPhase === 'REQUESTED') {
+      if (executionFailed || operation.settlementCount !== 1 || operation.invalidSettlement
+        || operation.candidate?.kind !== 'UNKNOWN_EFFECT' || operation.recoveryLease === null) {
+        finalizeUnknown(operation, executionError ?? new Error('post-commit unknown recovery pause is invalid'));
+        return;
+      }
+      operation.recoveryPhase = 'PAUSED';
+      blocked = true;
+      return;
     }
 
     if (executionFailed || operation.settlementCount !== 1 || operation.invalidSettlement || operation.candidate === null) {
@@ -379,6 +469,7 @@ export function createWriteOperationCoordinatorBundle<
     if (operation.finalized) return;
     operation.finalized = true;
     operation.active = false;
+    operation.recoveryPhase = 'TERMINAL';
     blocked = true;
     if (current === operation) current = null;
     const rejection = error ?? new Error('write operation has unknown effect');
@@ -394,6 +485,7 @@ export function createWriteOperationCoordinatorBundle<
     if (operation.finalized) return;
     operation.finalized = true;
     operation.active = false;
+    operation.recoveryPhase = 'TERMINAL';
     if (candidate.kind === 'UNKNOWN_EFFECT') blocked = true;
     if (current === operation) current = null;
     if (!notifyLifecycle(operation, candidate.kind)) {
@@ -423,6 +515,7 @@ export function createWriteOperationCoordinatorBundle<
     if (operation.finalized) return;
     operation.finalized = true;
     operation.active = false;
+    operation.recoveryPhase = 'TERMINAL';
     if (current === operation) current = null;
     try {
       if (lifecycleSettled !== undefined) {
@@ -439,6 +532,80 @@ export function createWriteOperationCoordinatorBundle<
     }
     operation.reject(error);
   };
+
+  const finalizeRecoveredBusinessResult = (operation: Operation, result: unknown): void => {
+    if (result === undefined) throw new TypeError('post-commit unknown recovery result must be defined');
+    if (operation.recoveryPhase !== 'PAUSED') {
+      throw new Error('post-commit unknown recovery operation is not paused');
+    }
+    assertCurrent(operation);
+    operation.finalized = true;
+    operation.active = false;
+    operation.recoveryPhase = 'TERMINAL';
+    current = null;
+    if (!notifyLifecycle(operation, 'BUSINESS_RESULT_PERSISTED')) return;
+    operation.resolve(result);
+  };
+
+  const recoveryAccess: CoordinatorRecoveryAccess = Object.freeze({
+    createOwner(): PostCommitUnknownRecoveryOwner {
+      let owner!: PostCommitUnknownRecoveryOwner;
+      owner = Object.freeze({
+        adopt(this: unknown, lease: PostCommitUnknownRecoveryLease): PostCommitUnknownRecoveryHandle {
+          if (this !== owner) throw new TypeError('post-commit unknown recovery owner is foreign');
+          if ((typeof lease !== 'object' && typeof lease !== 'function') || lease === null) {
+            throw new TypeError('post-commit unknown recovery lease is invalid');
+          }
+          const leaseState = recoveryLeaseStates.get(lease as object);
+          if (leaseState === undefined || leaseState.access !== recoveryAccess) {
+            throw new TypeError('post-commit unknown recovery lease is foreign or forged');
+          }
+          const operation = leaseState.operation;
+          if (leaseState.adoptedBy !== null || leaseState.handle !== null) {
+            throw new Error('post-commit unknown recovery lease was already adopted');
+          }
+          if (operation.recoveryPhase !== 'PAUSED' || operation.recoveryLease !== lease) {
+            throw new Error('post-commit unknown recovery lease is not paused');
+          }
+          assertCurrent(operation);
+
+          let handle!: PostCommitUnknownRecoveryHandle;
+          const assertHandleCurrent = (): void => {
+            if (leaseState.adoptedBy !== owner || leaseState.handle !== handle) {
+              throw new Error('post-commit unknown recovery handle is stale');
+            }
+            if (operation.recoveryPhase !== 'PAUSED' || operation.recoveryLease !== lease) {
+              throw new Error('post-commit unknown recovery operation is not paused');
+            }
+            assertCurrent(operation);
+          };
+          handle = Object.freeze({
+            assertCurrent(this: unknown): void {
+              if (this !== handle) throw new TypeError('post-commit unknown recovery handle is foreign');
+              assertHandleCurrent();
+            },
+            businessResultPersisted(this: unknown, result: unknown): void {
+              if (this !== handle) throw new TypeError('post-commit unknown recovery handle is foreign');
+              assertHandleCurrent();
+              finalizeRecoveredBusinessResult(operation, result);
+            },
+            failClosed(this: unknown, error: unknown): void {
+              if (this !== handle) throw new TypeError('post-commit unknown recovery handle is foreign');
+              if (error === undefined || error === null) {
+                throw new TypeError('post-commit unknown recovery failure requires an error');
+              }
+              assertHandleCurrent();
+              finalizeUnknown(operation, error);
+            },
+          }) as PostCommitUnknownRecoveryHandle;
+          leaseState.adoptedBy = owner;
+          leaseState.handle = handle;
+          return handle;
+        },
+      }) as PostCommitUnknownRecoveryOwner;
+      return owner;
+    },
+  });
 
   async function drain(): Promise<void> {
     if (running || blocked) return;
@@ -526,6 +693,8 @@ export function createWriteOperationCoordinatorBundle<
       validationState: 'WAITING_VALIDATION',
       prestartError: undefined,
       maintenanceValidationCanceled: false,
+      recoveryLease: null,
+      recoveryPhase: 'NONE',
     };
     queue.push(operation);
     issuedOperationIds.add(operationId);
@@ -694,7 +863,26 @@ export function createWriteOperationCoordinatorBundle<
     TRecognitionInput,
     TRecognitionResult
   >;
-  return Object.freeze(bundle);
+  const frozenBundle = Object.freeze(bundle);
+  coordinatorRecoveryAccesses.set(frozenBundle as object, recoveryAccess);
+  return frozenBundle;
+}
+
+/**
+ * Creates an internal recovery owner for exactly one coordinator bundle.
+ * Ordinary enqueue callers never receive this owner; it exists solely so the
+ * future G10c confirmation coordinator can make a controlled final decision
+ * about a post-commit transport unknown.
+ */
+export function createPostCommitUnknownRecoveryOwner(
+  bundle: WriteOperationCoordinatorBundle,
+): PostCommitUnknownRecoveryOwner {
+  if ((typeof bundle !== 'object' && typeof bundle !== 'function') || bundle === null) {
+    throw new TypeError('write operation coordinator bundle is invalid');
+  }
+  const access = coordinatorRecoveryAccesses.get(bundle as object);
+  if (access === undefined) throw new TypeError('write operation coordinator bundle is foreign');
+  return access.createOwner();
 }
 
 function createUniqueOperationId(issuedOperationIds: ReadonlySet<string>): string {
