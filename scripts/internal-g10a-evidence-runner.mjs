@@ -68,21 +68,25 @@ export async function runG10aEvidence({
     categories = createG10aEvidenceCategories(await collectCategories({ phases: Object.freeze([...phaseResults]), environment: environment ?? null }));
   } catch {
     categoryFailure = new Error('G10a evidence category collection failed');
-    categories = undefined;
-  }
-  if (categories === undefined) {
-    // The helper validates this fallback; no raw collector exception can reach
-    // private evidence artifacts.
-    categories = await collectG10aEvidenceCategories();
+    // This is deliberately constructed locally rather than by a second async
+    // collector call.  Once phases have run, an invalid/failed collector must
+    // not create a second pre-write failure path: the truthful closed
+    // NOT_COLLECTED skeleton still has to reach the private artifact writer.
+    categories = createG10aEvidenceCategories();
   }
   const categoryEvidenceStatus = categoryStatus(categories);
   if (categoryEvidenceStatus === 'FAILED' && categoryFailure === undefined) categoryFailure = new Error('G10a evidence category failed');
   if (categoryEvidenceStatus === 'INCOMPLETE' && categoryFailure === undefined) categoryFailure = new Error('G10a evidence categories are incomplete');
 
-  let docker = { dockerContainersAbsent: false, composeContainersAbsent: false, composeNetworksAbsent: false };
+  let docker = emptyDockerCleanup();
   let cleanupFailure;
   try {
-    docker = await inspectDocker();
+    const inspected = await inspectDocker();
+    if (!isDockerCleanupInspection(inspected)) {
+      cleanupFailure = new Error('G10a Docker cleanup verification returned an invalid result');
+    } else {
+      docker = inspected;
+    }
   } catch {
     cleanupFailure = new Error('G10a Docker cleanup verification failed');
   }
@@ -158,6 +162,13 @@ async function dockerList(args) {
 function normalizeExitCode(value) { return Number.isInteger(value) && value >= 0 ? value : 1; }
 function safeDuration(value) { return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0; }
 function createRunId() { return `g10a-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${randomUUID().replaceAll('-', '')}`; }
+function emptyDockerCleanup() { return { dockerContainersAbsent: false, composeContainersAbsent: false, composeNetworksAbsent: false }; }
+function isDockerCleanupInspection(value) {
+  return value !== null && typeof value === 'object'
+    && typeof value.dockerContainersAbsent === 'boolean'
+    && typeof value.composeContainersAbsent === 'boolean'
+    && typeof value.composeNetworksAbsent === 'boolean';
+}
 function categoryStatus(categories) {
   const statuses = Object.values(categories).map((category) => category.status);
   if (statuses.includes('FAIL')) return 'FAILED';

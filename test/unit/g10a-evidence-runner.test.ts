@@ -143,6 +143,28 @@ describe('G10a evidence top-level runner', () => {
     expect(writes[0].categories.secret.cases).toEqual([]);
   });
 
+  test('still hands closed incomplete artifacts to the writer when category collection and cleanup inspection are themselves malformed', async () => {
+    const runner = await loadRunner();
+    const writes: any[] = [];
+    await expect(runner.runG10aEvidence({
+      root: '/safe/workspace', outputRoot: '/safe/private-output', runId: 'g10a-20261001-finalization-seam', now: sequenceNow(0, 1, 1, 2, 2, 3),
+      assertOutputRoot: async () => '/safe/private-output', assertClean: async () => undefined, collectProvenance: async () => provenance(),
+      executeCommand: async (identifier: string) => ({ exitCode: 0, stdout: `Test Suites: 1 passed, 1 total\nTests:       1 passed, 1 total${identifier === 'test:g10a:integration' ? `\n${environmentProof}` : ''}` }),
+      // The seam simulates a collector bug, rather than merely an ordinary
+      // NOT_COLLECTED response. The runner must not throw before write.
+      collectCategories: async () => { throw new Error('collector raw secret must not escape'); },
+      // A malformed cleanup probe previously made createG10aEvidenceCleanup
+      // throw before the artifact writer was reached.
+      inspectDocker: async () => ({ dockerContainersAbsent: true }),
+      writeArtifacts: async (input: any) => { writes.push(input); return {}; },
+    })).rejects.toThrow('G10a evidence category collection failed');
+    expect(writes).toHaveLength(1);
+    expect(writes[0].results).toMatchObject({ status: 'INCOMPLETE', categoryEvidenceStatus: 'INCOMPLETE' });
+    expect(writes[0].cleanup).toMatchObject({ status: 'FAIL', dockerContainersAbsent: false, composeContainersAbsent: false, composeNetworksAbsent: false });
+    expect(Object.values(writes[0].categories).every((category: any) => category.status === 'NOT_COLLECTED')).toBe(true);
+    expect(JSON.stringify(writes[0])).not.toContain('collector raw secret');
+  });
+
   test('keeps a collected category failure distinct from incomplete collection and beneath a phase failure', async () => {
     const runner = await loadRunner();
     const categoryWrites: any[] = [];
