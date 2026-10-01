@@ -9,6 +9,7 @@ import {
   createG10aEvidenceResults,
   writeG10aEvidenceArtifacts,
 } from './internal-g10a-evidence.mjs';
+import { parseG10aEnvironmentProofFromOutput } from './internal-g10a-environment-proof.mjs';
 
 const PHASES = Object.freeze(['test:g10a:unit', 'test:g10a:socket', 'test:g10a:integration']);
 const PROJECT = 'passhub-g10a';
@@ -31,6 +32,7 @@ export async function runG10aEvidence({
   const provenance = await collectProvenance({ root });
   const phaseResults = [];
   let phaseFailure;
+  let environment;
 
   for (const identifier of PHASES) {
     const startedAt = now();
@@ -43,11 +45,18 @@ export async function runG10aEvidence({
     const durationMs = safeDuration(now() - startedAt);
     const parsed = parseJestCounts(commandResult?.stdout);
     const exitCode = normalizeExitCode(commandResult?.exitCode);
+    if (identifier === 'test:g10a:integration') {
+      environment = parseG10aEnvironmentProofFromOutput(commandResult?.stdout);
+      if (exitCode === 0 && environment === undefined) {
+        phaseFailure = new Error('test:g10a:integration did not emit a valid G10a environment proof');
+      }
+    }
     phaseResults.push(Object.freeze({ identifier, exitCode, durationMs, suiteCount: parsed.suiteCount, testCount: parsed.testCount }));
     if (exitCode !== 0) {
       phaseFailure = new Error(`${identifier} failed with exit ${exitCode}`);
       break;
     }
+    if (phaseFailure !== undefined) break;
   }
 
   let docker = { dockerContainersAbsent: false, composeContainersAbsent: false, composeNetworksAbsent: false };
@@ -59,7 +68,7 @@ export async function runG10aEvidence({
   }
   const cleanupPass = docker.dockerContainersAbsent === true && docker.composeContainersAbsent === true && docker.composeNetworksAbsent === true;
   if (!cleanupPass && cleanupFailure === undefined) cleanupFailure = new Error('G10a Docker resources remain after execution');
-  const results = createG10aEvidenceResults({ status: phaseFailure === undefined ? 'PASS' : 'FAIL', phases: phaseResults });
+  const results = createG10aEvidenceResults({ status: phaseFailure === undefined ? 'PASS' : 'FAIL', phases: phaseResults, environment });
   const cleanup = createG10aEvidenceCleanup({ status: cleanupPass ? 'PASS' : 'FAIL', ...docker });
   try {
     await writeArtifacts({ root, outputRoot: evidenceRoot, runId, provenance, results, cleanup });

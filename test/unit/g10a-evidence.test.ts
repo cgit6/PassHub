@@ -15,7 +15,7 @@ type EvidenceProvenance = Readonly<{
 type Evidence = Readonly<{
   collectG10aEvidenceProvenance(input: { root: string; git: (root: string, args: readonly string[]) => Promise<string> }): Promise<EvidenceProvenance>;
   writeG10aEvidenceArtifacts(input: { root: string; outputRoot?: string; runId: string; provenance: EvidenceProvenance; results: object; cleanup: object }): Promise<{ runId: string; artifactNames: readonly string[] }>;
-  createG10aEvidenceResults(input: { status: 'PASS' | 'FAIL'; phases: unknown[] }): object;
+  createG10aEvidenceResults(input: { status: 'PASS' | 'FAIL'; phases: unknown[]; environment?: unknown }): object;
   createG10aEvidenceCleanup(input: { status: 'PASS' | 'FAIL'; dockerContainersAbsent: boolean; composeContainersAbsent: boolean; composeNetworksAbsent: boolean }): object;
   assertG10aEvidenceOutputRoot(input: { root: string; outputRoot?: string }): Promise<string>;
   runWithPrimaryFailure(input: { execute: () => Promise<unknown>; cleanup: () => Promise<void> }): Promise<unknown>;
@@ -57,7 +57,7 @@ describe('G10a private evidence boundary', () => {
     expect(persisted).toContain('node:24.21.0-bookworm-slim@sha256:');
     expect(persisted).toContain('mongo:8.0.32-noble@sha256:');
     expect(persisted).not.toMatch(/mongodb(?:\+srv)?:\/\//iu);
-    expect(persisted).not.toMatch(/\b(?:uri|secret|token|password|authorization|cookie|body|stack|environment)\b/iu);
+    expect(persisted).not.toMatch(/\b(?:uri|secret|token|password|authorization|cookie|body|stack)\b/iu);
     const cleanupJson = files.at(2);
     if (cleanupJson === undefined) throw new Error('missing cleanup evidence');
     expect(JSON.parse(cleanupJson)).toEqual({
@@ -166,7 +166,7 @@ describe('G10a private evidence boundary', () => {
   test('enforces PASS and FAIL result/cleanup semantics instead of only field shape', async () => {
     const evidence = await loadEvidence();
     expect(() => evidence.createG10aEvidenceResults({ status: 'PASS', phases: [phase('test:g10a:unit', 0, 1, 1, 1)] })).toThrow('PASS results are incomplete');
-    expect(() => evidence.createG10aEvidenceResults({ status: 'FAIL', phases: [phase('test:g10a:unit', 0, 1, 1, 1)] })).toThrow('FAIL results require a failed phase');
+    expect(() => evidence.createG10aEvidenceResults({ status: 'FAIL', phases: [phase('test:g10a:unit', 0, 1, 1, 1)], environment: environmentProof() })).toThrow('FAIL results require a failed phase');
     expect(() => evidence.createG10aEvidenceCleanup({ status: 'PASS', dockerContainersAbsent: false, composeContainersAbsent: true, composeNetworksAbsent: true })).toThrow('status does not match outcomes');
   });
 });
@@ -194,6 +194,7 @@ async function workspaceFixture(): Promise<{ readonly root: string }> {
   await writeFile(join(root, 'scripts', 'internal-g10a-evidence.mjs'), 'export {};\n');
   await writeFile(join(root, 'scripts', 'test-g10a-evidence.mjs'), 'export {};\n');
   await writeFile(join(root, 'scripts', 'internal-g10a-evidence-runner.mjs'), 'export {};\n');
+  await writeFile(join(root, 'scripts', 'internal-g10a-environment-proof.mjs'), 'export {};\n');
   await writeFile(join(root, 'infra', 'toolchain-images.json'), JSON.stringify({ images: {
     node: `node:24.21.0-bookworm-slim@sha256:${'a'.repeat(64)}`,
     mongo: `mongo:8.0.32-noble@sha256:${'b'.repeat(64)}`,
@@ -207,7 +208,8 @@ function phase(identifier: string, exitCode: number, durationMs: number, suiteCo
   return { identifier, exitCode, durationMs, suiteCount, testCount };
 }
 
-function goodResults(evidence: Evidence): object { return evidence.createG10aEvidenceResults({ status: 'PASS', phases: [phase('test:g10a:unit', 0, 1, 1, 1), phase('test:g10a:socket', 0, 1, 1, 1), phase('test:g10a:integration', 0, 1, 1, 1)] }); }
+function environmentProof() { return { format: 'passhub.g10a.environment-proof.v1', nodeVersion: '24.21.0', mongoVersion: '8.0.32', replicaSet: 'rs0', writablePrimary: true }; }
+function goodResults(evidence: Evidence): object { return evidence.createG10aEvidenceResults({ status: 'PASS', phases: [phase('test:g10a:unit', 0, 1, 1, 1), phase('test:g10a:socket', 0, 1, 1, 1), phase('test:g10a:integration', 0, 1, 1, 1)], environment: environmentProof() }); }
 function goodCleanup(evidence: Evidence): object { return evidence.createG10aEvidenceCleanup({ status: 'PASS', dockerContainersAbsent: true, composeContainersAbsent: true, composeNetworksAbsent: true }); }
 
 async function cleanGit(_root: string, args: readonly string[]): Promise<string> {

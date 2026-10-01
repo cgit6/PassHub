@@ -10,15 +10,16 @@ const GIT_COMMIT = /^[a-f0-9]{40}$/u;
 const RUN_ID = /^g10a-[a-z0-9-]+$/u;
 const FORMAT = 'passhub.g10a.evidence.v1';
 const RESULT_FORMAT = 'passhub.g10a.evidence-results.v1';
+const ENVIRONMENT_PROOF_FORMAT = 'passhub.g10a.environment-proof.v1';
 const CLEANUP_FORMAT = 'passhub.g10a.evidence-cleanup.v1';
 const FIXED_ARTIFACT_NAMES = Object.freeze(['manifest.json', 'results.json', 'cleanup.json']);
 const HASH_KEYS = Object.freeze([
-  'sourceTree', 'g10aSource', 'g10aTests', 'packageJson', 'packageLock', 'tsconfig', 'runner', 'executionRunner', 'executionCore', 'evidenceHelper',
+  'sourceTree', 'g10aSource', 'g10aTests', 'packageJson', 'packageLock', 'tsconfig', 'runner', 'executionRunner', 'executionCore', 'environmentProof', 'evidenceHelper',
   'compose', 'toolchain', 'jestUnit', 'jestSocket', 'jestIntegration', 'inventory',
 ]);
 const PROVENANCE_KEYS = Object.freeze(['format', 'sourceCommit', 'hashes', 'toolchain']);
 const MANIFEST_KEYS = Object.freeze(['format', 'runId', 'sourceCommit', 'hashes', 'toolchain']);
-const RESULTS_KEYS = Object.freeze(['format', 'runId', 'status', 'phases']);
+const RESULTS_KEYS = Object.freeze(['format', 'runId', 'status', 'phases', 'environment']);
 const CLEANUP_KEYS = Object.freeze(['format', 'runId', 'status', 'primaryFailurePrecedence', 'dockerContainersAbsent', 'composeContainersAbsent', 'composeNetworksAbsent']);
 const PHASE_IDENTIFIERS = Object.freeze(['test:g10a:unit', 'test:g10a:socket', 'test:g10a:integration']);
 
@@ -30,7 +31,7 @@ const PHASE_IDENTIFIERS = Object.freeze(['test:g10a:unit', 'test:g10a:socket', '
 export async function collectG10aEvidenceProvenance({ root, git = runGit } = {}) {
   const workspace = requireAbsoluteDirectory(root, 'root');
   const sourceCommit = await assertCleanGitWorktree({ root: workspace, git });
-  const [sourceTree, g10aSource, g10aTests, packageJson, packageLock, tsconfig, runner, executionRunner, executionCore, evidenceHelper, compose, toolchain, jestUnit, jestSocket, jestIntegration, images] = await Promise.all([
+  const [sourceTree, g10aSource, g10aTests, packageJson, packageLock, tsconfig, runner, executionRunner, executionCore, environmentProof, evidenceHelper, compose, toolchain, jestUnit, jestSocket, jestIntegration, images] = await Promise.all([
     sha256Directory(join(workspace, 'src')),
     sha256MatchingFiles(workspace, 'src', isG10aSourcePath),
     sha256MatchingFiles(workspace, 'test', isG10aTestPath),
@@ -40,6 +41,7 @@ export async function collectG10aEvidenceProvenance({ root, git = runGit } = {})
     sha256File(join(workspace, 'scripts', 'test-g10a-integration.mjs')),
     sha256File(join(workspace, 'scripts', 'test-g10a-evidence.mjs')),
     sha256File(join(workspace, 'scripts', 'internal-g10a-evidence-runner.mjs')),
+    sha256File(join(workspace, 'scripts', 'internal-g10a-environment-proof.mjs')),
     sha256File(join(workspace, 'scripts', 'internal-g10a-evidence.mjs')),
     sha256File(join(workspace, 'infra', 'g04b-mongo-compose.yml')),
     sha256File(join(workspace, 'infra', 'toolchain-images.json')),
@@ -48,7 +50,7 @@ export async function collectG10aEvidenceProvenance({ root, git = runGit } = {})
     sha256File(join(workspace, 'jest.g10a.integration.config.cjs')),
     readPinnedImages(workspace),
   ]);
-  const unhashedInventory = freezeObject({ sourceTree, g10aSource, g10aTests, packageJson, packageLock, tsconfig, runner, executionRunner, executionCore, evidenceHelper, compose, toolchain, jestUnit, jestSocket, jestIntegration });
+  const unhashedInventory = freezeObject({ sourceTree, g10aSource, g10aTests, packageJson, packageLock, tsconfig, runner, executionRunner, executionCore, environmentProof, evidenceHelper, compose, toolchain, jestUnit, jestSocket, jestIntegration });
   const hashes = freezeObject({ ...unhashedInventory, inventory: sha256CanonicalInventory(unhashedInventory) });
 
   return freezeObject({
@@ -301,8 +303,8 @@ function assertManifestShape(value, requiresRunId) {
   if (!isNodeImage(value.toolchain.nodeImage) || !isMongoImage(value.toolchain.mongoImage)) throw new Error('G10a evidence toolchain is invalid');
 }
 
-export function createG10aEvidenceResults({ status, phases } = {}) {
-  const result = freezeObject({ format: RESULT_FORMAT, runId: 'g10a-provenance', status, phases });
+export function createG10aEvidenceResults({ status, phases, environment = null } = {}) {
+  const result = freezeObject({ format: RESULT_FORMAT, runId: 'g10a-provenance', status, phases, environment });
   assertResults(result, false);
   return result;
 }
@@ -326,7 +328,14 @@ function assertResults(value, requiresRunId = true) {
     if (phase.identifier !== PHASE_IDENTIFIERS[index] || !Number.isInteger(phase.exitCode) || phase.exitCode < 0 || !Number.isSafeInteger(phase.durationMs) || phase.durationMs < 0 || !isCount(phase.suiteCount) || !isCount(phase.testCount)) throw new Error('G10a evidence results are invalid');
   }
   if (value.status === 'PASS' && (value.phases.length !== PHASE_IDENTIFIERS.length || value.phases.some((phase) => phase.exitCode !== 0 || phase.suiteCount === null || phase.testCount === null))) throw new Error('G10a evidence PASS results are incomplete');
-  if (value.status === 'FAIL' && !value.phases.some((phase) => phase.exitCode !== 0)) throw new Error('G10a evidence FAIL results require a failed phase');
+  if (value.status === 'FAIL' && !value.phases.some((phase) => phase.exitCode !== 0) && value.environment !== null) throw new Error('G10a evidence FAIL results require a failed phase or missing environment proof');
+  if (value.status === 'PASS') assertEnvironmentProof(value.environment);
+  else if (value.environment !== null) assertEnvironmentProof(value.environment);
+}
+
+function assertEnvironmentProof(value) {
+  assertExactKeys(value, ['format', 'nodeVersion', 'mongoVersion', 'replicaSet', 'writablePrimary'], 'environment proof');
+  if (value.format !== ENVIRONMENT_PROOF_FORMAT || value.nodeVersion !== '24.21.0' || value.mongoVersion !== '8.0.32' || value.replicaSet !== 'rs0' || value.writablePrimary !== true) throw new Error('G10a evidence environment proof is invalid');
 }
 
 function isCount(value) { return value === null || (Number.isSafeInteger(value) && value >= 0); }

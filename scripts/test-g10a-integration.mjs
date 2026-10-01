@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import process from 'node:process';
+import { collectG10aEnvironmentProof, writeG10aEnvironmentProof } from './internal-g10a-environment-proof.mjs';
 
 const composeFile = 'infra/g04b-mongo-compose.yml';
 const projectName = 'passhub-g10a';
@@ -26,9 +27,15 @@ await mkdir(join(scratch, 'home'), { mode: 0o700 });
 await mkdir(join(scratch, 'npm-cache'), { mode: 0o700 });
 
 let primaryFailure;
+let environmentProof;
 try {
   await run('docker', [...compose, 'up', '-d'], process.env, remainingMs());
   await run('node', ['scripts/g04b-init-replica-set.mjs'], { ...process.env, G04B_MONGO_URI: uri }, remainingMs());
+  environmentProof = await collectG10aEnvironmentProof({
+    captureCommand: async (command, args) => await runCaptured(command, args, process.env, remainingMs()),
+    nodeImage,
+    compose,
+  });
   await run('docker', [
     'run', '--rm', '--name', nodeContainerName, '--network', 'host', '--user', `${uid}:${gid}`,
     '-v', `${workspace}:/workspace`, '-v', `${scratch}:/tmp/passhub-g10a`, '-w', '/workspace',
@@ -71,6 +78,7 @@ try {
   });
 }
 if (primaryFailure !== undefined) throw primaryFailure;
+writeG10aEnvironmentProof(environmentProof);
 
 function remainingMs() {
   const remaining = Math.floor(totalDeadlineMs - (performance.now() - startedAt));

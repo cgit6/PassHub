@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const moduleUrl = pathToFileURL(join(process.cwd(), 'scripts', 'internal-g10a-evidence-runner.mjs')).href;
+const environmentProof = 'G10A_ENVIRONMENT_PROOF={"format":"passhub.g10a.environment-proof.v1","nodeVersion":"24.21.0","mongoVersion":"8.0.32","replicaSet":"rs0","writablePrimary":true}';
 
 type Runner = Readonly<{
   parseJestCounts(output: unknown): { suiteCount: number | null; testCount: number | null };
@@ -20,7 +21,7 @@ describe('G10a evidence top-level runner', () => {
       collectProvenance: async () => provenance(),
       executeCommand: async (identifier: string) => {
         commandCalls.push(identifier);
-        return { exitCode: 0, stdout: `Test Suites: 1 passed, 1 total\nTests:       7 passed, 7 total\nprivate mongodb://not-persisted/secret` };
+        return { exitCode: 0, stdout: `Test Suites: 1 passed, 1 total\nTests:       7 passed, 7 total\nprivate mongodb://not-persisted/secret${identifier === 'test:g10a:integration' ? `\n${environmentProof}` : ''}` };
       },
       inspectDocker: async () => ({ dockerContainersAbsent: true, composeContainersAbsent: true, composeNetworksAbsent: true }),
       writeArtifacts: async (input: unknown) => { writes.push(input); return {}; },
@@ -72,7 +73,7 @@ describe('G10a evidence top-level runner', () => {
     await expect(runner.runG10aEvidence({
       root: '/safe/workspace', outputRoot: '/safe/private-output', runId: 'g10a-20261001-cleanup-fail', now: sequenceNow(0, 1, 1, 2, 2, 3),
       assertOutputRoot: async () => '/safe/private-output', assertClean: async () => undefined, collectProvenance: async () => provenance(),
-      executeCommand: async () => ({ exitCode: 0, stdout: 'Test Suites: 1 passed, 1 total\nTests: 1 passed, 1 total' }),
+      executeCommand: async (identifier: string) => ({ exitCode: 0, stdout: `Test Suites: 1 passed, 1 total\nTests: 1 passed, 1 total${identifier === 'test:g10a:integration' ? `\n${environmentProof}` : ''}` }),
       inspectDocker, writeArtifacts: async (input: any) => { writes.push(input); return {}; },
     })).rejects.toThrow(message);
     expect(writes).toHaveLength(1);
@@ -88,6 +89,21 @@ describe('G10a evidence top-level runner', () => {
       executeCommand: async () => ({ exitCode: 4, stdout: '' }),
       inspectDocker: async () => { throw new Error('cleanup'); }, writeArtifacts: async () => ({}),
     })).rejects.toThrow('test:g10a:unit failed with exit 4');
+  });
+
+  test('fails evidence when a successful integration omits or expands its fixed environment proof', async () => {
+    const runner = await loadRunner();
+    const writes: any[] = [];
+    await expect(runner.runG10aEvidence({
+      root: '/safe/workspace', outputRoot: '/safe/private-output', runId: 'g10a-20261001-missing-proof', now: sequenceNow(0, 1, 1, 2, 2, 3),
+      assertOutputRoot: async () => '/safe/private-output', assertClean: async () => undefined, collectProvenance: async () => provenance(),
+      executeCommand: async () => ({ exitCode: 0, stdout: 'Test Suites: 1 passed, 1 total\nTests: 1 passed, 1 total' }),
+      inspectDocker: async () => ({ dockerContainersAbsent: true, composeContainersAbsent: true, composeNetworksAbsent: true }),
+      writeArtifacts: async (input: any) => { writes.push(input); return {}; },
+    })).rejects.toThrow('did not emit a valid G10a environment proof');
+    expect(writes).toHaveLength(1);
+    expect(writes[0].results.status).toBe('FAIL');
+    expect(writes[0].results.environment).toBeNull();
   });
 
   test('does not read output, provenance, or commands when clean preflight fails', async () => {
