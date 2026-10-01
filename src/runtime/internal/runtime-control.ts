@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { types as nodeTypes } from 'node:util';
+import { createRuntimeLogRecord, type RuntimeLogCode } from './runtime-log-schema.js';
 import { assertRuntimeLogSink, subscribeRuntimeLogSinkHealth, type RuntimeLogSink, type RuntimeLogSinkSnapshot } from './runtime-log-sink.js';
 
 export type RuntimeControlPhase =
@@ -197,6 +198,7 @@ const identityIssuers = new WeakMap<object, IssuerState>();
 const identities = new WeakMap<object, IdentityState>();
 const operationTokens = new WeakMap<object, OperationTokenState>();
 const controls = new WeakMap<object, ControlState>();
+const controlRejectionRecorders = new WeakMap<object, (requestControlId: string) => void>();
 const leases = new WeakMap<object, LeaseState>();
 const issuedControlIds = new Set<string>();
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -346,6 +348,33 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
     }
   }
 
+  // CONTROL records are observability only.  In particular, construction,
+  // schema validation and a pathological sink must never alter a control
+  // decision or its replay state.
+  const appendControlLog = (
+    code: Extract<RuntimeLogCode, 'HOLD_ACKNOWLEDGED' | 'RELEASE_ACKNOWLEDGED' | 'DRAIN_STARTED' | 'DRAINED' | 'DRAIN_NOT_DRAINED' | 'CONTROL_REJECTED'>,
+    requestControlId: string,
+    controlId: string | null,
+    recordRevision: string,
+  ): void => {
+    try {
+      // A degraded sink is already a deliberate black hole.  Avoid turning
+      // later control decisions into additional dropped-count side effects.
+      if (capturedOptions.runtimeLogSink === undefined || cachedLogging.status === 'LOGGING_DEGRADED') return;
+      capturedOptions.runtimeLogSink.append(createRuntimeLogRecord({
+        schemaVersion: 'g10a.log.v1', timestamp: new Date().toISOString(),
+        kind: 'CONTROL', code,
+        requestUUID: null, operationUUID: null, datasetEpoch: state.epoch, processRunId: state.run, ownerRef: null,
+        route: 'CONTROL', phase: 'CONTROL', round: null, group: null,
+        budgetRemainingMs: null, budgetRemainingUnits: null, commandName: null, driverRequestId: null,
+        requestControlId, controlId, revision: recordRevision,
+      }));
+    } catch { /* logging is best-effort and cannot change control */ }
+  };
+  const recordControlRejection = (requestControlId: string): void => {
+    appendControlLog('CONTROL_REJECTED', requestControlId, null, revision.toString(10));
+  };
+
   const canStartWriter = (): boolean => manualControlId === null;
   // Deliberately distinct from canStartWriter: A6 only rejects a *new*
   // writer synchronously at ingress.  Previously admitted work is governed by
@@ -480,6 +509,7 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
       commitPendingResult(terminalCell, 'HELD', controlId, snapshot());
       last = { command: 'HOLD', requestControlId: request.requestControlId, fingerprint, result: terminal };
       current = null;
+      appendControlLog('HOLD_ACKNOWLEDGED', request.requestControlId, controlId, terminal.revision);
       return terminal;
     } catch (error) {
       terminalCell.state = 'FAILED';
@@ -504,6 +534,7 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
       current = { command: 'RELEASE', requestControlId: request.requestControlId, fingerprint, result };
       last = { command: 'RELEASE', requestControlId: request.requestControlId, fingerprint, result };
       current = null;
+      appendControlLog('RELEASE_ACKNOWLEDGED', request.requestControlId, request.controlId as string, result.revision);
       // The terminal transition is fully visible before the coordinator may
       // start a writer.  The wake is an external effect, so it is handed off
       // after RELEASE's synchronous critical section.  Exact replay returns
@@ -536,6 +567,7 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
       maintenanceControlId = controlId;
       maintenanceOutcome = 'WAITING';
       nextControlId = followingControlId;
+      appendControlLog('DRAIN_STARTED', captured.request.requestControlId, controlId, revision.toString(10));
     } catch (error) {
       current = null;
       rejectResult(error);
@@ -556,6 +588,9 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
       const result = makeResult(outcome, controlId);
       last = { command: 'DRAIN', requestControlId: captured.request.requestControlId, fingerprint, result };
       current = null;
+      if (outcome === 'DRAINED' || outcome === 'NOT_DRAINED') {
+        appendControlLog(outcome === 'DRAINED' ? 'DRAINED' : 'DRAIN_NOT_DRAINED', captured.request.requestControlId, controlId, result.revision);
+      }
       resolveResult(result);
       try { cleanupAbort?.(); } catch { /* cleanup cannot change the terminal */ }
     };
@@ -622,6 +657,7 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
 
   const control: RuntimeControl = Object.freeze({ snapshot, acquireIssuedPersistence, acquireActiveQueryRead, canStartWriter, isMaintenanceWriterVeto, bindWriterWake, bindMaintenanceReadySettlement, bindMaintenanceValidationCancellation, hold, release, drain });
   controls.set(control as object, state);
+  controlRejectionRecorders.set(control as object, recordControlRejection);
   return control;
 
   function makeResult(outcome: RuntimeControlOutcome, controlId: string | null, projection?: SnapshotProjection): RuntimeControlResult {
@@ -639,6 +675,20 @@ export function createRuntimeControl(options: RuntimeControlOptions): RuntimeCon
 
 export function assertRuntimeControl(value: unknown): asserts value is RuntimeControl {
   if (nodeTypes.isProxy(value) || typeof value !== 'object' || value === null || !controls.has(value)) throw new TypeError('runtime control is not trusted');
+}
+
+/**
+ * Private protocol capability for a fully captured HOLD/RELEASE/DRAIN that
+ * reached the control core and was rejected before state mutation.  It is not
+ * a method on RuntimeControl, so ordinary runtime consumers cannot discover
+ * or invoke a log producer through the control capability.
+ */
+export function recordRuntimeControlRejection(control: RuntimeControl, requestControlId: string): void {
+  assertRuntimeControl(control);
+  assertUuid(requestControlId, 'requestControlId');
+  const record = controlRejectionRecorders.get(control as object);
+  if (record === undefined) throw new TypeError('runtime control rejection recorder is unavailable');
+  record(requestControlId);
 }
 
 function createPendingResult(cell: PendingResultCell): RuntimeControlResult {

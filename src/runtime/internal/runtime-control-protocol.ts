@@ -2,6 +2,7 @@ import { types as nodeTypes } from 'node:util';
 import { validateRuntimeLogRecord, type RuntimeLogRecord } from './runtime-log-schema.js';
 import {
   assertRuntimeControl,
+  recordRuntimeControlRejection,
   RuntimeControlError,
   type RuntimeControl,
   type RuntimeControlResult,
@@ -126,8 +127,8 @@ export async function dispatchRuntimeControlProtocol(
   if (prepared.kind === 'ERROR') return prepared.response;
 
   const requestControlId = prepared.requestControlId;
+  const request = prepared.request;
   try {
-    const { request } = prepared;
     switch (request.command) {
       case 'STATUS':
       case 'HOLD':
@@ -142,6 +143,7 @@ export async function dispatchRuntimeControlProtocol(
     }
   } catch (error) {
     if (error instanceof RuntimeControlError && controlErrorCodes.has(error.code)) {
+      recordCapturedMutationRejection(control, request, requestControlId);
       return errorEnvelope(requestControlId, error.code);
     }
     if (error instanceof ProtocolInvalidRequest) return errorEnvelope(requestControlId, 'INVALID_REQUEST');
@@ -221,11 +223,26 @@ function dispatchSynchronousRequest(
     }
   } catch (error) {
     if (error instanceof RuntimeControlError && controlErrorCodes.has(error.code)) {
+      recordCapturedMutationRejection(control, request, requestControlId);
       return errorEnvelope(requestControlId, error.code);
     }
     if (error instanceof ProtocolInvalidRequest) return errorEnvelope(requestControlId, 'INVALID_REQUEST');
     return errorEnvelope(requestControlId, 'INTERNAL_UNAVAILABLE');
   }
+}
+
+/**
+ * A CONTROL_REJECTED record has no reason field, but it is still useful for a
+ * fully parsed mutation that reached the control core.  Do not record DTO or
+ * frame failures (nor STATUS/LOGS_READ): they have no attributable mutation.
+ */
+function recordCapturedMutationRejection(
+  control: RuntimeControl,
+  request: CapturedRequest,
+  requestControlId: string | null,
+): void {
+  if (requestControlId === null || (request.command !== 'HOLD' && request.command !== 'RELEASE' && request.command !== 'DRAIN')) return;
+  try { recordRuntimeControlRejection(control, requestControlId); } catch { /* observability cannot alter protocol output */ }
 }
 
 interface CapturedBase {
