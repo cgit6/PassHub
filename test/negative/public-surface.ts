@@ -18,3 +18,7 @@ publicApi.createResolutionHandle({});
 publicApi.createRecognitionResultPlan({}, {});
 // @ts-expect-error management plan factories must not be public
 publicApi.createManagementChangePlan({});
+// @ts-expect-error G10b's concrete Mongo sidecar attachment remains internal.
+publicApi.attachG10bG04bPersistenceSidecar;
+// @ts-expect-error G10b's branded scoped-persistence resolver remains internal.
+publicApi.createG10bScopedPersistenceBindingResolver;

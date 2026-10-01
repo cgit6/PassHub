@@ -14,6 +14,10 @@ import {
   readAccessScopeContextClaims,
   type AccessScopeContext,
 } from '../../shared/access-scope-context.js';
+import {
+  createG10bScopedPersistenceBindingResolver as createInfrastructureG10bScopedPersistenceBindingResolver,
+  type G10bScopedPersistenceBindingResolver,
+} from '../../infrastructure/mongo/internal/g10b-scoped-persistence-sidecar.js';
 
 /**
  * Private G10b composition provenance only.  This deliberately does not
@@ -196,6 +200,23 @@ export function readG10bOperationBudgetForScopedPersistence(
     fail('ACCESS_SCOPE_MISOWNED', 'access scope belongs to a different admission work context');
   }
   return admission.binding;
+}
+
+/**
+ * Composition's adapter-facing view intentionally accepts only a live scope.
+ * The admission association remains private in this bridge, so infrastructure
+ * never needs to import composition or learn G10b budget semantics.
+ */
+export function createG10bScopedPersistenceBindingResolver(): G10bScopedPersistenceBindingResolver {
+  return createInfrastructureG10bScopedPersistenceBindingResolver((scope) => {
+    requireLiveAccessScope(scope);
+    const admission = scopeBindings.get(scope as object);
+    if (admission === undefined) {
+      fail('ACCESS_SCOPE_NOT_BOUND', 'access scope has no operation budget binding');
+    }
+    assertBindingCurrent(admission.binding);
+    return admission.binding;
+  });
 }
 
 function requireAdmissionBinding(context: AdmissionWorkContext): AdmissionBindingState {

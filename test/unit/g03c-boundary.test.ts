@@ -444,6 +444,8 @@ test('redacted query wrapper exposes no token, subject, HMAC, or comparison refe
 
 test('plan factories are not public and plain forged plans are rejected', async () => {
   expect(Object.keys(publicApi).sort()).toEqual(['composeAccess', 'createAccessComposition']);
+  expect(publicApi).not.toHaveProperty('attachG10bG04bPersistenceSidecar');
+  expect(publicApi).not.toHaveProperty('createG10bScopedPersistenceBindingResolver');
   expect(Object.keys(publicApplicationApi)).toEqual([]);
 
   const management = new ManagementAccessScope(new FakeManagementPort(), { epoch: 'epoch-1' });

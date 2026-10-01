@@ -2,10 +2,16 @@ import {
   G10bOperationBridgeError,
   bindG10bOperationBudget,
   bindG10bOperationBudgetOnFirstScopedPersistenceUse,
+  createG10bScopedPersistenceBindingResolver,
   readG10bOperationBudgetForScopedPersistence,
   registerG10bAdmissionWorkContext,
   type G10bOperationBridgeErrorCode,
 } from '../../src/composition/internal/g10b-operation-bridge.js';
+import { G04bMongoPersistenceAdapter } from '../../src/infrastructure/mongo/g04b-persistence-adapter.js';
+import {
+  attachG10bScopedPersistenceBindingResolver,
+  resolveG10bScopedPersistenceBinding,
+} from '../../src/infrastructure/mongo/internal/g10b-scoped-persistence-sidecar.js';
 import type { AdmissionWorkContext } from '../../src/composition/internal/g07b-admission-handler.js';
 import {
   createOperationBudgetBindingFactory,
@@ -142,6 +148,25 @@ function expectBridgeCode(work: () => unknown, code: G10bOperationBridgeErrorCod
 }
 
 describe('G10b operation bridge provenance', () => {
+  test('resolves the exact bound budget through the scope-only G04b seam', async () => {
+    await withLiveBudget((admission, binding) => {
+      const scope = createAccessScopeContext({ epoch: 'epoch-1', owner: 'owner-1', generation: 'generation-1' });
+      const adapter = new G04bMongoPersistenceAdapter(
+        {
+          db: () => ({}),
+          on: () => undefined,
+          startSession: () => { throw new Error('resolver must precede Mongo'); },
+        } as never,
+        'g10b_scope_resolver',
+      );
+      bindG10bOperationBudget(admission, binding);
+      bindG10bOperationBudgetOnFirstScopedPersistenceUse(admission, scope);
+      attachG10bScopedPersistenceBindingResolver(adapter, createG10bScopedPersistenceBindingResolver());
+
+      expect(resolveG10bScopedPersistenceBinding(adapter, scope)).toBe(binding);
+    });
+  });
+
   test('associates one registered frozen admission context with one opaque binding and its first live scope use', async () => {
     await withLiveBudget((admission, binding) => {
       const scope = createAccessScopeContext({ epoch: 'epoch-1', owner: 'owner-1', generation: 'generation-1' });

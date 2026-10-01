@@ -49,6 +49,13 @@ import {
   readRecognitionPersistenceEnvelope,
 } from '../../access/ports/trusted-operation.js';
 import { bindG10aMongoCommandMonitoring } from './g10a-driver-command-monitoring.js';
+import {
+  captureG10bScopedPersistenceBinding,
+  markG10bScopedTransactionBegin,
+  registerG10bConcreteG04bMongoPersistenceAdapter,
+  resolveG10bScopedPersistenceBinding,
+  type G10bScopedPersistenceBinding,
+} from './internal/g10b-scoped-persistence-sidecar.js';
 
 export const G04B_MONGO_VERSION = '8.0.32';
 export const G04B_DEFAULT_DATABASE = 'passhub_g04b_atomic';
@@ -143,6 +150,8 @@ export class G04bTechnicalError extends Error {
 
 interface TransactionState {
   readonly session: ClientSession;
+  /** Opaque G10b capture; CRUD/commit/abort intentionally do not use it yet. */
+  readonly g10bScopedPersistenceBinding: G10bScopedPersistenceBinding | undefined;
   readonly datasetEpoch: string;
   readonly sourceFacts: Map<string, SourceFacts>;
   readonly sourceGuards: Map<string, { incarnation: string; version: number }>;
@@ -201,6 +210,7 @@ export class G04bMongoPersistenceAdapter
   ) {
     if (databaseName.length === 0) throw new TypeError('G04b database name must not be empty');
     this.database = client.db(databaseName);
+    registerG10bConcreteG04bMongoPersistenceAdapter(this);
     bindG10aMongoCommandMonitoring(client);
   }
 
@@ -913,8 +923,14 @@ export class G04bMongoPersistenceAdapter
     if (claims === null) throw new G04bTechnicalError('recognition scope context claims are missing');
     const existing = this.transactions.get(context as object);
     if (existing !== undefined) return existing;
+    markG10bScopedTransactionBegin(this);
+    // An attached G10b resolver may fail closed here.  It must run before any
+    // Mongo session or transaction exists, while unattached adapters preserve
+    // the established G04b path exactly.
+    const g10bScopedPersistenceBinding = resolveG10bScopedPersistenceBinding(this, context);
+    captureG10bScopedPersistenceBinding(this, g10bScopedPersistenceBinding);
     const session = this.client.startSession();
-    const state: TransactionState = { session, datasetEpoch: claims.epoch, sourceFacts: new Map(), sourceGuards: new Map(), qualifications: new Map(), mappings: new Map(), stage: 'begin' };
+    const state: TransactionState = { session, g10bScopedPersistenceBinding, datasetEpoch: claims.epoch, sourceFacts: new Map(), sourceGuards: new Map(), qualifications: new Map(), mappings: new Map(), stage: 'begin' };
     try {
       session.startTransaction(G04B_TRANSACTION_OPTIONS);
       this.transactions.set(context as object, state);

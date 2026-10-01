@@ -1,7 +1,7 @@
 /** @type {import('jest').Config} */
 module.exports = {
   rootDir: 'dist',
-  testMatch: ['<rootDir>/test/integration/g04b-atomic-persistence.test.js'],
+  testMatch: ['<rootDir>/test/integration/g04b-*.test.js'],
   testEnvironment: 'node',
   maxWorkers: 1,
   detectOpenHandles: true,
