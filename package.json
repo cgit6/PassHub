@@ -80,7 +80,7 @@
     "test:g10a:integration": "node scripts/test-g10a-integration.mjs",
     "test:g10a": "npm run test:g10a:unit && npm run test:g10a:socket && npm run test:g10a:integration",
     "test:g10a:evidence": "node scripts/test-g10a-evidence.mjs",
-    "test:g10b:unit": "npm run build && timeout --foreground 60s env NODE_OPTIONS=--experimental-vm-modules jest --config jest.g10b.unit.config.cjs",
+    "test:g10b:unit": "npm run clean && npm run build && timeout --foreground 60s env NODE_OPTIONS=--experimental-vm-modules jest --config jest.g10b.unit.config.cjs",
     "test:g10b:fault": "npm run clean && npm run build && node scripts/test-g10b-fault.mjs",
     "test:g10:fault-topology": "node scripts/check-g10-fault-topology.mjs",
     "test:integration": "npm run build && NODE_OPTIONS=--experimental-vm-modules jest --config jest.integration.config.cjs",

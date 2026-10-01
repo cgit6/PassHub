@@ -23,6 +23,27 @@ export {
 } from './budget-ledger.js';
 
 export {
+  createOperationBudgetBindingFactory,
+  beginOperationExecutionRound,
+  executeOperationCrud,
+  executeOperationInitialCommit,
+  finishOperationExecutionRound,
+  startOperationPrecommitTermination,
+  reserveOperationPrecommitAbortGroup,
+  executeOperationPrecommitAbort,
+  terminateOperationPrecommit,
+  OperationBudgetBindingError,
+  type OperationBudgetBindingErrorCode,
+  type OperationBudgetBinding,
+  type OperationBudgetBindingFactory,
+  type OperationExecutionCommandContext,
+  type OperationBudgetRound,
+  type TrustedOperationBudgetBindingFactoryOptions,
+  type OperationPrecommitTermination,
+  type OperationPrecommitAbortGroup,
+} from './operation-budget-binding.js';
+
+export {
   createWriteOperationCoordinatorBundle,
   type TrustedWriteClock,
   type TrustedWriteMonotonicClock,

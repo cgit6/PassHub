@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
+import { registerTrustedWriteOperationContext } from './operation-budget-binding.js';
 
 export type WriteOperationKind =
   | 'MANAGEMENT_CREATE'
@@ -328,6 +329,7 @@ export function createWriteOperationCoordinatorBundle<
       owner,
       assertCurrent: owner.assertCurrent,
     });
+    registerTrustedWriteOperationContext(context);
     const settlement: WriteOperationSettlement<unknown> = Object.freeze({
       prestartRejected: (error: unknown) => recordCandidate(operation, { kind: 'PRESTART_REJECTED', error }),
       businessResultPersisted: (result: unknown) => recordCandidate(operation, { kind: 'BUSINESS_RESULT_PERSISTED', result }),
