@@ -129,6 +129,7 @@ describe('G10a A10.4 private runtime log file store', () => {
     const malformed = [
       '{}\n',
       valid.replace('"schemaVersion":"g10a.log.v1"', '"schemaVersion":"g10a.log.v1","schemaVersion":"g10a.log.v1"'),
+      valid.replace('"schemaVersion":"g10a.log.v1"', '"schemaVersion":"g10a.log.v1","schema\\u0056ersion":"g10a.log.v1"'),
       `${valid}\n`,
       `${valid.slice(0, -1)}\r\n`,
       valid.trimEnd(),

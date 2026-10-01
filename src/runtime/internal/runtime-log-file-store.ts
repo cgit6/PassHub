@@ -10,7 +10,11 @@ import {
 } from 'node:fs/promises';
 import { TextDecoder, types as nodeTypes } from 'node:util';
 import { RuntimeLogSink, type RuntimeLogDriver } from './runtime-log-sink.js';
-import { RUNTIME_LOG_MAX_BYTES, validateRuntimeLogRecord } from './runtime-log-schema.js';
+import {
+  RUNTIME_LOG_MAX_BYTES,
+  validateBoundedRuntimeLogRecord,
+  validateRuntimeLogRecord,
+} from './runtime-log-schema.js';
 
 /** Private A10.4 filesystem adapter.  It is intentionally not barrel-exported. */
 export const RUNTIME_LOG_FILE_NAME = 'runtime.log';
@@ -429,7 +433,7 @@ function validateNdjson(bytes: Buffer): void {
   for (const line of lines) {
     // Reuse the direct-append boundary so startup accepts precisely the same
     // NDJSON form: one closed JSON value followed by one LF, never BOM/CRLF.
-    validateRuntimeLogLine(`${line}\n`);
+    parseRuntimeLogLine(`${line}\n`);
   }
 }
 
@@ -441,6 +445,22 @@ function validateNdjson(bytes: Buffer): void {
  * boundaries.
  */
 function validateRuntimeLogLine(input: unknown): Buffer {
+  return parseRuntimeLogLine(input).bytes;
+}
+
+interface ParsedRuntimeLogLine {
+  readonly bytes: Buffer;
+  readonly record: ReturnType<typeof validateRuntimeLogRecord>;
+}
+
+/**
+ * The one-pass trusted-file path.  It first proves the physical line envelope
+ * (including its 2 KiB cap), then duplicate-key scans and parses exactly once
+ * before the bounded structural validator.  Callers must not use this for an
+ * arbitrary record object; the public schema validator deliberately keeps its
+ * own encode/size contract for that case.
+ */
+function parseRuntimeLogLine(input: unknown): ParsedRuntimeLogLine {
   try {
     if (typeof input !== 'string') throw new TypeError('invalid runtime log line');
     const bytes = Buffer.from(input, 'utf8');
@@ -452,8 +472,7 @@ function validateRuntimeLogLine(input: unknown): Buffer {
     const json = input.slice(0, -1);
     if (json.length === 0) throw new TypeError('invalid runtime log line');
     assertNoDuplicateJsonKeys(json);
-    validateRuntimeLogRecord(JSON.parse(json));
-    return bytes;
+    return Object.freeze({ bytes, record: validateBoundedRuntimeLogRecord(JSON.parse(json)) });
   } catch {
     throw new TypeError('invalid runtime log line');
   }
@@ -538,11 +557,9 @@ function parseRuntimeLogRecords(bytes: Buffer): readonly ReturnType<typeof valid
   if (!text.endsWith('\n')) throw new Error('truncated runtime log');
   const records: ReturnType<typeof validateRuntimeLogRecord>[] = [];
   for (const line of text.slice(0, -1).split('\n')) {
-    const strictLine = `${line}\n`;
-    validateRuntimeLogLine(strictLine);
-    // validateRuntimeLogLine verifies duplicate keys before JSON.parse.  Keep
-    // the canonical validated record rather than returning the parsed graph.
-    records.push(validateRuntimeLogRecord(JSON.parse(line)));
+    // Parse only once.  `parseRuntimeLogLine` establishes the same strict
+    // envelope as direct append before returning this canonical record.
+    records.push(parseRuntimeLogLine(`${line}\n`).record);
   }
   return Object.freeze(records);
 }
@@ -609,19 +626,37 @@ function assertNoDuplicateJsonKeys(text: string): void {
     space(); const first = text[offset];
     if (first === '{') { object(); return; }
     if (first === '[') { array(); return; }
-    if (first === '"') { string(); return; }
+    if (first === '"') { skipString(); return; }
     const start = offset;
     while (offset < text.length && !/[\s,\]\}]/u.test(text[offset] ?? '')) offset += 1;
     if (start === offset) throw new Error('invalid JSON');
   };
-  const string = (): string => {
+  const key = (): string => {
     if (text[offset] !== '"') throw new Error('invalid JSON');
-    const start = offset; offset += 1; let escaped = false;
+    const start = offset; offset += 1; let escaped = false; let hasEscape = false;
+    while (offset < text.length) {
+      const char = text[offset++]!;
+      if (escaped) { escaped = false; continue; }
+      if (char === '\\') { escaped = true; hasEscape = true; continue; }
+      // Record keys are normally the fixed ASCII names in the schema.  Keep
+      // their hot path allocation-free; escaped keys still need JSON's exact
+      // unescaping because `"a"` and `"\\u0061"` name the same key.
+      if (char === '"') {
+        const raw = text.slice(start + 1, offset - 1);
+        return hasEscape ? JSON.parse(text.slice(start, offset)) as string : raw;
+      }
+      if (char < ' ') throw new Error('invalid JSON');
+    }
+    throw new Error('invalid JSON');
+  };
+  const skipString = (): void => {
+    if (text[offset] !== '"') throw new Error('invalid JSON');
+    offset += 1; let escaped = false;
     while (offset < text.length) {
       const char = text[offset++]!;
       if (escaped) { escaped = false; continue; }
       if (char === '\\') { escaped = true; continue; }
-      if (char === '"') return JSON.parse(text.slice(start, offset)) as string;
+      if (char === '"') return;
       if (char < ' ') throw new Error('invalid JSON');
     }
     throw new Error('invalid JSON');
@@ -630,7 +665,7 @@ function assertNoDuplicateJsonKeys(text: string): void {
     offset += 1; space(); const seen = new Set<string>();
     if (text[offset] === '}') { offset += 1; return; }
     for (;;) {
-      space(); const key = string(); if (seen.has(key)) throw new Error('duplicate JSON key'); seen.add(key);
+      space(); const name = key(); if (seen.has(name)) throw new Error('duplicate JSON key'); seen.add(name);
       space(); if (text[offset++] !== ':') throw new Error('invalid JSON'); value(); space();
       if (text[offset] === '}') { offset += 1; return; }
       if (text[offset++] !== ',') throw new Error('invalid JSON');

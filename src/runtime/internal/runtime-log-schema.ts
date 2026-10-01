@@ -92,6 +92,18 @@ export function validateRuntimeLogRecord(input: unknown): RuntimeLogRecord {
   return createRuntimeLogRecord(input);
 }
 
+/**
+ * Internal companion for a parsed on-disk line whose exact UTF-8 envelope
+ * has already been bounded by the file-store.  It is intentionally absent
+ * from public barrels: arbitrary callers must use `validateRuntimeLogRecord`
+ * and retain its encode/size guarantee.
+ */
+export function validateBoundedRuntimeLogRecord(input: unknown): RuntimeLogRecord {
+  const value = captureClosedRecord(input);
+  validateRecord(value);
+  return Object.freeze({ ...value }) as RuntimeLogRecord;
+}
+
 /** Returns exactly one UTF-8 NDJSON line. */
 export function encodeRuntimeLogRecord(record: RuntimeLogRecord): string {
   // Revalidate here: callers cannot turn a forged structural cast into output.
