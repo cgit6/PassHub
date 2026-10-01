@@ -51,10 +51,12 @@ import {
 import { bindG10aMongoCommandMonitoring } from './g10a-driver-command-monitoring.js';
 import {
   captureG10bScopedPersistenceBinding,
+  createG10bScopedPersistenceExecutionFacade,
   markG10bScopedTransactionBegin,
   registerG10bConcreteG04bMongoPersistenceAdapter,
   resolveG10bScopedPersistenceBinding,
   type G10bScopedPersistenceBinding,
+  type G10bScopedPersistenceExecutionFacade,
 } from './internal/g10b-scoped-persistence-sidecar.js';
 
 export const G04B_MONGO_VERSION = '8.0.32';
@@ -150,8 +152,10 @@ export class G04bTechnicalError extends Error {
 
 interface TransactionState {
   readonly session: ClientSession;
-  /** Opaque G10b capture; CRUD/commit/abort intentionally do not use it yet. */
   readonly g10bScopedPersistenceBinding: G10bScopedPersistenceBinding | undefined;
+  /** Defined only for a sidecar-attached write scope; owns its active round. */
+  g10bExecutionFacade: G10bScopedPersistenceExecutionFacade | undefined;
+  initialCommitInvoked: boolean;
   readonly datasetEpoch: string;
   readonly sourceFacts: Map<string, SourceFacts>;
   readonly sourceGuards: Map<string, { incarnation: string; version: number }>;
@@ -239,6 +243,7 @@ export class G04bMongoPersistenceAdapter
     const state = this.transactions.get(context as object);
     if (state === undefined) return;
     this.transactions.delete(context as object);
+    this.finishG10bExecutionRound(state);
     let abortError: unknown = null;
     if (state.session.inTransaction()) {
       state.stage = 'abort';
@@ -284,7 +289,9 @@ export class G04bMongoPersistenceAdapter
   public async readSourceFacts(context: AccessScopeContext, sourceId: string): Promise<SourceFacts> {
     const state = await this.begin(context);
     try {
-      const found = await this.requireCollections().sources.findOne({ _id: sourceId }, { session: state.session });
+      const found = await this.executeCrud(state, async (timeoutMs) => this.requireCollections().sources.findOne(
+        { _id: sourceId }, this.transactionDriverOptions(state, timeoutMs),
+      ));
       if (found === null) throw new G04bTechnicalError('source is missing');
       const facts: SourceFacts = { sourceId: found._id, direction: found.direction, active: found.active };
       state.sourceFacts.set(sourceId, facts);
@@ -312,7 +319,9 @@ export class G04bMongoPersistenceAdapter
     const qualificationId = qualificationIdOrObservedAtMs;
     const state = await this.begin(context);
     try {
-      const document = await this.requireCollections().qualifications.findOne({ _id: qualificationId }, { session: state.session });
+      const document = await this.executeCrud(state, async (timeoutMs) => this.requireCollections().qualifications.findOne(
+        { _id: qualificationId }, this.transactionDriverOptions(state, timeoutMs),
+      ));
       const snapshot = document === null ? null : toQualificationSnapshot(document);
       if (document !== null) state.qualifications.set(qualificationId, document);
       return snapshot;
@@ -322,9 +331,10 @@ export class G04bMongoPersistenceAdapter
   public async readMapping(context: AccessScopeContext, qualificationId: string, qualificationIncarnation?: string): Promise<FaceMappingSnapshot | null> {
     const state = await this.begin(context);
     try {
-      const mappings = await this.requireCollections().faceSlots.find({
-        qualificationId: { $eq: qualificationId, $type: 'string' },
-      }, { session: state.session }).toArray();
+      const mappings = await this.executeCrud(state, async (timeoutMs) => this.requireCollections().faceSlots.find(
+        { qualificationId: { $eq: qualificationId, $type: 'string' } },
+        this.transactionDriverOptions(state, timeoutMs),
+      ).limit(2).toArray());
       const mapping = mappingFromSlots(mappings, qualificationId, qualificationIncarnation);
       state.mappings.set(qualificationId, mapping);
       return mapping;
@@ -334,7 +344,9 @@ export class G04bMongoPersistenceAdapter
   public async resolveQr(context: AccessScopeContext, lookupDigest: string): Promise<ResolvedIdentitySnapshot> {
     const state = await this.begin(context);
     try {
-      const document = await this.requireCollections().qualifications.findOne({ qrLookupDigest: lookupDigest }, { session: state.session });
+      const document = await this.executeCrud(state, async (timeoutMs) => this.requireCollections().qualifications.findOne(
+        { qrLookupDigest: lookupDigest }, this.transactionDriverOptions(state, timeoutMs),
+      ));
       if (document === null) return { qualification: null, mapping: null };
       state.qualifications.set(document._id, document);
       const mapping = await this.mappingForQualification(document._id, document.incarnation, state);
@@ -346,11 +358,17 @@ export class G04bMongoPersistenceAdapter
   public async resolveFace(context: AccessScopeContext, provider: string, externalSubjectId: string): Promise<ResolvedIdentitySnapshot> {
     const state = await this.begin(context);
     try {
-      const slots = await this.requireCollections().faceSlots.find({ provider, subject: externalSubjectId, qualificationId: { $type: 'string' } }, { session: state.session }).toArray();
+      const slots = await this.executeCrud(state, async (timeoutMs) => this.requireCollections().faceSlots.find(
+        { provider, subject: externalSubjectId, qualificationId: { $type: 'string' } },
+        this.transactionDriverOptions(state, timeoutMs),
+      ).limit(2).toArray());
       if (slots.length > 1) throw new G04bTechnicalError('face subject has multiple current mappings');
       const slot = slots[0];
       if (slot === undefined || slot.qualificationId === null || slot.qualificationIncarnation === null) return { qualification: null, mapping: null };
-      const qualification = await this.requireCollections().qualifications.findOne({ _id: slot.qualificationId }, { session: state.session });
+      const qualificationId = slot.qualificationId;
+      const qualification = await this.executeCrud(state, async (timeoutMs) => this.requireCollections().qualifications.findOne(
+        { _id: qualificationId }, this.transactionDriverOptions(state, timeoutMs),
+      ));
       if (qualification === null || qualification.incarnation !== slot.qualificationIncarnation) throw new G04bTechnicalError('face mapping points to a missing or stale qualification');
       const mapping = mappingFromSlot(slot);
       state.qualifications.set(qualification._id, qualification);
@@ -631,7 +649,9 @@ export class G04bMongoPersistenceAdapter
         createdAt: now, updatedAt: now,
       };
       state.stage = 'qualification';
-      await this.requireCollections().qualifications.insertOne(document, { session: state.session });
+      await this.executeCrud(state, async (timeoutMs) => this.requireCollections().qualifications.insertOne(
+        document, this.transactionDriverOptions(state, timeoutMs),
+      ));
       await this.bumpGuard(state, 'qr');
       if (plan.faceMapping !== null && plan.faceMapping !== undefined) {
         state.stage = 'mapping';
@@ -643,31 +663,32 @@ export class G04bMongoPersistenceAdapter
       return this.managementSummary('CREATE', document, 0, token, plan.faceMapping !== null && plan.faceMapping !== undefined);
     }
     if (plan.qualificationId === null) throw new G04bTechnicalError('management qualificationId is required');
+    const qualificationId = plan.qualificationId;
     const provenance = managementEnvelope.expectedQualification;
-    if (provenance === undefined || provenance.qualificationId !== plan.qualificationId) {
+    if (provenance === undefined || provenance.qualificationId !== qualificationId) {
       throw new G04bTechnicalError('management plan qualification provenance is missing or mismatched');
     }
-    const currentFromScope = state.qualifications.get(plan.qualificationId);
+    const currentFromScope = state.qualifications.get(qualificationId);
     if (currentFromScope !== undefined &&
       (currentFromScope.incarnation !== provenance.incarnation || currentFromScope.version !== provenance.version)) {
       throw new G04bTechnicalError('management plan qualification provenance is stale');
     }
-    const current = currentFromScope ?? await this.requireCollections().qualifications.findOne({
-      _id: plan.qualificationId,
+    const current = currentFromScope ?? await this.executeCrud(state, async (timeoutMs) => this.requireCollections().qualifications.findOne({
+      _id: qualificationId,
       incarnation: provenance.incarnation,
       version: provenance.version,
-    }, { session: state.session });
+    }, this.transactionDriverOptions(state, timeoutMs)));
     if (current === null || current === undefined) throw new G04bTechnicalError('qualification is missing');
-    const expected = { _id: plan.qualificationId, incarnation: provenance.incarnation, version: provenance.version };
+    const expected = { _id: qualificationId, incarnation: provenance.incarnation, version: provenance.version };
     if (plan.operation === 'EXPIRE') {
       if (current.presence !== 'NOT_ENTERED' || current.revokedAt !== null || current.expiredTerminalAt !== null || managementEnvelope.receivedAtMs < current.validUntil.getTime()) {
         throw new G04bTechnicalError('invalid qualification expiry transition');
       }
       const expiredAt = new Date(managementEnvelope.receivedAtMs);
       state.stage = 'qualification';
-      const updated = await this.requireCollections().qualifications.updateOne(expected, {
+      const updated = await this.executeCrud(state, async (timeoutMs) => this.requireCollections().qualifications.updateOne(expected, {
         $set: { expiredTerminalAt: expiredAt, updatedAt: now }, $inc: { version: 1 },
-      }, { session: state.session });
+      }, this.transactionDriverOptions(state, timeoutMs)));
       assertModified(updated.modifiedCount, 'expire qualification');
       state.stage = 'mapping';
       await this.releaseFaceForQualification(state, current._id, current.incarnation);
@@ -680,9 +701,9 @@ export class G04bMongoPersistenceAdapter
       const reason = requiredString(plan.revocationReason, 'revocationReason');
       const receivedAt = new Date(managementEnvelope.receivedAtMs);
       state.stage = 'qualification';
-      const updated = await this.requireCollections().qualifications.updateOne(expected, {
+      const updated = await this.executeCrud(state, async (timeoutMs) => this.requireCollections().qualifications.updateOne(expected, {
         $set: { revokedAt: receivedAt, revocationReason: reason, updatedAt: now }, $inc: { version: 1 },
-      }, { session: state.session });
+      }, this.transactionDriverOptions(state, timeoutMs)));
       assertModified(updated.modifiedCount, 'revoke qualification');
       state.stage = 'mapping';
       await this.releaseFaceForQualification(state, current._id, current.incarnation);
@@ -697,10 +718,10 @@ export class G04bMongoPersistenceAdapter
     const currentMapping = state.mappings.has(current._id)
       ? state.mappings.get(current._id) ?? null
       : await this.mappingForQualification(current._id, current.incarnation, state);
-    const currentSlot = await this.requireCollections().faceSlots.findOne({
+    const currentSlot = await this.executeCrud(state, async (timeoutMs) => this.requireCollections().faceSlots.findOne({
       qualificationId: current._id,
       qualificationIncarnation: current.incarnation,
-    }, { session: state.session });
+    }, this.transactionDriverOptions(state, timeoutMs)));
     if ((currentMapping === null) !== (currentSlot === null) ||
       (currentMapping !== null && (currentSlot === null ||
         currentMapping.qualificationIncarnation !== currentSlot.qualificationIncarnation ||
@@ -722,9 +743,9 @@ export class G04bMongoPersistenceAdapter
       await this.bindNewFace(state, current._id, current.incarnation, plan.faceMapping);
     }
     state.stage = 'qualification';
-    const updated = await this.requireCollections().qualifications.updateOne(expected, {
+    const updated = await this.executeCrud(state, async (timeoutMs) => this.requireCollections().qualifications.updateOne(expected, {
       $set: { displayName, validFrom, validUntil, updatedAt: now }, $inc: { version: 1 },
-    }, { session: state.session });
+    }, this.transactionDriverOptions(state, timeoutMs)));
     assertModified(updated.modifiedCount, 'update qualification');
     if (mappingChanged) await this.bumpGuard(state, 'face');
     await this.ensureSlotCount(state);
@@ -747,7 +768,9 @@ export class G04bMongoPersistenceAdapter
 
     // The envelope is an internal WeakMap trusted boundary; G04b has no HTTP/auth layer.
     // Once the source+external key and artifact are safely validated, persisted Event is canonical.
-    const existing = await this.requireCollections().events.findOne({ sourceId, externalEventId }, { session: state.session });
+    const existing = await this.executeCrud(state, async (timeoutMs) => this.requireCollections().events.findOne(
+      { sourceId, externalEventId }, this.transactionDriverOptions(state, timeoutMs),
+    ));
       if (existing !== null) {
       if (!compareComparisonArtifacts(artifact, existing)) {
         return {
@@ -767,7 +790,9 @@ export class G04bMongoPersistenceAdapter
 
     let source = state.sourceFacts.get(envelope.sourceId);
     if (source === undefined) {
-      const sourceDocument = await this.requireCollections().sources.findOne({ _id: envelope.sourceId }, { session: state.session });
+      const sourceDocument = await this.executeCrud(state, async (timeoutMs) => this.requireCollections().sources.findOne(
+        { _id: envelope.sourceId }, this.transactionDriverOptions(state, timeoutMs),
+      ));
       if (sourceDocument === null) throw new G04bTechnicalError('source is missing');
       source = { sourceId: sourceDocument._id, direction: sourceDocument.direction, active: sourceDocument.active };
       state.sourceFacts.set(envelope.sourceId, source);
@@ -776,7 +801,10 @@ export class G04bMongoPersistenceAdapter
     if (source === undefined) throw new G04bTechnicalError('source facts are required for recognition persistence');
     const sourceGuard = state.sourceGuards.get(source.sourceId);
     if (sourceGuard === undefined) throw new G04bTechnicalError('source guard is missing');
-    const guardedSource = await this.requireCollections().sources.findOne({ _id: source.sourceId, incarnation: sourceGuard.incarnation, version: sourceGuard.version, direction: source.direction, active: source.active }, { session: state.session });
+    const guardedSource = await this.executeCrud(state, async (timeoutMs) => this.requireCollections().sources.findOne(
+      { _id: source.sourceId, incarnation: sourceGuard.incarnation, version: sourceGuard.version, direction: source.direction, active: source.active },
+      this.transactionDriverOptions(state, timeoutMs),
+    ));
     if (guardedSource === null) throw new G04bTechnicalError('source freshness guard failed');
     const receivedAtMs = envelope.receivedAtMs;
     const direction = envelope.direction;
@@ -784,14 +812,17 @@ export class G04bMongoPersistenceAdapter
     const metadata = await this.readMetadata(state);
     if (artifact.comparisonReferenceId !== metadata.comparisonReferenceId) throw new G04bTechnicalError('comparison artifact reference is incompatible with metadata');
 
-    const sourceGuardWrite = await this.requireCollections().sources.updateOne(
+    const sourceGuardWrite = await this.executeCrud(state, async (timeoutMs) => this.requireCollections().sources.updateOne(
       { _id: source.sourceId, incarnation: sourceGuard.incarnation, version: sourceGuard.version, direction: source.direction, active: source.active },
       { $set: { direction: source.direction, active: source.active }, $inc: { version: 1 } },
-      { session: state.session },
-    );
+      this.transactionDriverOptions(state, timeoutMs),
+    ));
     if (sourceGuardWrite.matchedCount !== 1) throw new G04bTechnicalError('source freshness write guard failed');
     if (plan.qualificationId !== null) {
-      const current = state.qualifications.get(plan.qualificationId) ?? await this.requireCollections().qualifications.findOne({ _id: plan.qualificationId }, { session: state.session });
+      const qualificationId = plan.qualificationId;
+      const current = state.qualifications.get(qualificationId) ?? await this.executeCrud(state, async (timeoutMs) => this.requireCollections().qualifications.findOne(
+        { _id: qualificationId }, this.transactionDriverOptions(state, timeoutMs),
+      ));
       if (current === null || current === undefined || current.incarnation !== plan.qualificationIncarnation || current.version !== plan.qualificationVersion) throw new G04bTechnicalError('recognition qualification guard failed');
       await this.applyQualificationEffect(state, current, plan, receivedAtMs);
       if (plan.faceMappingEffect === 'RELEASE') {
@@ -811,7 +842,9 @@ export class G04bMongoPersistenceAdapter
       receivedAt: new Date(receivedAtMs), recordedAt: this.dateFromClock(), qualificationId: plan.qualificationId,
       presenceTransition: plan.presenceTransition, inputHmac: artifact.inputHmac, comparisonReferenceId: artifact.comparisonReferenceId,
     };
-    await this.requireCollections().events.insertOne(document, { session: state.session });
+    await this.executeCrud(state, async (timeoutMs) => this.requireCollections().events.insertOne(
+      document, this.transactionDriverOptions(state, timeoutMs),
+    ));
     await this.ensureSlotCount(state);
     return {
       status: 'COMMITTED',
@@ -831,64 +864,95 @@ export class G04bMongoPersistenceAdapter
       if (plan.presenceTransition.to === 'EXITED') set.exitedAt = new Date(receivedAtMs);
     }
     if (plan.qualificationEffect === 'EXPIRE_NOT_ENTERED') set.expiredTerminalAt = new Date(receivedAtMs);
-    const updated = await this.requireCollections().qualifications.updateOne({ _id: current._id, incarnation: current.incarnation, version: current.version }, { $set: set, $inc: { version: 1 } }, { session: state.session });
+    const updated = await this.executeCrud(state, async (timeoutMs) => this.requireCollections().qualifications.updateOne(
+      { _id: current._id, incarnation: current.incarnation, version: current.version },
+      { $set: set, $inc: { version: 1 } },
+      this.transactionDriverOptions(state, timeoutMs),
+    ));
     assertModified(updated.modifiedCount, 'recognition qualification');
   }
 
   private async bindNewFace(state: TransactionState, qualificationId: string, qualificationIncarnation: string, mapping: Readonly<{ provider: string; externalSubjectId: string }>): Promise<void> {
     const faceSlots = this.requireCollections().faceSlots;
-    const bound = await faceSlots.findOne({ provider: mapping.provider, subject: mapping.externalSubjectId, qualificationId: { $type: 'string' } }, { session: state.session });
+    const bound = await this.executeCrud(state, async (timeoutMs) => faceSlots.findOne(
+      { provider: mapping.provider, subject: mapping.externalSubjectId, qualificationId: { $type: 'string' } },
+      this.transactionDriverOptions(state, timeoutMs),
+    ));
     if (bound !== null) {
       throw new G04bTransactionError({ kind: 'FACE_SUBJECT_ALREADY_BOUND', stage: 'mapping', code: 11000, labels: [] }, new Error('face subject is already bound'));
     }
-    const empty = await faceSlots.findOne({ provider: mapping.provider, subject: mapping.externalSubjectId, qualificationId: null, qualificationIncarnation: null }, { session: state.session })
-      ?? await faceSlots.findOne({ qualificationId: null, qualificationIncarnation: null }, { session: state.session });
+    const empty = await this.executeCrud(state, async (timeoutMs) => faceSlots.findOne(
+      { provider: mapping.provider, subject: mapping.externalSubjectId, qualificationId: null, qualificationIncarnation: null },
+      this.transactionDriverOptions(state, timeoutMs),
+    )) ?? await this.executeCrud(state, async (timeoutMs) => faceSlots.findOne(
+      { qualificationId: null, qualificationIncarnation: null }, this.transactionDriverOptions(state, timeoutMs),
+    ));
     if (empty === null) {
       const metadata = await this.readMetadata(state);
       if (metadata.slotCount >= G04B_FACE_SLOT_CAPACITY) {
         throw new G04bTransactionError({ kind: 'FACE_SUBJECT_SLOT_CAPACITY_EXHAUSTED', stage: 'mapping', code: null, labels: [] }, new Error('face slot capacity exhausted'));
       }
-      await faceSlots.insertOne({
+      await this.executeCrud(state, async (timeoutMs) => faceSlots.insertOne({
         _id: randomUUID(), provider: mapping.provider, subject: mapping.externalSubjectId,
         qualificationId, qualificationIncarnation, slotIncarnation: randomUUID(), version: 0,
-      }, { session: state.session });
-      const countUpdate = await this.requireCollections().metadata.updateOne({ _id: 'system', slotCount: metadata.slotCount }, { $inc: { slotCount: 1 } }, { session: state.session });
+      }, this.transactionDriverOptions(state, timeoutMs)));
+      const countUpdate = await this.executeCrud(state, async (timeoutMs) => this.requireCollections().metadata.updateOne(
+        { _id: 'system', slotCount: metadata.slotCount }, { $inc: { slotCount: 1 } }, this.transactionDriverOptions(state, timeoutMs),
+      ));
       assertModified(countUpdate.modifiedCount, 'allocate face slot count');
       return;
     }
-    const updated = await faceSlots.updateOne({ _id: empty._id, qualificationId: null, qualificationIncarnation: null }, { $set: { provider: mapping.provider, subject: mapping.externalSubjectId, qualificationId, qualificationIncarnation }, $inc: { version: 1 } }, { session: state.session });
+    const updated = await this.executeCrud(state, async (timeoutMs) => faceSlots.updateOne(
+      { _id: empty._id, qualificationId: null, qualificationIncarnation: null },
+      { $set: { provider: mapping.provider, subject: mapping.externalSubjectId, qualificationId, qualificationIncarnation }, $inc: { version: 1 } },
+      this.transactionDriverOptions(state, timeoutMs),
+    ));
     assertModified(updated.modifiedCount, 'bind face slot');
   }
 
   private async releaseFaceForQualification(state: TransactionState, qualificationId: string, incarnation: string): Promise<void> {
-    const slots = await this.requireCollections().faceSlots.find({ qualificationId: { $eq: qualificationId, $type: 'string' } }, { session: state.session }).toArray();
+    const slots = await this.executeCrud(state, async (timeoutMs) => this.requireCollections().faceSlots.find(
+      { qualificationId: { $eq: qualificationId, $type: 'string' } }, this.transactionDriverOptions(state, timeoutMs),
+    ).limit(2).toArray());
     if (slots.length > 1) throw new G04bTechnicalError('qualification has multiple current face mappings');
     const slot = slots[0];
     if (slot === undefined) return;
     if (slot.qualificationIncarnation !== incarnation) throw new G04bTechnicalError('face mapping incarnation mismatch');
-    const updated = await this.requireCollections().faceSlots.updateOne({ _id: slot._id, qualificationId, qualificationIncarnation: incarnation, version: slot.version }, { $set: { qualificationId: null, qualificationIncarnation: null }, $inc: { version: 1 } }, { session: state.session });
+    const updated = await this.executeCrud(state, async (timeoutMs) => this.requireCollections().faceSlots.updateOne(
+      { _id: slot._id, qualificationId, qualificationIncarnation: incarnation, version: slot.version },
+      { $set: { qualificationId: null, qualificationIncarnation: null }, $inc: { version: 1 } },
+      this.transactionDriverOptions(state, timeoutMs),
+    ));
     assertModified(updated.modifiedCount, 'release face slot');
   }
 
   private async mappingForQualification(qualificationId: string, qualificationIncarnation: string, state: TransactionState): Promise<FaceMappingSnapshot | null> {
-    const slots = await this.requireCollections().faceSlots.find({ qualificationId: { $eq: qualificationId, $type: 'string' } }, { session: state.session }).toArray();
+    const slots = await this.executeCrud(state, async (timeoutMs) => this.requireCollections().faceSlots.find(
+      { qualificationId: { $eq: qualificationId, $type: 'string' } }, this.transactionDriverOptions(state, timeoutMs),
+    ).limit(2).toArray());
     return mappingFromSlots(slots, qualificationId, qualificationIncarnation);
   }
 
   private async ensureSlotCount(state: TransactionState): Promise<void> {
     const metadata = await this.readMetadata(state);
-    const count = await this.requireCollections().faceSlots.countDocuments({}, { session: state.session });
+    const count = await this.executeCrud(state, async (timeoutMs) => this.requireCollections().faceSlots.countDocuments(
+      {}, this.transactionDriverOptions(state, timeoutMs),
+    ));
     if (count !== metadata.slotCount) throw new G04bTechnicalError('metadata slotCount does not match faceSlots');
   }
 
   private async bumpGuard(state: TransactionState, guard: 'qr' | 'face'): Promise<void> {
     const field = guard === 'qr' ? 'qrGuardVersion' : 'faceGuardVersion';
-    const updated = await this.requireCollections().metadata.updateOne({ _id: 'system' }, { $inc: { [field]: 1 } }, { session: state.session });
+    const updated = await this.executeCrud(state, async (timeoutMs) => this.requireCollections().metadata.updateOne(
+      { _id: 'system' }, { $inc: { [field]: 1 } }, this.transactionDriverOptions(state, timeoutMs),
+    ));
     assertModified(updated.modifiedCount, `${guard} guard`);
   }
 
   private async readMetadata(state: TransactionState): Promise<G04bMetadataDocument> {
-    const metadata = await this.requireCollections().metadata.findOne({ _id: 'system' }, { session: state.session });
+    const metadata = await this.executeCrud(state, async (timeoutMs) => this.requireCollections().metadata.findOne(
+      { _id: 'system' }, this.transactionDriverOptions(state, timeoutMs),
+    ));
     if (metadata === null) throw new G04bTechnicalError('metadata system document is missing');
     if (metadata.datasetEpoch !== state.datasetEpoch) throw new G04bTechnicalError('scope dataset epoch does not match metadata');
     return metadata;
@@ -929,13 +993,31 @@ export class G04bMongoPersistenceAdapter
     // the established G04b path exactly.
     const g10bScopedPersistenceBinding = resolveG10bScopedPersistenceBinding(this, context);
     captureG10bScopedPersistenceBinding(this, g10bScopedPersistenceBinding);
-    const session = this.client.startSession();
-    const state: TransactionState = { session, g10bScopedPersistenceBinding, datasetEpoch: claims.epoch, sourceFacts: new Map(), sourceGuards: new Map(), qualifications: new Map(), mappings: new Map(), stage: 'begin' };
+    const g10bExecutionFacade = createG10bScopedPersistenceExecutionFacade(g10bScopedPersistenceBinding);
+    let session: ClientSession;
+    try {
+      session = this.client.startSession();
+    } catch (error: unknown) {
+      // The facade owns an active round from the point it is created.  A
+      // client allocation failure has no session to clean up, but must not
+      // strand that round and block the operation's later lifecycle.
+      if (g10bExecutionFacade !== undefined) g10bExecutionFacade.finish();
+      throw error;
+    }
+    const state: TransactionState = {
+      session,
+      g10bScopedPersistenceBinding,
+      g10bExecutionFacade,
+      initialCommitInvoked: false,
+      datasetEpoch: claims.epoch,
+      sourceFacts: new Map(), sourceGuards: new Map(), qualifications: new Map(), mappings: new Map(), stage: 'begin',
+    };
     try {
       session.startTransaction(G04B_TRANSACTION_OPTIONS);
       this.transactions.set(context as object, state);
       return state;
     } catch (error: unknown) {
+      if (g10bExecutionFacade !== undefined) g10bExecutionFacade.finish();
       await session.endSession();
       throw new G04bTransactionError(classifyG04bTransactionError(error, 'begin'), error);
     }
@@ -944,7 +1026,21 @@ export class G04bMongoPersistenceAdapter
   private async commit(context: AccessScopeContext, state: TransactionState): Promise<void> {
     state.stage = 'commit';
     try {
-      await state.session.commitTransaction();
+      const facade = state.g10bExecutionFacade;
+      if (facade === undefined) {
+        if (state.g10bScopedPersistenceBinding !== undefined) {
+          throw new G04bTechnicalError('G10b initial commit facade is unavailable');
+        }
+        await state.session.commitTransaction();
+      } else {
+        try {
+          await facade.executeInitialCommit(async ({ timeoutMs }) => {
+            if (state.initialCommitInvoked) throw new G04bTechnicalError('initial commit was already invoked');
+            state.initialCommitInvoked = true;
+            await state.session.commitTransaction({ timeoutMS: timeoutMs });
+          });
+        } finally { this.finishG10bExecutionRound(state); }
+      }
       this.transactions.delete(context as object);
       await state.session.endSession();
     } catch (error: unknown) {
@@ -958,6 +1054,7 @@ export class G04bMongoPersistenceAdapter
   private async fail(context: AccessScopeContext, state: TransactionState, error: unknown): Promise<never> {
     const facts = error instanceof G04bTransactionError ? error.facts : classifyG04bTransactionError(error, state.stage);
     this.transactions.delete(context as object);
+    this.finishG10bExecutionRound(state);
     let abortError: unknown = null;
     if (state.session.inTransaction() && facts.kind !== 'UNKNOWN_COMMIT_RESULT') {
       state.stage = 'abort';
@@ -972,6 +1069,33 @@ export class G04bMongoPersistenceAdapter
   private requireCollections(): G04bCollections {
     if (this.collections === null) throw new G04bTechnicalError('G04b schema has not been initialized');
     return this.collections;
+  }
+
+  /** Every scoped Mongo CRUD command is admitted through this one gateway. */
+  private async executeCrud<T>(
+    state: TransactionState,
+    send: (timeoutMs: number | undefined) => Promise<T>,
+  ): Promise<T> {
+    const facade = state.g10bExecutionFacade;
+    return facade === undefined
+      ? send(undefined)
+      : facade.executeCrud(({ timeoutMs }) => send(timeoutMs));
+  }
+
+  private transactionDriverOptions(
+    state: TransactionState,
+    timeoutMs: number | undefined,
+  ): { readonly session: ClientSession; readonly timeoutMS?: number } {
+    return timeoutMs === undefined
+      ? { session: state.session }
+      : { session: state.session, timeoutMS: timeoutMs };
+  }
+
+  private finishG10bExecutionRound(state: TransactionState): void {
+    const facade = state.g10bExecutionFacade;
+    if (facade === undefined) return;
+    state.g10bExecutionFacade = undefined;
+    facade.finish();
   }
 
   private dateFromClock(): Date {

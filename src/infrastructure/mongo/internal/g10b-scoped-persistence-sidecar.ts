@@ -1,4 +1,14 @@
 import type { AccessScopeContext } from '../../../access/ports/index.js';
+import {
+  assertOperationBudgetBindingProvenance,
+  beginOperationExecutionRound,
+  executeOperationCrud,
+  executeOperationInitialCommit,
+  finishOperationExecutionRound,
+  type OperationBudgetBinding,
+  type OperationBudgetRound,
+  type OperationExecutionCommandContext,
+} from '../../../access/application/internal/operation-budget-binding.js';
 import type { G04bMongoPersistenceAdapter } from '../g04b-persistence-adapter.js';
 
 /**
@@ -6,6 +16,17 @@ import type { G04bMongoPersistenceAdapter } from '../g04b-persistence-adapter.js
  * Its meaning remains in composition; Mongo only retains it for a later seam.
  */
 export type G10bScopedPersistenceBinding = object;
+
+/**
+ * One G04b transaction's private G10b command gateway.  It is created only
+ * after the attached sidecar has resolved a genuine binding, and it owns the
+ * binding's one active execution round until the initial commit is settled.
+ */
+export interface G10bScopedPersistenceExecutionFacade {
+  executeCrud<T>(send: (context: OperationExecutionCommandContext) => T | PromiseLike<T>): Promise<T>;
+  executeInitialCommit<T>(send: (context: OperationExecutionCommandContext) => T | PromiseLike<T>): Promise<T>;
+  finish(): void;
+}
 
 declare const g10bScopedPersistenceBindingResolverBrand: unique symbol;
 
@@ -25,6 +46,7 @@ const attachedResolvers = new WeakMap<object, G10bScopedPersistenceBindingResolv
 const resolverFunctions = new WeakMap<object, ResolveBinding>();
 const captureObservers = new WeakMap<object, ObserveBindingCapture>();
 const scopedTransactionBegunAdapters = new WeakSet<object>();
+const executionFacades = new WeakMap<object, { readonly binding: OperationBudgetBinding; readonly round: OperationBudgetRound; active: boolean }>();
 
 /** Create a composition-owned resolver that can be used only as this sidecar. */
 export function createG10bScopedPersistenceBindingResolver(
@@ -111,4 +133,64 @@ export function captureG10bScopedPersistenceBinding(
   const observe = captureObservers.get(adapter as object);
   if (observe === undefined || binding === undefined) return;
   observe(binding);
+}
+
+/**
+ * Convert an attached composition binding into a transaction-local command
+ * facade.  The G04b adapter receives only this facade, never a raw round or
+ * budget binding, so its CRUD and initial commit cannot bypass G10b command
+ * admission.  Undefined preserves the historical unattached adapter path.
+ */
+export function createG10bScopedPersistenceExecutionFacade(
+  binding: G10bScopedPersistenceBinding | undefined,
+): G10bScopedPersistenceExecutionFacade | undefined {
+  if (binding === undefined) return undefined;
+  const operationBinding = binding as OperationBudgetBinding;
+  assertOperationBudgetBindingProvenance(operationBinding);
+  const round = beginOperationExecutionRound(operationBinding);
+  const facade = Object.freeze({
+    executeCrud: async <T>(send: (context: OperationExecutionCommandContext) => T | PromiseLike<T>): Promise<T> => {
+      const state = requireExecutionFacade(facade);
+      return executeFacadeCommand(state.binding, state.round, executeOperationCrud, send);
+    },
+    executeInitialCommit: async <T>(send: (context: OperationExecutionCommandContext) => T | PromiseLike<T>): Promise<T> => {
+      const state = requireExecutionFacade(facade);
+      return executeFacadeCommand(state.binding, state.round, executeOperationInitialCommit, send);
+    },
+    finish: (): void => {
+      const state = requireExecutionFacade(facade);
+      finishOperationExecutionRound(state.binding, state.round);
+      state.active = false;
+    },
+  }) as G10bScopedPersistenceExecutionFacade;
+  executionFacades.set(facade as object, { binding: operationBinding, round, active: true });
+  return facade;
+}
+
+async function executeFacadeCommand<T>(
+  binding: OperationBudgetBinding,
+  round: OperationBudgetRound,
+  execute: (
+    commandBinding: OperationBudgetBinding,
+    commandRound: OperationBudgetRound,
+    send: (context: OperationExecutionCommandContext) => void | PromiseLike<void>,
+  ) => Promise<void>,
+  send: (context: OperationExecutionCommandContext) => T | PromiseLike<T>,
+): Promise<T> {
+  let completed = false;
+  let result!: T;
+  await execute(binding, round, async (context) => {
+    result = await send(context);
+    completed = true;
+  });
+  if (!completed) throw new TypeError('G10b execution facade command did not complete');
+  return result;
+}
+
+function requireExecutionFacade(
+  facade: G10bScopedPersistenceExecutionFacade,
+): { readonly binding: OperationBudgetBinding; readonly round: OperationBudgetRound; active: boolean } {
+  const state = executionFacades.get(facade as object);
+  if (state === undefined || !state.active) throw new TypeError('G10b execution facade is no longer active');
+  return state;
 }
