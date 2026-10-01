@@ -37,7 +37,9 @@ export type OperationBudgetBindingErrorCode =
   | 'INVALID_ROUND'
   | 'INVALID_COMMAND'
   | 'INVALID_PRECOMMIT'
+  | 'INVALID_UNKNOWN_COMMIT'
   | 'PRECOMMIT_ALREADY_STARTED'
+  | 'UNKNOWN_COMMIT_ALREADY_STARTED'
   | 'OWNER_STALE'
   | 'REENTRANT';
 
@@ -56,6 +58,7 @@ declare const factoryBrand: unique symbol;
 declare const roundBrand: unique symbol;
 declare const precommitBrand: unique symbol;
 declare const precommitGroupBrand: unique symbol;
+declare const unknownCommitBrand: unique symbol;
 
 /** Opaque, per-original-write capability.  It deliberately has no fields. */
 export interface OperationBudgetBinding {
@@ -93,6 +96,11 @@ export interface OperationPrecommitAbortGroup {
   readonly [precommitGroupBrand]: never;
 }
 
+/** Opaque, owner-fenced boundary for a post-sender unknown initial commit. */
+export interface OperationUnknownCommitConfirmation {
+  readonly [unknownCommitBrand]: never;
+}
+
 /**
  * Composition/bootstrap-only inputs.  This is deliberately separate from
  * the context-level factory interface so no individual write can override
@@ -118,9 +126,11 @@ interface BindingState {
   readonly rounds: WeakMap<object, RoundState>;
   readonly precommits: WeakMap<object, PrecommitState>;
   readonly groups: WeakMap<object, GroupState>;
+  readonly unknownCommits: WeakMap<object, UnknownCommitState>;
   frozen: boolean;
   transitioning: boolean;
   precommit: PrecommitState | null;
+  unknownCommit: UnknownCommitState | null;
 }
 
 interface RoundState {
@@ -145,6 +155,11 @@ interface GroupState {
   readonly binding: BindingState;
   readonly precommit: PrecommitState;
   readonly raw: PrecommitAbortGroupPermit;
+  active: boolean;
+}
+
+interface UnknownCommitState {
+  readonly binding: BindingState;
   active: boolean;
 }
 
@@ -263,9 +278,11 @@ function createBinding(
     rounds: new WeakMap<object, RoundState>(),
     precommits: new WeakMap<object, PrecommitState>(),
     groups: new WeakMap<object, GroupState>(),
+    unknownCommits: new WeakMap<object, UnknownCommitState>(),
     frozen: false,
     transitioning: false,
     precommit: null,
+    unknownCommit: null,
   };
   bindingByContext.set(context, state);
   bindings.set(binding, state);
@@ -333,7 +350,9 @@ export function finishOperationExecutionRound(binding: OperationBudgetBinding, r
 export function startOperationPrecommitTermination(binding: OperationBudgetBinding): OperationPrecommitTermination {
   const state = requireBinding(binding);
   return transition(state, () => {
-    if (state.precommit !== null) failClosed(state, 'PRECOMMIT_ALREADY_STARTED', 'precommit termination already started');
+    if (state.precommit !== null || state.unknownCommit !== null) {
+      failClosed(state, 'PRECOMMIT_ALREADY_STARTED', 'precommit termination is unavailable after another terminal boundary starts');
+    }
     state.ledger.startConfirmation('PRECOMMIT_CLEANUP');
     try {
       state.lifecycle.sealScope('PRECOMMIT');
@@ -345,6 +364,51 @@ export function startOperationPrecommitTermination(binding: OperationBudgetBindi
     state.precommits.set(token, precommit);
     state.precommit = precommit;
     return token;
+  });
+}
+
+/**
+ * Atomically starts unknown-result confirmation and seals the native abort
+ * lifecycle as COMMIT_UNKNOWN.  It intentionally grants no driver command;
+ * later G10c increments own confirmation attempts and final session cleanup.
+ */
+export function startOperationUnknownCommitConfirmation(
+  binding: OperationBudgetBinding,
+): OperationUnknownCommitConfirmation {
+  const state = requireBinding(binding);
+  return transition(state, () => {
+    if (state.precommit !== null || state.unknownCommit !== null) {
+      failClosed(state, 'UNKNOWN_COMMIT_ALREADY_STARTED', 'unknown commit confirmation boundary already started');
+    }
+    state.ledger.startConfirmation('UNKNOWN_RESULT');
+    try {
+      state.lifecycle.sealScope('COMMIT_UNKNOWN');
+    } catch (error: unknown) {
+      failClosed(state, 'OWNER_STALE', 'unknown commit lifecycle could not be sealed after confirmation started', error);
+    }
+    const token = Object.freeze({}) as OperationUnknownCommitConfirmation;
+    const unknownCommit: UnknownCommitState = { binding: state, active: true };
+    state.unknownCommits.set(token, unknownCommit);
+    state.unknownCommit = unknownCommit;
+    return token;
+  });
+}
+
+/**
+ * Future confirmation ownership must re-check the binding's original current
+ * owner fence before it may use a retained opaque handoff.  This function has
+ * no Mongo/permit side effect and cannot expose the binding's raw authority.
+ */
+export function assertOperationUnknownCommitConfirmationCurrent(
+  binding: OperationBudgetBinding,
+  confirmation: OperationUnknownCommitConfirmation,
+): void {
+  const state = requireBinding(binding);
+  transition(state, () => {
+    const unknownCommit = requireUnknownCommit(state, confirmation);
+    if (state.unknownCommit !== unknownCommit) {
+      failClosed(state, 'INVALID_UNKNOWN_COMMIT', 'unknown commit confirmation is not current');
+    }
   });
 }
 
@@ -480,6 +544,18 @@ function requireGroup(state: BindingState, token: OperationPrecommitAbortGroup):
     failClosed(state, 'INVALID_PRECOMMIT', 'operation precommit abort group provenance is invalid');
   }
   return group as GroupState;
+}
+
+function requireUnknownCommit(
+  state: BindingState,
+  token: OperationUnknownCommitConfirmation,
+): UnknownCommitState {
+  if (!isObject(token)) failClosed(state, 'INVALID_UNKNOWN_COMMIT', 'unknown commit confirmation is invalid');
+  const unknownCommit = state.unknownCommits.get(token);
+  if (unknownCommit === undefined || unknownCommit.binding !== state || !unknownCommit.active) {
+    failClosed(state, 'INVALID_UNKNOWN_COMMIT', 'unknown commit confirmation provenance is invalid');
+  }
+  return unknownCommit as UnknownCommitState;
 }
 
 function transition<T>(state: BindingState, work: () => T): T {

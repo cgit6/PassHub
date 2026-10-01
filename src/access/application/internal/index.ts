@@ -41,6 +41,9 @@ export {
   type TrustedOperationBudgetBindingFactoryOptions,
   type OperationPrecommitTermination,
   type OperationPrecommitAbortGroup,
+  startOperationUnknownCommitConfirmation,
+  assertOperationUnknownCommitConfirmationCurrent,
+  type OperationUnknownCommitConfirmation,
 } from './operation-budget-binding.js';
 
 export {

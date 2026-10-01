@@ -59,6 +59,10 @@ import {
   type G10bScopedPersistenceExecutionFacade,
 } from './internal/g10b-scoped-persistence-sidecar.js';
 import { createG10bPrecommitMongoTerminator } from './internal/g10b-precommit-mongo-terminator.js';
+import {
+  handoffG10cPostCommitUnknown,
+  registerG10cConcreteG04bMongoPersistenceAdapter,
+} from './internal/g10c-post-commit-unknown-handoff.js';
 
 export const G04B_MONGO_VERSION = '8.0.32';
 export const G04B_DEFAULT_DATABASE = 'passhub_g04b_atomic';
@@ -216,6 +220,7 @@ export class G04bMongoPersistenceAdapter
     if (databaseName.length === 0) throw new TypeError('G04b database name must not be empty');
     this.database = client.db(databaseName);
     registerG10bConcreteG04bMongoPersistenceAdapter(this);
+    registerG10cConcreteG04bMongoPersistenceAdapter(this);
     bindG10aMongoCommandMonitoring(client);
   }
 
@@ -1069,6 +1074,7 @@ export class G04bMongoPersistenceAdapter
       if (state.g10bScopedPersistenceBinding !== undefined && state.initialCommitInvoked) {
         // G10c owns unknown/failed initial-commit confirmation. Do not clean
         // up this session or scope from G10b's precommit-only boundary.
+        handoffG10cPostCommitUnknown(this, context, state.session, state.g10bScopedPersistenceBinding);
         throw new G04bTransactionError(facts, error);
       }
       if (state.g10bScopedPersistenceBinding !== undefined) {
