@@ -203,6 +203,29 @@ export function readG10bOperationBudgetForScopedPersistence(
 }
 
 /**
+ * Read the one concrete persistence scope that was opened for this admitted
+ * writer.  This remains an internal composition proof: callers receive no
+ * budget, session, or transaction authority.  G10c uses it only to prove
+ * that an opaque post-commit handoff belongs to the G07 work it is about to
+ * pause.
+ */
+export function readG10bScopedPersistenceForAdmission(
+  context: AdmissionWorkContext,
+): AccessScopeContext {
+  const admission = requireAdmissionBinding(context);
+  const scope = admissionScopes.get(admission as object);
+  if (scope === undefined) {
+    fail('ACCESS_SCOPE_NOT_BOUND', 'admission work context has no access scope');
+  }
+  requireLiveAccessScope(scope as AccessScopeContext);
+  const scoped = scopeBindings.get(scope as object);
+  if (scoped !== admission) {
+    fail('ACCESS_SCOPE_MISOWNED', 'admission work context access scope is misowned');
+  }
+  return scope as AccessScopeContext;
+}
+
+/**
  * Composition's adapter-facing view intentionally accepts only a live scope.
  * The admission association remains private in this bridge, so infrastructure
  * never needs to import composition or learn G10b budget semantics.

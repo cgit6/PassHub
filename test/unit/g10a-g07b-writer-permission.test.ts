@@ -14,6 +14,16 @@ import { createLegacyQueryAdmissionCapability } from '../../src/composition/inte
 import { createG10aWriterPermissionBinding } from '../../src/composition/internal/g10a-writer-permission-binding.js';
 import { createRuntimeControl, createRuntimeIdentityIssuer, type RuntimeControl } from '../../src/runtime/internal/runtime-control.js';
 import { createOperationRegistry, createOperationRegistryCapabilityIssuer } from '../../src/access/application/internal/operation-registry.js';
+import { createG10bOperationBudgetBindingFactory } from '../../src/composition/internal/g10b-operation-bridge.js';
+import { bindG10bOperationBudgetOnFirstScopedPersistenceUse } from '../../src/composition/internal/g10b-operation-bridge.js';
+import { beginOperationExecutionRound, finishOperationExecutionRound } from '../../src/access/application/internal/operation-budget-binding.js';
+import { createAccessScopeContext } from '../../src/shared/access-scope-context.js';
+import { G04bMongoPersistenceAdapter } from '../../src/infrastructure/mongo/g04b-persistence-adapter.js';
+import {
+  createG10cPostCommitUnknownHandoffBundle,
+  handoffG10cPostCommitUnknown,
+} from '../../src/infrastructure/mongo/internal/g10c-post-commit-unknown-handoff.js';
+import { createG10cG07RecoveryBridge, type G10cG07RecoveryBridge } from '../../src/composition/internal/g10c-g07-recovery-bridge.js';
 import type { NarrowHttpResponse } from '../../src/composition/internal/http-response-owner.js';
 
 const EPOCH = '11111111-1111-4111-8111-111111111111';
@@ -61,6 +71,7 @@ function makeHandler(
   releaseReservationOverride?: () => void,
   validationGate?: Promise<void>,
   validationOverride?: (input: AdmissionValidationInput) => Promise<AdmissionValidationResult>,
+  postCommitUnknownRecoveryBridge?: G10cG07RecoveryBridge,
 ): ReturnType<typeof createG07bAdmissionHandler> {
   const plans = plansOverride ?? createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
   const handoff = createAdmissionWorkHandoffBundle();
@@ -122,6 +133,13 @@ function makeHandler(
     unknownRecognition: unknown.handler,
     ...(rates === undefined ? {} : { rates }),
     writerPermission: createG10aWriterPermissionBinding(control),
+    ...(postCommitUnknownRecoveryBridge === undefined ? {} : {
+      operationBudgetBindingFactory: createG10bOperationBudgetBindingFactory({
+        clock: { nowMs: () => 0 },
+        assertContinuationEvidence: () => undefined,
+      }),
+      postCommitUnknownRecoveryBridge,
+    }),
   });
 }
 
@@ -145,7 +163,97 @@ function lowRecognitionRates(): ReturnType<typeof createConfigurableFixedMinuteR
   });
 }
 
+function g10cBridgeHarness(): Readonly<{
+  readonly bridge: G10cG07RecoveryBridge;
+  readonly handoffs: ReturnType<typeof createG10cPostCommitUnknownHandoffBundle>;
+  readonly adapter: G04bMongoPersistenceAdapter;
+}> {
+  const session = {
+    commitTransaction: jest.fn(async () => undefined),
+    abortTransaction: jest.fn(async () => undefined),
+    endSession: jest.fn(async () => undefined),
+    inTransaction: jest.fn(() => false),
+  };
+  const adapter = new G04bMongoPersistenceAdapter({
+    db: () => ({}), on: () => undefined, startSession: () => session,
+  } as never, 'g10c_g07_bridge_test');
+  const handoffs = createG10cPostCommitUnknownHandoffBundle();
+  return Object.freeze({
+    adapter,
+    handoffs,
+    bridge: createG10cG07RecoveryBridge({ adapter, handoffs }),
+  });
+}
+
+function retainPostCommitUnknown(
+  adapter: G04bMongoPersistenceAdapter,
+  context: Parameters<AdmissionWorkPort['management']>[1],
+): void {
+  const scope = createAccessScopeContext({ epoch: EPOCH, owner: RUN, generation: '44444444-4444-4444-8444-444444444444' });
+  const binding = bindG10bOperationBudgetOnFirstScopedPersistenceUse(context, scope);
+  const round = beginOperationExecutionRound(binding);
+  finishOperationExecutionRound(binding, round);
+  const session = {
+    commitTransaction: jest.fn(async () => undefined),
+    abortTransaction: jest.fn(async () => undefined),
+    endSession: jest.fn(async () => undefined),
+    inTransaction: jest.fn(() => false),
+  };
+  handoffG10cPostCommitUnknown(adapter, scope, session as never, binding as never);
+}
+
 describe('G10a A3 eligible-original G07b writer permission seam', () => {
+  test.each([
+    ['management', '/qualifications'],
+    ['recognition', '/recognition/attempts'],
+  ] as const)('G10c %s handoff pauses the current writer and retains issued persistence', async (kind, path) => {
+    const control = makeRuntimeControl();
+    const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
+    const h = g10cBridgeHarness();
+    const handler = makeHandler(control, {
+      management: (_token, context) => {
+        if (kind !== 'management') return Promise.resolve({ disposition: 'KNOWN_NO_EFFECT', response: plans.technical.issue('INVALID_REQUEST') });
+        retainPostCommitUnknown(h.adapter, context);
+        return Promise.resolve({ disposition: 'UNKNOWN_EFFECT', response: plans.technical.issue('PERSISTENCE_UNAVAILABLE') });
+      },
+      recognition: (_token, context) => {
+        if (kind !== 'recognition') return Promise.resolve({ disposition: 'KNOWN_NO_EFFECT', response: plans.technical.issue('INVALID_REQUEST') });
+        retainPostCommitUnknown(h.adapter, context);
+        return Promise.resolve({ disposition: 'UNKNOWN_EFFECT', response: plans.technical.issue('PERSISTENCE_UNAVAILABLE') });
+      },
+    }, undefined, plans, undefined, undefined, undefined, undefined, h.bridge);
+
+    const response = invoke(handler, path);
+    await flush();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await flush();
+
+    expect(response.statusCode).toBe(503);
+    expect(JSON.parse(response.bodies[0] as string)).toMatchObject({ code: 'REQUEST_STATUS_UNCONFIRMED' });
+    expect(h.handoffs.owner.pending()).toHaveLength(1);
+    expect(h.handoffs.owner.take(h.handoffs.owner.pending()[0]!)).toBeDefined();
+    expect(h.handoffs.owner.pending()).toHaveLength(0);
+    // The G07 invocation has ended, but its lease belongs to the still-current
+    // G10c recovery owner instead of being released by invoke-finally.
+    expect(control.snapshot().issuedPersistence).toBe(1);
+  });
+
+  test('ordinary UNKNOWN without a G10c handoff preserves the old release behavior', async () => {
+    const control = makeRuntimeControl();
+    const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
+    const handler = makeHandler(control, {
+      management: () => Promise.resolve({ disposition: 'UNKNOWN_EFFECT', response: plans.technical.issue('PERSISTENCE_UNAVAILABLE') }),
+    }, undefined, plans);
+
+    const response = invoke(handler, '/qualifications');
+    await flush();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await flush();
+
+    expect(response.statusCode).toBe(503);
+    expect(control.snapshot().issuedPersistence).toBe(0);
+  });
+
   test('writer wake binding rejects foreign receivers and duplicate binding; a deferred throwing wake cannot roll back release', async () => {
     const control = makeRuntimeControl();
     const binding = createG10aWriterPermissionBinding(control);

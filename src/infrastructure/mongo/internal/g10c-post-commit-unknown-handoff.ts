@@ -227,6 +227,7 @@ interface ConfirmationActionState {
 const concreteAdapters = new WeakSet<object>();
 const attachedSinks = new WeakMap<object, G10cPostCommitUnknownHandoffSink>();
 const bundleSinks = new WeakSet<object>();
+const forwardingDestinations = new WeakMap<object, G10cPostCommitUnknownHandoffSink>();
 const ownerSinks = new WeakMap<object, G10cPostCommitUnknownHandoffSink>();
 const handoffs = new WeakMap<object, HandoffState>();
 const handedOffContexts = new WeakMap<object, WeakSet<object>>();
@@ -268,6 +269,53 @@ export function attachG10cPostCommitUnknownHandoffSink(
     throw new TypeError('G10c post-commit unknown handoff sink is already attached');
   }
   attachedSinks.set(adapter as object, sink);
+}
+
+/**
+ * Creates an internal forwarding sink for the G07 lifetime bridge.  The
+ * adapter still hands off only its opaque token; this wrapper lets the
+ * composition layer bind that token to the already-admitted writer without
+ * exposing a session, expected image, or command authority.
+ */
+export function createG10cPostCommitUnknownForwardingSink(
+  destination: G10cPostCommitUnknownHandoffSink,
+  observeRetained: (handoff: G10cPostCommitUnknownHandoff) => void,
+): G10cPostCommitUnknownHandoffSink {
+  if (!bundleSinks.has(destination as object)) {
+    throw new TypeError('G10c post-commit unknown forwarding destination is foreign');
+  }
+  if (typeof observeRetained !== 'function') {
+    throw new TypeError('G10c post-commit unknown forwarding observer is invalid');
+  }
+  const retainDestination = destination.retain.bind(destination);
+  const sink = Object.freeze({
+    retain(handoff: G10cPostCommitUnknownHandoff): void {
+      // Verify adapter/scope ownership before the destination queue observes
+      // the token.  A bad bridge cannot orphan a retained transaction in the
+      // recovery queue and then claim a different G07 writer's lease.
+      requireHandoff(handoff);
+      observeRetained(handoff);
+      retainDestination(handoff);
+    },
+  }) as G10cPostCommitUnknownHandoffSink;
+  bundleSinks.add(sink as object);
+  forwardingDestinations.set(sink as object, destination);
+  return sink;
+}
+
+/** Internal composition proof for the G07 issued-persistence lifetime seam. */
+export function assertG10cPostCommitUnknownHandoffBinding(
+  adapter: G04bMongoPersistenceAdapter,
+  scope: AccessScopeContext,
+  handoff: G10cPostCommitUnknownHandoff,
+): void {
+  if (!concreteAdapters.has(adapter as object)) {
+    throw new TypeError('G10c handoff binding requires a concrete G04b Mongo persistence adapter');
+  }
+  const state = requireHandoff(handoff);
+  if (state.adapter !== adapter || state.scope !== scope) {
+    throw new TypeError('G10c post-commit unknown handoff does not belong to this adapter scope');
+  }
 }
 
 /**
@@ -516,7 +564,7 @@ export function createG10cPostCommitUnknownHandoffBundle(): G10cPostCommitUnknow
   const sink: G10cPostCommitUnknownHandoffSink = Object.freeze({
     retain(handoff: G10cPostCommitUnknownHandoff): void {
       const state = requireHandoff(handoff);
-      if (state.sink !== sink || state.status !== 'RETAINED' || queued.includes(handoff)) {
+      if (!sameRecoveryQueue(state.sink, sink) || state.status !== 'RETAINED' || queued.includes(handoff)) {
         throw new TypeError('G10c post-commit unknown handoff cannot be retained');
       }
       queued.push(handoff);
@@ -530,7 +578,7 @@ export function createG10cPostCommitUnknownHandoffBundle(): G10cPostCommitUnknow
     },
     take(handoff: G10cPostCommitUnknownHandoff): G10cPostCommitUnknownHandoff {
       const state = requireHandoff(handoff);
-      if (state.sink !== sink || state.status !== 'RETAINED') {
+      if (!sameRecoveryQueue(state.sink, sink) || state.status !== 'RETAINED') {
         throw new TypeError('G10c post-commit unknown handoff owner is foreign or stale');
       }
       const index = queued.indexOf(handoff);
@@ -663,11 +711,19 @@ function requireTakenHandoff(
   handoff: G10cPostCommitUnknownHandoff,
 ): HandoffState {
   const state = requireHandoff(handoff);
-  if (state.sink !== sink || state.status !== 'TAKEN') {
+  if (!sameRecoveryQueue(state.sink, sink) || state.status !== 'TAKEN') {
     throw new TypeError('G10c post-commit unknown handoff owner is foreign or stale');
   }
   assertOperationUnknownCommitConfirmationCurrent(state.binding, state.confirmation);
   return state;
+}
+
+/** A forwarding sink has no owner; its approved destination keeps ownership. */
+function sameRecoveryQueue(
+  retainedSink: G10cPostCommitUnknownHandoffSink,
+  queueSink: G10cPostCommitUnknownHandoffSink,
+): boolean {
+  return retainedSink === queueSink || forwardingDestinations.get(retainedSink as object) === queueSink;
 }
 
 function requireConfirmationAction(

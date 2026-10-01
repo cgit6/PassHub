@@ -93,6 +93,10 @@ import {
   registerG10bAdmissionWorkContext,
   type G10bOperationBudgetBindingFactory,
 } from './g10b-operation-bridge.js';
+import {
+  assertG10cG07RecoveryBridge,
+  type G10cG07RecoveryBridge,
+} from './g10c-g07-recovery-bridge.js';
 import type { RuntimeIdentity } from '../../runtime/internal/runtime-control.js';
 import { assertRuntimeLiveCounterBridge, notifyRuntimeLiveCounterBridge, type RuntimeLiveCounterBridge } from '../../runtime/internal/runtime-live-counter-bridge.js';
 import {
@@ -242,6 +246,8 @@ export interface G07bAdmissionHandlerOptions {
    * when a writer has passed admission and is about to do original G08 work.
    */
   readonly operationBudgetBindingFactory?: G10bOperationBudgetBindingFactory;
+  /** Optional internal G10c bridge; absent preserves historical behavior. */
+  readonly postCommitUnknownRecoveryBridge?: G10cG07RecoveryBridge;
 }
 
 interface WriterInput {
@@ -383,6 +389,13 @@ export function createG07bAdmissionHandler(
       'bind',
       'G10b operation budget binding factory',
     ).bind(operationBudgetBindingFactory) as G10bOperationBudgetBindingFactory['bind'];
+  const postCommitUnknownRecoveryBridge = options.postCommitUnknownRecoveryBridge;
+  if (postCommitUnknownRecoveryBridge !== undefined) {
+    assertG10cG07RecoveryBridge(postCommitUnknownRecoveryBridge);
+    if (writerPermissionAcquire === undefined || createOperationBudgetBinding === undefined) {
+      throw new TypeError('G10c recovery bridge requires G10a writer permission and G10b budget binding');
+    }
+  }
   assertOptions(options, validator, work, validatorValidate, loginWorkMethod, queryWorkMethod, managementWorkMethod, recognitionWorkMethod);
   const validatorIdentity = getQueryAdmissionIdentity(validatorValidate);
   const workIdentity = getQueryAdmissionIdentity(queryWorkMethod);
@@ -539,7 +552,11 @@ export function createG07bAdmissionHandler(
     }
   };
 
-  const invokeG08WriterWork = <T>(operation: () => Promise<T>, identity: RuntimeIdentity | null): Promise<T> => {
+  const invokeG08WriterWork = <T>(
+    operation: () => Promise<T>,
+    identity: RuntimeIdentity | null,
+    admissionContext: AdmissionWorkContext,
+  ): Promise<T> => {
     if (writerPermissionAcquire === undefined) return invokeNativePromise(operation);
     const lease = writerPermissionAcquire();
     // The only G08 invocation seam.  Registration happens only after the
@@ -549,18 +566,41 @@ export function createG07bAdmissionHandler(
     if (identity !== null && beginBusinessStepLog !== undefined) {
       try { step = beginBusinessStepLog(identity); } catch { /* never alter work */ }
     }
+    let bridgeStarted = false;
+    try {
+      if (postCommitUnknownRecoveryBridge !== undefined) {
+        postCommitUnknownRecoveryBridge.beginIssuedPersistence(admissionContext, lease);
+        bridgeStarted = true;
+      }
+    } catch (error: unknown) {
+      try { step?.settled(); } catch { /* never alter work */ }
+      try { lease.release(); } catch { /* preserve original boundary */ }
+      throw error;
+    }
+    let finalized = false;
+    const finalizeIssuedPersistence = (): void => {
+      if (finalized) return;
+      finalized = true;
+      try { step?.settled(); } catch { /* never alter work */ }
+      if (bridgeStarted) {
+        postCommitUnknownRecoveryBridge!.finishIssuedPersistence(admissionContext);
+      } else {
+        lease.release();
+      }
+    };
     try {
       try { step?.issued(); } catch { /* never alter work */ }
       const attributed = identity !== null && driverLogBinding !== undefined
         ? () => driverLogBinding.run(identity, operation)
         : operation;
-      return invokeNativePromise(attributed).finally(() => {
-        try { step?.settled(); } catch { /* never alter work */ }
-        lease.release();
-      });
+      const promise = invokeNativePromise(attributed);
+      return nativePromiseThen.call(
+        promise,
+        (value: T) => { finalizeIssuedPersistence(); return value; },
+        (error: unknown) => { finalizeIssuedPersistence(); throw error; },
+      ) as Promise<T>;
     } catch (error) {
-      try { step?.settled(); } catch { /* never alter work */ }
-      try { lease.release(); } catch { /* preserve the original synchronous boundary */ }
+      try { finalizeIssuedPersistence(); } catch { /* preserve original synchronous boundary */ }
       throw error;
     }
   };
@@ -671,13 +711,23 @@ export function createG07bAdmissionHandler(
       settlement.knownNoEffect(new AdmissionTechnicalError('RATE_LIMITED'));
       return;
     }
+    let admissionContext: AdmissionWorkContext | null = null;
     try {
-      const admissionContext = workContext(context, input.runtimeIdentity, createOperationBudgetBinding);
+      admissionContext = workContext(context, input.runtimeIdentity, createOperationBudgetBinding);
       const outcome = await invokeG08WriterWork(
-        () => managementWork(input.workInput, admissionContext), input.runtimeIdentity,
+        () => managementWork(input.workInput, admissionContext!), input.runtimeIdentity, admissionContext,
       );
+      postCommitUnknownRecoveryBridge?.assertNoRetainedHandoff(admissionContext);
       settleWriterOutcome(input.owner, settlement, outcome);
     } catch {
+      if (admissionContext !== null && postCommitUnknownRecoveryBridge?.pausePostCommitUnknown(
+        admissionContext,
+        settlement,
+        new AdmissionTechnicalError('MANAGEMENT_POST_COMMIT_UNKNOWN'),
+      )) {
+        respond(input.owner, technical.unconfirmed);
+        return;
+      }
       settleUnknown(input.owner, settlement, 'MANAGEMENT_WORK_UNCONFIRMED');
     }
   }
@@ -793,11 +843,43 @@ export function createG07bAdmissionHandler(
     let outcome: AdmissionRecognitionWriterOutcome;
     try {
       outcome = sanitizeRecognitionWriterOutcome(
-        await invokeG08WriterWork(() => recognitionWork(input.workInput, admissionContext), input.runtimeIdentity),
+        await invokeG08WriterWork(
+          () => recognitionWork(input.workInput, admissionContext),
+          input.runtimeIdentity,
+          admissionContext,
+        ),
         renderResponsePlan,
       );
     } catch {
       transitionUnknown(input, lease, admissionContext, observationReference);
+      if (postCommitUnknownRecoveryBridge?.pausePostCommitUnknown(
+        admissionContext,
+        settlement,
+        new AdmissionTechnicalError('RECOGNITION_POST_COMMIT_UNKNOWN'),
+      )) {
+        respond(input.owner, technical.unconfirmed);
+        return;
+      }
+      settleUnknown(input.owner, settlement, 'RECOGNITION_WORK_UNCONFIRMED');
+      return;
+    }
+
+    // Any handoff means the initial commit outcome is not known.  A G08
+    // response that claims a terminal result at that point is contradictory;
+    // route it through the same fail-closed pause path rather than publishing
+    // an optimistic answer.
+    try {
+      postCommitUnknownRecoveryBridge?.assertNoRetainedHandoff(admissionContext);
+    } catch {
+      transitionUnknown(input, lease, admissionContext, observationReference);
+      if (postCommitUnknownRecoveryBridge?.pausePostCommitUnknown(
+        admissionContext,
+        settlement,
+        new AdmissionTechnicalError('RECOGNITION_POST_COMMIT_OUTCOME_MISMATCH'),
+      )) {
+        respond(input.owner, technical.unconfirmed);
+        return;
+      }
       settleUnknown(input.owner, settlement, 'RECOGNITION_WORK_UNCONFIRMED');
       return;
     }
@@ -805,6 +887,11 @@ export function createG07bAdmissionHandler(
     if (outcome.disposition === 'UNKNOWN_EFFECT') {
       transitionUnknown(input, lease, admissionContext, observationReference);
       respond(input.owner, technical.unconfirmed);
+      if (postCommitUnknownRecoveryBridge?.pausePostCommitUnknown(
+        admissionContext,
+        settlement,
+        new AdmissionTechnicalError('RECOGNITION_POST_COMMIT_UNKNOWN'),
+      )) return;
       settlement.unknownEffect(new AdmissionTechnicalError('RECOGNITION_UNKNOWN_EFFECT'));
       return;
     }
@@ -1920,6 +2007,7 @@ function captureOptions(options: G07bAdmissionHandlerOptions): G07bAdmissionHand
     runtimeCounterBridge: captureOptionalConstructionProperty(options, 'runtimeCounterBridge', 'G07b options'),
     driverLogBinding: captureOptionalConstructionProperty(options, 'driverLogBinding', 'G07b options'),
     operationBudgetBindingFactory: captureOptionalConstructionProperty(options, 'operationBudgetBindingFactory', 'G07b options'),
+    postCommitUnknownRecoveryBridge: captureOptionalConstructionProperty(options, 'postCommitUnknownRecoveryBridge', 'G07b options'),
   }) as G07bAdmissionHandlerOptions;
 }
 
