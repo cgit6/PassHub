@@ -10,6 +10,7 @@ import { createAccessComposition } from '../../src/composition/access-compositio
 import { HumanPrincipal, type HumanRole } from '../../src/auth/domain/index.js';
 import type { HumanAuthCapability } from '../../src/auth/application/index.js';
 import type { ManagementDataPort } from '../../src/access/ports/access-ports.js';
+import type { QueryDataPort } from '../../src/access/ports/query-ports.js';
 import {
   createAdmissionWorkHandoffBundle,
   createG07bRouteComposition,
@@ -52,6 +53,38 @@ class HarnessAuth implements HumanAuthCapability {
 function deferred<T>(): { readonly promise: Promise<T>; resolve(value: T): void } {
   let resolve!: (value: T) => void;
   return { promise: new Promise<T>((done) => { resolve = done; }), resolve };
+}
+
+async function waitForSnapshot(
+  control: RuntimeControl,
+  predicate: (snapshot: ReturnType<RuntimeControl['snapshot']>) => boolean,
+  label: string,
+): Promise<ReturnType<RuntimeControl['snapshot']>> {
+  const deadline = Date.now() + 3_000;
+  while (Date.now() < deadline) {
+    const snapshot = await status(control);
+    if (predicate(snapshot)) return snapshot;
+    await new Promise<void>((resolve) => { setTimeout(resolve, 5); });
+  }
+  throw new Error(`timed out waiting for ${label}`);
+}
+
+async function mutateControl(
+  control: RuntimeControl,
+  command: 'HOLD' | 'RELEASE' | 'DRAIN',
+  expectedRevision: string,
+  extra: Readonly<Record<string, unknown>> = Object.freeze({}),
+): Promise<Extract<Awaited<ReturnType<typeof dispatchRuntimeControlProtocol>>, { readonly ok: true }>> {
+  const payload = Object.freeze({
+    v: 'c1', requestControlId: randomUUID(), command, epoch: EPOCH, run: RUN, expectedRevision, ...extra,
+  });
+  const text = `${JSON.stringify(payload)}\n`;
+  const frame: RuntimeControlProtocolFrame = Object.freeze({
+    text, utf8Valid: true, hasBom: false, singleFinalLf: true, byteLength: Buffer.byteLength(text),
+  });
+  const result = await dispatchRuntimeControlProtocol(control, frame);
+  if (result === undefined || !result.ok) throw new Error(`control ${command} was rejected`);
+  return result;
 }
 
 function sendHttp(port: number, method: 'GET' | 'POST', path: string, body?: Record<string, unknown>): Promise<{ readonly status: number; readonly body: Record<string, unknown> }> {
@@ -190,19 +223,26 @@ describe('G10a true MongoDB driver command monitoring', () => {
       metadata: Object.freeze({ ...seeded.metadata, datasetEpoch: EPOCH }),
     });
     await adapter.clearAndSeed(fixture);
-    const stageEntered = deferred<void>();
-    const stageRelease = deferred<void>();
-    let delayOnce = true;
+    const heldFirstEntered = deferred<void>();
+    const heldFirstRelease = deferred<void>();
+    const heldSecondEntered = deferred<void>();
+    const heldSecondRelease = deferred<void>();
+    const drainWriterEntered = deferred<void>();
+    const drainWriterRelease = deferred<void>();
+    const stageStarts: string[] = [];
+    const stageGates = new Map<string, { readonly entered: { resolve(value: void): void }; readonly release: { readonly promise: Promise<void> } }>([
+      ['G10a held writer one', { entered: heldFirstEntered, release: heldFirstRelease }],
+      ['G10a held writer two', { entered: heldSecondEntered, release: heldSecondRelease }],
+      ['G10a drain writer', { entered: drainWriterEntered, release: drainWriterRelease }],
+    ]);
     const managementPort: ManagementDataPort = Object.freeze({
       readQualification: adapter.readQualification.bind(adapter),
       readMapping: adapter.readMapping.bind(adapter),
       async stageManagementChange(...args: Parameters<ManagementDataPort['stageManagementChange']>) {
         const [context, plan] = args;
-        if (delayOnce) {
-          delayOnce = false;
-          stageEntered.resolve();
-          await stageRelease.promise;
-        }
+        stageStarts.push(plan.displayName ?? '<non-create>');
+        const gate = plan.displayName === null ? undefined : stageGates.get(plan.displayName);
+        if (gate !== undefined) { gate.entered.resolve(); await gate.release.promise; }
         return adapter.stageManagementChange(context, plan);
       },
       discard: adapter.discard.bind(adapter),
@@ -247,7 +287,7 @@ describe('G10a true MongoDB driver command monitoring', () => {
       controlDirectory: join(runtimeParent, 'control'),
       controlSocketPath: join(runtimeParent, 'control', RUNTIME_CONTROL_SOCKET_FILE_NAME),
       monotonicClock: { nowMs: () => performance.now() },
-      awaitObservation: () => undefined,
+      awaitObservation: () => new Promise<void>((resolve) => { setTimeout(resolve, 5); }),
     });
     let control: RuntimeControl | undefined;
     let runtimeHttp: Awaited<ReturnType<typeof createG10aRuntimeHttpApplication>> | undefined;
@@ -278,27 +318,72 @@ describe('G10a true MongoDB driver command monitoring', () => {
       await runtimeHttp.application.nestApplication.listen(0, '127.0.0.1');
       const address = runtimeHttp.application.server.address();
       if (address === null || typeof address === 'string') throw new Error('HTTP server did not bind a port');
-      const managementRequest = sendHttp(address.port, 'POST', '/qualifications', {
-        displayName: 'G10a closed-loop qualification',
+      if (control === undefined) throw new Error('runtime control was not captured');
+      const qualification = (displayName: string): Record<string, unknown> => Object.freeze({
+        displayName,
         validFrom: new Date(Date.now() + 1_000).toISOString(),
         validUntil: new Date(Date.now() + 3_600_000).toISOString(),
         face: null,
       });
-      await stageEntered.promise;
-      if (control === undefined) throw new Error('runtime control was not captured');
-      await expect(status(control)).resolves.toMatchObject({ issuedPersistence: 1, activeQueryReads: 0 });
-      stageRelease.resolve();
-      await expect(managementRequest).resolves.toMatchObject({ status: 201, body: { operation: 'CREATE' } });
-      await expect(status(control)).resolves.toMatchObject({ issuedPersistence: 0 });
-
       const queryResponse = await sendHttp(address.port, 'GET', '/qualifications');
       expect(queryResponse.status).toBe(200);
-      expect(await client.db(database).collection(G04B_QUALIFICATIONS_COLLECTION).findOne({ displayName: 'G10a closed-loop qualification' })).not.toBeNull();
+      const held = await mutateControl(control, 'HOLD', (await status(control)).revision);
+      expect(held.outcome).toBe('HELD');
+      const heldControlId = held.controlId;
+      if (heldControlId === null) throw new Error('HOLD did not issue a control id');
+
+      // Send in a known order and observe each request as READY before the
+      // next arrives.  The post-release stage gates then prove FIFO start,
+      // not merely eventual completion in a convenient order.
+      const heldFirst = sendHttp(address.port, 'POST', '/qualifications', qualification('G10a held writer one'));
+      await waitForSnapshot(control, (snapshot) => snapshot.writers.queued === 1 && snapshot.issuedPersistence === 0, 'first writer queued by HOLD');
+      const heldSecond = sendHttp(address.port, 'POST', '/qualifications', qualification('G10a held writer two'));
+      await waitForSnapshot(control, (snapshot) => snapshot.writers.queued === 2 && snapshot.issuedPersistence === 0, 'second writer queued by HOLD');
+      const released = await mutateControl(control, 'RELEASE', (await status(control)).revision, { controlId: heldControlId });
+      expect(released.outcome).toBe('RELEASED');
+      await heldFirstEntered.promise;
+      await waitForSnapshot(control, (snapshot) => snapshot.issuedPersistence === 1 && snapshot.writers.running === 1 && snapshot.writers.queued === 1, 'only first FIFO writer invoked');
+      expect(stageStarts).toEqual(['G10a held writer one']);
+      heldFirstRelease.resolve();
+      await expect(heldFirst).resolves.toMatchObject({ status: 201, body: { operation: 'CREATE' } });
+      await heldSecondEntered.promise;
+      expect(stageStarts).toEqual(['G10a held writer one', 'G10a held writer two']);
+      heldSecondRelease.resolve();
+      await expect(heldSecond).resolves.toMatchObject({ status: 201, body: { operation: 'CREATE' } });
+      await waitForSnapshot(control, (snapshot) => snapshot.issuedPersistence === 0 && snapshot.writers.queued === 0 && snapshot.writers.running === 0, 'FIFO writer settlement');
+      expect(await client.db(database).collection(G04B_QUALIFICATIONS_COLLECTION).countDocuments({ displayName: { $in: ['G10a held writer one', 'G10a held writer two'] } })).toBe(2);
+
+      // A writer that has crossed the exact G08 invocation seam must finish;
+      // DRAIN vetoes later ingress but never pretends this admitted work was
+      // not already in flight.
+      const running = sendHttp(address.port, 'POST', '/qualifications', qualification('G10a drain writer'));
+      await drainWriterEntered.promise;
+      await waitForSnapshot(control, (snapshot) => snapshot.issuedPersistence === 1 && snapshot.writers.running === 1, 'admitted writer at G08 persistence seam');
+      const drainPromise = mutateControl(control, 'DRAIN', (await status(control)).revision, { timeoutMs: 2_000 });
+      await waitForSnapshot(control, (snapshot) => snapshot.maintenance.active && snapshot.maintenance.outcome === 'WAITING' && snapshot.issuedPersistence === 1, 'DRAIN maintenance veto');
+      await expect(sendHttp(address.port, 'POST', '/qualifications', qualification('G10a maintenance blocked writer'))).resolves.toMatchObject({ status: 503 });
+      await expect(sendHttp(address.port, 'GET', '/qualifications')).resolves.toMatchObject({ status: 503 });
+      drainWriterRelease.resolve();
+      await expect(running).resolves.toMatchObject({ status: 201, body: { operation: 'CREATE' } });
+      const drained = await drainPromise;
+      expect(drained.outcome).toBe('DRAINED');
+      await expect(status(control)).resolves.toMatchObject({
+        maintenance: { active: true, outcome: 'DRAINED' }, issuedPersistence: 0, activeQueryReads: 0,
+      });
+      expect(await client.db(database).collection(G04B_QUALIFICATIONS_COLLECTION).countDocuments({ displayName: 'G10a drain writer' })).toBe(1);
+
+      // The earlier non-maintenance query closes the query-driver provenance
+      // route.  During maintenance the same endpoint is intentionally busy.
+      // Create side effects above use the true Mongo collection, not a port
+      // test double.
       const runtime = await owner.start();
       await runtime.runtimeLogSink.flush();
       const records = (await readFile(join(runtimeParent, 'logs', 'runtime.log'), 'utf8'))
         .split('\n').filter((line) => line.length > 0)
         .map((line) => validateRuntimeLogRecord(JSON.parse(line) as unknown));
+      expect(records.map((record) => record.code)).toEqual(expect.arrayContaining([
+        'HOLD_ACKNOWLEDGED', 'RELEASE_ACKNOWLEDGED', 'DRAIN_STARTED', 'DRAINED',
+      ]));
       const registered = records.find((record) => record.code === 'OPERATION_REGISTERED');
       if (registered === undefined) throw new Error('missing operation registration');
       const writer = records.filter((record) => record.requestUUID === registered.requestUUID);
@@ -313,6 +398,126 @@ describe('G10a true MongoDB driver command monitoring', () => {
       const queryDriver = records.filter((record) => record.kind === 'DRIVER' && record.route === 'QUERY');
       expect(queryDriver.length).toBeGreaterThan(0);
       expect(queryDriver.every((record) => record.requestUUID !== null && record.operationUUID === null && record.ownerRef === null)).toBe(true);
+    } finally {
+      await runtimeHttp?.close().catch(() => undefined);
+      await client.db(database).dropDatabase().catch(() => undefined);
+      await rm(runtimeParent, { recursive: true, force: true });
+    }
+  });
+
+  test('DRAIN waits for a query that already reached G09 native Mongo work, then keeps the maintenance veto', async () => {
+    const runtimeParent = await mkdtemp(join(tmpdir(), 'passhub-g10a-http-query-drain-'));
+    const database = `passhub_g10a_http_query_drain_${process.pid}`.slice(0, 63);
+    const adapter = new G04bMongoPersistenceAdapter(client, database, { nowMs: () => Date.now() });
+    await adapter.ensureSchema();
+    const seeded = createG04bFixture(Date.now());
+    await adapter.clearAndSeed(Object.freeze({
+      ...seeded, datasetEpoch: EPOCH, metadata: Object.freeze({ ...seeded.metadata, datasetEpoch: EPOCH }),
+    }));
+    const queryEntered = deferred<void>();
+    const queryRelease = deferred<void>();
+    const queryPort: QueryDataPort = Object.freeze({
+      readQualification: adapter.readQualification.bind(adapter),
+      readEvent: adapter.readEvent.bind(adapter),
+      listInside: adapter.listInside.bind(adapter),
+      listEvents: adapter.listEvents.bind(adapter),
+      async listQualifications(...args: Parameters<QueryDataPort['listQualifications']>) {
+        queryEntered.resolve();
+        await queryRelease.promise;
+        return adapter.listQualifications(...args);
+      },
+    });
+    const auth = new HarnessAuth();
+    const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
+    const handoff = createAdmissionWorkHandoffBundle();
+    const quiescence = createWriterQuiescence({ clock: { nowMs: Date.now } });
+    const access = createAccessComposition({ management: adapter, query: adapter, epoch: EPOCH });
+    const management = createG08aManagementComposition({ auth, manageQualifications: access.manageQualifications, responsePlans: plans, workHandoff: handoff });
+    const query = createG09aQueryComposition({
+      currentDatasetEpoch: EPOCH,
+      auth,
+      queryApplication: createQueryApplication({ data: queryPort, writerQuiescence: quiescence, epoch: EPOCH }),
+      responsePlans: plans,
+      workHandoff: handoff,
+      writerQuiescence: quiescence,
+    });
+    const rejected = async () => Object.freeze({ kind: 'REJECTED' as const, response: plans.technical.issue('INVALID_REQUEST') });
+    const routes = createG07bRouteComposition({
+      login: Object.freeze({ validate: rejected, login: async () => plans.technical.issue('INVALID_REQUEST') }),
+      query,
+      management: Object.freeze({ validate: management.validator.validate, management: management.work.management }),
+      recognition: Object.freeze({ validate: rejected, recognition: async () => ({ disposition: 'KNOWN_NO_EFFECT' as const, response: plans.technical.issue('INVALID_REQUEST') }) }),
+    });
+    const capabilities = createOperationRegistryCapabilityIssuer({
+      registryId: `g10a-http-query-drain-${process.pid}`,
+      datasetEpoch: EPOCH,
+      processRunId: RUN,
+      ownerId: '55555555-5555-4555-8555-555555555555',
+      sameArtifact: () => true,
+    });
+    const registry = createOperationRegistry({
+      capabilities,
+      writeRunClaim: capabilities.issueWriteRunClaim('WRITABLE'),
+      assertOwnerCurrent: () => undefined,
+      assertContinuationEvidence: () => undefined,
+    });
+    const owner = createG10aRuntimeOwner({
+      epoch: EPOCH, run: RUN,
+      logDirectory: join(runtimeParent, 'logs'),
+      controlDirectory: join(runtimeParent, 'control'),
+      controlSocketPath: join(runtimeParent, 'control', RUNTIME_CONTROL_SOCKET_FILE_NAME),
+      monotonicClock: { nowMs: () => performance.now() },
+      awaitObservation: () => new Promise<void>((resolve) => { setTimeout(resolve, 5); }),
+    });
+    let control: RuntimeControl | undefined;
+    let runtimeHttp: Awaited<ReturnType<typeof createG10aRuntimeHttpApplication>> | undefined;
+    try {
+      runtimeHttp = await createG10aRuntimeHttpApplication({
+        runtimeOwner: owner,
+        createAcceptedHandler: (runtime) => {
+          const composed = createG10aAdmissionRuntimeComposition({
+            epoch: EPOCH, run: RUN,
+            monotonicClock: { nowMs: () => performance.now() },
+            awaitObservation: () => new Promise<void>((resolve) => { setTimeout(resolve, 5); }),
+            runtime,
+            admission: {
+              currentDatasetEpoch: EPOCH,
+              registry,
+              registryCapabilities: capabilities,
+              responsePlans: plans,
+              workHandoff: handoff,
+              unknownRecognition: createUnknownRecognitionCoordinatorBundle().handler,
+              validator: routes.validator,
+              work: routes.work,
+              writerQuiescence: quiescence,
+            },
+          });
+          control = composed.control;
+          return composed.handler;
+        },
+      });
+      await runtimeHttp.application.nestApplication.listen(0, '127.0.0.1');
+      const address = runtimeHttp.application.server.address();
+      if (address === null || typeof address === 'string' || control === undefined) throw new Error('G10a HTTP control fixture did not start');
+      const activeQuery = sendHttp(address.port, 'GET', '/qualifications');
+      await queryEntered.promise;
+      await waitForSnapshot(control, (snapshot) => snapshot.activeQueryReads === 1 && snapshot.issuedPersistence === 0, 'query at the invoked G09 query-work seam');
+      const drain = mutateControl(control, 'DRAIN', (await status(control)).revision, { timeoutMs: 2_000 });
+      await waitForSnapshot(control, (snapshot) => snapshot.maintenance.active && snapshot.maintenance.outcome === 'WAITING' && snapshot.activeQueryReads === 1, 'DRAIN waiting for admitted query');
+      await expect(sendHttp(address.port, 'GET', '/qualifications')).resolves.toMatchObject({ status: 503 });
+      queryRelease.resolve();
+      await expect(activeQuery).resolves.toMatchObject({ status: 200 });
+      await expect(drain).resolves.toMatchObject({ outcome: 'DRAINED' });
+      await expect(status(control)).resolves.toMatchObject({
+        maintenance: { active: true, outcome: 'DRAINED' }, activeQueryReads: 0, issuedPersistence: 0,
+      });
+      const runtime = await owner.start();
+      await runtime.runtimeLogSink.flush();
+      const records = (await readFile(join(runtimeParent, 'logs', 'runtime.log'), 'utf8'))
+        .split('\n').filter((line) => line.length > 0)
+        .map((line) => validateRuntimeLogRecord(JSON.parse(line) as unknown));
+      expect(records.map((record) => record.code)).toEqual(expect.arrayContaining(['DRAIN_STARTED', 'DRAINED', 'DRIVER_STARTED', 'DRIVER_SUCCEEDED']));
+      expect(records.some((record) => record.kind === 'DRIVER' && record.route === 'QUERY' && record.requestUUID !== null && record.operationUUID === null && record.ownerRef === null)).toBe(true);
     } finally {
       await runtimeHttp?.close().catch(() => undefined);
       await client.db(database).dropDatabase().catch(() => undefined);
