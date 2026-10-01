@@ -46,7 +46,12 @@ export async function runG10aEvidence({
       commandResult = { exitCode: 1, stdout: '' };
     }
     const durationMs = safeDuration(now() - startedAt);
-    const parsed = parseJestCounts(commandResult?.stdout);
+    // npm/Jest can emit its summary on stderr even when the command succeeds.
+    // This combined value is parsing-only: neither raw stream is retained in
+    // results or passed to the artifact writer. A separating newline prevents
+    // fragments from different streams from being mistaken for one summary.
+    const commandOutput = combineCommandOutputForParsing(commandResult);
+    const parsed = parseJestCounts(commandOutput);
     const exitCode = normalizeExitCode(commandResult?.exitCode);
     // A zero process exit alone is not evidence that a Jest tier actually ran.
     // The private result schema deliberately records both totals, so accepting
@@ -57,7 +62,7 @@ export async function runG10aEvidence({
       phaseFailure = new Error(`${identifier} did not emit valid Jest total counts`);
     }
     if (identifier === 'test:g10a:integration') {
-      environment = parseG10aEnvironmentProofFromOutput(commandResult?.stdout);
+      environment = parseG10aEnvironmentProofFromOutput(commandOutput);
       if (exitCode === 0 && environment === undefined && phaseFailure === undefined) {
         phaseFailure = new Error('test:g10a:integration did not emit a valid G10a environment proof');
       }
@@ -136,11 +141,13 @@ function parseJestCount(output, label) {
 
 async function executeNpmCommand(identifier, root) {
   return await new Promise((resolve) => {
-    const child = spawn('npm', ['run', identifier], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'], shell: false });
+    const child = spawn('npm', ['run', identifier], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], shell: false });
     let stdout = '';
+    let stderr = '';
     child.stdout.on('data', (chunk) => { stdout += String(chunk); });
-    child.once('error', () => resolve({ exitCode: 1, stdout: '' }));
-    child.once('exit', (code) => resolve({ exitCode: code ?? 1, stdout }));
+    child.stderr.on('data', (chunk) => { stderr += String(chunk); });
+    child.once('error', () => resolve({ exitCode: 1, stdout: '', stderr: '' }));
+    child.once('exit', (code) => resolve({ exitCode: code ?? 1, stdout, stderr }));
   });
 }
 
@@ -170,6 +177,11 @@ async function dockerList(args) {
 function normalizeExitCode(value) { return Number.isInteger(value) && value >= 0 ? value : 1; }
 function safeDuration(value) { return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0; }
 function hasCompleteJestTotals({ suiteCount, testCount }) { return Number.isSafeInteger(suiteCount) && suiteCount > 0 && Number.isSafeInteger(testCount) && testCount > 0; }
+function combineCommandOutputForParsing(result) {
+  const stdout = typeof result?.stdout === 'string' ? result.stdout : '';
+  const stderr = typeof result?.stderr === 'string' ? result.stderr : '';
+  return `${stdout}\n${stderr}`;
+}
 function createRunId() { return `g10a-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${randomUUID().replaceAll('-', '')}`; }
 function emptyDockerCleanup() { return { dockerContainersAbsent: false, composeContainersAbsent: false, composeNetworksAbsent: false }; }
 function isDockerCleanupInspection(value) {

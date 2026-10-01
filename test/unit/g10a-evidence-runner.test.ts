@@ -38,6 +38,33 @@ describe('G10a evidence top-level runner', () => {
     expect(writes).toHaveLength(1);
   });
 
+  test('accepts valid Jest totals and integration proof emitted only to stderr without persisting stderr', async () => {
+    const runner = await loadRunner();
+    const writes: any[] = [];
+    const stderrMarker = 'stderr-private-mongodb://not-persisted/secret';
+    const result = await runner.runG10aEvidence({
+      root: '/safe/workspace', outputRoot: '/safe/private-output', runId: 'g10a-20261001-stderr', now: sequenceNow(0, 1, 1, 2, 2, 3),
+      assertOutputRoot: async () => '/safe/private-output', assertClean: async () => undefined, collectProvenance: async () => provenance(),
+      executeCommand: async (identifier: string) => ({
+        exitCode: 0,
+        stdout: '',
+        stderr: `Test Suites: 1 passed, 1 total\nTests: 7 passed, 7 total\n${stderrMarker}${identifier === 'test:g10a:integration' ? `\n${environmentProof}` : ''}`,
+      }),
+      collectCategories: async () => completeCategories(),
+      inspectDocker: async () => ({ dockerContainersAbsent: true, composeContainersAbsent: true, composeNetworksAbsent: true }),
+      writeArtifacts: async (input: any) => { writes.push(input); return {}; },
+    });
+    expect(result.phases).toEqual([
+      { identifier: 'test:g10a:unit', exitCode: 0, durationMs: 1, suiteCount: 1, testCount: 7 },
+      { identifier: 'test:g10a:socket', exitCode: 0, durationMs: 1, suiteCount: 1, testCount: 7 },
+      { identifier: 'test:g10a:integration', exitCode: 0, durationMs: 1, suiteCount: 1, testCount: 7 },
+    ]);
+    expect(writes).toHaveLength(1);
+    expect(writes[0].results.status).toBe('PASS');
+    expect(JSON.stringify(writes[0])).not.toContain(stderrMarker);
+    expect(JSON.stringify(writes[0])).not.toContain('mongodb://');
+  });
+
   test('preserves phase failure over cleanup failure and does not launch later phases', async () => {
     const runner = await loadRunner();
     const calls: string[] = [];
@@ -83,6 +110,26 @@ describe('G10a evidence top-level runner', () => {
     expect(writes).toHaveLength(1);
     expect(writes[0].results.status).toBe('PASS');
     expect(writes[0].cleanup.status).toBe('FAIL');
+  });
+
+  test.each([
+    ['empty stderr', '', null, null],
+    ['malformed stderr', 'Test Suites: 1 passed, one total\nTests: 1 passed, 1 total', null, 1],
+  ])('fails closed when zero-exit Jest totals on stderr are %s', async (_caseName, stderr, suiteCount, testCount) => {
+    const runner = await loadRunner();
+    const writes: any[] = [];
+    await expect(runner.runG10aEvidence({
+      root: '/safe/workspace', outputRoot: '/safe/private-output', runId: 'g10a-20261001-stderr-invalid', now: sequenceNow(0, 1),
+      assertOutputRoot: async () => '/safe/private-output', assertClean: async () => undefined, collectProvenance: async () => provenance(),
+      executeCommand: async () => ({ exitCode: 0, stdout: '', stderr }),
+      collectCategories: async () => incompleteCategories(),
+      inspectDocker: async () => ({ dockerContainersAbsent: true, composeContainersAbsent: true, composeNetworksAbsent: true }),
+      writeArtifacts: async (input: any) => { writes.push(input); return {}; },
+    })).rejects.toThrow('test:g10a:unit did not emit valid Jest total counts');
+    expect(writes).toHaveLength(1);
+    expect(writes[0].results.phases).toEqual([
+      { identifier: 'test:g10a:unit', exitCode: 0, durationMs: 1, suiteCount, testCount },
+    ]);
   });
 
   test('keeps a phase failure primary when cleanup also fails', async () => {
