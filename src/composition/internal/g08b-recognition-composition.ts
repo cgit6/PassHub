@@ -56,6 +56,7 @@ import {
 } from './http-response-plan.js';
 import {
   assertSourceBoundRecognitionExecutorFactory,
+  bindG10bRecognitionExecutorToAdmission,
   createSourceBoundRecognitionExecutorForPrincipal,
   type SourceBoundRecognitionExecutorFactory,
 } from './source-bound-recognition.js';
@@ -215,6 +216,7 @@ export function createG08bRecognitionComposition(
       payloads.delete(input as object);
 
       try {
+        bindG10bRecognitionExecutorToAdmission(payload.executor, context);
         const keyFacts = assertRegistryKey(payload.registryKey);
         if (keyFacts.sourceId !== payload.sourceId || keyFacts.externalEventId !== payload.externalEventId) {
           throw new TypeError('recognition registry key provenance mismatch');

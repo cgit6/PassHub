@@ -60,6 +60,11 @@ export interface ScopeOptions {
   readonly scopeId?: string;
 }
 
+/** Internal-only observation point for composition-owned persistence wiring. */
+export interface FirstScopedPersistenceUse {
+  bind(context: AccessScopeContext): void;
+}
+
 function assertNonEmpty(value: string, field: string): void {
   if (typeof value !== 'string' || value.length === 0) {
     throw new TypeError(`${field} must be a non-empty string`);
@@ -77,6 +82,7 @@ function makeContext(
 
 abstract class ScopeBase {
   #closed = false;
+  #usedPersistence = false;
   protected readonly scopeToken: object = Object.freeze({});
   protected readonly context: AccessScopeContext;
   protected readonly scopeId: string;
@@ -84,7 +90,10 @@ abstract class ScopeBase {
   protected readonly generation: string;
   protected readonly epoch: string;
 
-  protected constructor(options: ScopeOptions) {
+  protected constructor(
+    options: ScopeOptions,
+    private readonly firstScopedPersistenceUse?: FirstScopedPersistenceUse,
+  ) {
     this.scopeId = options.scopeId ?? randomUUID();
     this.owner = randomUUID();
     this.generation = randomUUID();
@@ -105,6 +114,13 @@ abstract class ScopeBase {
     return;
   }
 
+  /** Bind only immediately before the first real port call for this scope. */
+  protected usePersistence(): void {
+    if (this.#usedPersistence) return;
+    this.firstScopedPersistenceUse?.bind(this.context);
+    this.#usedPersistence = true;
+  }
+
   public async closeAsync(): Promise<void> {
     this.#closed = true;
     retireAccessScopeContext(this.context);
@@ -119,8 +135,9 @@ export class ManagementAccessScope
   public constructor(
     private readonly persistence: ManagementDataPort,
     options: ScopeOptions,
+    firstScopedPersistenceUse?: FirstScopedPersistenceUse,
   ) {
-    super(options);
+    super(options, firstScopedPersistenceUse);
   }
 
   public async readQualification(
@@ -128,6 +145,7 @@ export class ManagementAccessScope
   ): Promise<ManagementQualificationSnapshot | null> {
     this.assertOpen();
     assertNonEmpty(qualificationId, 'qualificationId');
+    this.usePersistence();
     const result = await this.persistence.readQualification(
       this.context,
       qualificationId,
@@ -151,6 +169,7 @@ export class ManagementAccessScope
   ): Promise<FaceMappingSnapshot | null> {
     this.assertOpen();
     assertNonEmpty(qualificationId, 'qualificationId');
+    this.usePersistence();
     const result = await this.persistence.readMapping(
       this.context,
       qualificationId,
@@ -163,6 +182,7 @@ export class ManagementAccessScope
   public async stageManagementChange(plan: ManagementChangePlan): Promise<ManagementChangeResult> {
     this.assertOpen();
     assertManagementChangePlan(plan);
+    this.usePersistence();
     const result = await this.persistence.stageManagementChange(this.context, plan);
     this.assertOpen();
     return result;
@@ -184,13 +204,15 @@ export class RecognitionAccessScope
     private readonly sourceFacts: SourceFactsPort,
     private readonly sourceId: string,
     options: ScopeOptions,
+    firstScopedPersistenceUse?: FirstScopedPersistenceUse,
   ) {
-    super(options);
+    super(options, firstScopedPersistenceUse);
     assertNonEmpty(sourceId, 'sourceId');
   }
 
   public async readSourceFacts(): Promise<SourceFacts> {
     this.assertOpen();
+    this.usePersistence();
     const result = await this.sourceFacts.read(this.context, this.sourceId);
     this.assertOpen();
     this.#sourceActive = result.active;
@@ -204,6 +226,7 @@ export class RecognitionAccessScope
     if (this.#sourceActive === false) {
       return this.makeInactiveHandle('QR');
     }
+    this.usePersistence();
     const resolved = await this.persistence.resolveQr(
       this.context,
       lookupDigest,
@@ -237,6 +260,7 @@ export class RecognitionAccessScope
       throw new TypeError('FACE_MATCHED requires an external subject');
     }
     assertNonEmpty(externalSubjectId, 'externalSubjectId');
+    this.usePersistence();
     const resolved = await this.persistence.resolveFace(
       this.context,
       providerOrUnknown,
@@ -253,6 +277,7 @@ export class RecognitionAccessScope
     if (claims.qualificationId === null) {
       return null;
     }
+    this.usePersistence();
     const qualification = await this.persistence.readQualification(
       this.context,
       claims.qualificationId,
@@ -305,6 +330,7 @@ export class RecognitionAccessScope
       }
     }
     await this.assertResolutionFreshness(claims);
+    this.usePersistence();
     const result = await this.persistence.stageRecognitionResult(this.context, plan);
     this.assertOpen();
     return result;
@@ -414,6 +440,7 @@ export class RecognitionAccessScope
     if (claims.qualificationId === null) {
       return;
     }
+    this.usePersistence();
     const qualification = await this.persistence.readQualification(
       this.context,
       claims.qualificationId,
@@ -426,6 +453,7 @@ export class RecognitionAccessScope
       );
     }
     this.assertQualificationIdentity(claims, qualification);
+    this.usePersistence();
     const mapping = await this.persistence.readMapping(
       this.context,
       claims.qualificationId,

@@ -4,9 +4,11 @@ import type {
 } from '../access/application/index.js';
 import {
   ManagementAccessScope as ManagementScopeImplementation,
+  type FirstScopedPersistenceUse,
   type ManagementScope,
   type ScopeOptions,
 } from '../access/application/access-scopes.js';
+import { registerG10bManagementScopeFactory } from './internal/g10b-management-scope-bridge.js';
 import { ManageQualificationsImplementation } from '../access/application/use-cases.js';
 import type {
   AccessQueryPort,
@@ -81,11 +83,12 @@ export function createAccessComposition(
     epoch: dependencies.epoch,
   };
   const readAccessData = new ReadAccessDataWrapper(dependencies.query);
-  const openManagementScope = (): ManagementScope =>
-    new ManagementScopeImplementation(dependencies.management, scopeOptions);
+  const openManagementScope = (firstUse?: FirstScopedPersistenceUse): ManagementScope =>
+    new ManagementScopeImplementation(dependencies.management, scopeOptions, firstUse);
   const manageQualifications = new ManageQualificationsImplementation(
     openManagementScope,
   );
+  registerG10bManagementScopeFactory(manageQualifications, openManagementScope);
   const result = {
     manageQualifications,
     readAccessData,

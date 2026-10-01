@@ -10,6 +10,7 @@ import type { RecognizeAttempt } from '../../access/application/use-cases.js';
 import { RecognizeAttemptImplementation } from '../../access/application/use-cases.js';
 import {
   RecognitionAccessScope,
+  type FirstScopedPersistenceUse,
   type ScopeOptions,
 } from '../../access/application/access-scopes.js';
 import type {
@@ -23,10 +24,14 @@ import type {
 import {
   isArtifactBoundRecognizeAttempt,
 } from '../../access/application/internal/recognition-execution.js';
+import type { AdmissionWorkContext } from './g07b-admission-handler.js';
+import { createG10bFirstScopedPersistenceBinder } from './g10b-operation-bridge.js';
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const bindings = new WeakMap<object, SourcePrincipalFacts>();
 const executorFactories = new WeakMap<object, (binding: SourceBoundRecognitionBinding) => RecognizeAttempt>();
+const executorScopeHooks = new WeakMap<object, FirstScopedPersistenceUse | null>();
+const admissionBoundExecutors = new WeakSet<object>();
 
 /** Opaque source provenance used only by the internal access composition. */
 export interface SourceBoundRecognitionBinding {
@@ -147,10 +152,19 @@ export function createSourceBoundRecognitionExecutorFactory(options: Readonly<{
   const scopeOptions: ScopeOptions = Object.freeze({ epoch });
   return issueSourceBoundRecognitionExecutorFactory((binding) => {
     const sourceId = readSourceBoundRecognitionBinding(binding).sourceId;
-    return new RecognizeAttemptImplementation(
-      () => new RecognitionAccessScope(recognitionAdapter, sourceFactsAdapter, sourceId, scopeOptions),
+    let executor!: RecognizeAttempt;
+    executor = new RecognizeAttemptImplementation(
+      () => new RecognitionAccessScope(
+        recognitionAdapter,
+        sourceFactsAdapter,
+        sourceId,
+        scopeOptions,
+        executorScopeHooks.get(executor) ?? undefined,
+      ),
       comparison,
     );
+    executorScopeHooks.set(executor, null);
+    return executor;
   });
 }
 
@@ -164,4 +178,23 @@ export function createSourceBoundRecognitionExecutorForPrincipal(
   }
   const binding = issueSourceBoundRecognitionBinding(sourceAuth, principal);
   return createSourceBoundRecognitionExecutor(factory, binding);
+}
+
+/**
+ * Associates one G07 ORIGINAL context with the executor created for its one
+ * validated recognition token.  The hook is consumed by the first real scope
+ * port call, never by validation or ordinary read-only routes.
+ */
+export function bindG10bRecognitionExecutorToAdmission(
+  executor: RecognizeAttempt,
+  admission: AdmissionWorkContext,
+): void {
+  if (typeof executor !== 'object' || executor === null || !executorScopeHooks.has(executor)) {
+    throw new TypeError('recognition executor is not source-bound');
+  }
+  if (admissionBoundExecutors.has(executor)) {
+    throw new TypeError('recognition executor is already associated with an admission context');
+  }
+  executorScopeHooks.set(executor, createG10bFirstScopedPersistenceBinder(admission));
+  admissionBoundExecutors.add(executor);
 }

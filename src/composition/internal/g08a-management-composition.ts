@@ -29,6 +29,7 @@ import type {
   AdmissionWorkToken,
 } from './admission-work-handoff.js';
 import { assertAdmissionWorkHandoffBundle } from './admission-work-handoff.js';
+import { createG10bAdmissionBoundManageQualifications } from './g10b-management-scope-bridge.js';
 import type {
   HttpResponsePlan,
   HttpResponsePlanBundle,
@@ -182,10 +183,14 @@ export function createG08aManagementComposition(
         });
       }
       try {
+        const manageQualifications = createG10bAdmissionBoundManageQualifications(
+          options.manageQualifications,
+          context,
+        );
         const result = await invokeManagement(
-          createQualification,
-          updateQualification,
-          revokeQualification,
+          manageQualifications?.create.bind(manageQualifications) ?? createQualification,
+          manageQualifications?.update.bind(manageQualifications) ?? updateQualification,
+          manageQualifications?.revoke.bind(manageQualifications) ?? revokeQualification,
           payload,
           context.receivedAtMs,
           actorId,

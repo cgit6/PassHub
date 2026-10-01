@@ -71,6 +71,14 @@ export interface G10bOperationBudgetBindingFactory {
 }
 
 /**
+ * Private callback installed on a G08 scope.  It is intentionally narrower
+ * than the budget capability: the scope may present only itself, exactly once.
+ */
+export interface G10bFirstScopedPersistenceBinder {
+  bind(scope: AccessScopeContext): void;
+}
+
+/**
  * Creates the one composition-owned G10b binding factory.  It is kept in the
  * composition layer (and out of all public barrels) so G07 can receive only
  * the already-configured internal dependency, never a clock or budget policy.
@@ -144,6 +152,32 @@ export function bindG10bOperationBudgetOnFirstScopedPersistenceUse(
   scopeBindings.set(scope as object, admission);
   admissionScopes.set(admission as object, scope as object);
   return admission.binding;
+}
+
+/**
+ * Creates the private G08 scope hook for one admitted ORIGINAL.  Old G08
+ * harnesses have no G10b budget binding, so they deliberately receive no
+ * hook; a live-but-invalid binding remains fail-closed.
+ */
+export function createG10bFirstScopedPersistenceBinder(
+  context: AdmissionWorkContext,
+): G10bFirstScopedPersistenceBinder | null {
+  let admission: AdmissionBindingState;
+  try {
+    admission = requireAdmissionBinding(context);
+  } catch (error: unknown) {
+    if (error instanceof G10bOperationBridgeError
+      && (error.code === 'INVALID_ADMISSION_CONTEXT' || error.code === 'ADMISSION_NOT_BOUND')) {
+      return null;
+    }
+    throw error;
+  }
+  assertBindingCurrent(admission.binding);
+  return Object.freeze({
+    bind(scope: AccessScopeContext): void {
+      bindG10bOperationBudgetOnFirstScopedPersistenceUse(context, scope);
+    },
+  });
 }
 
 /** Read only the binding owned by this exact live admission/scope pair. */
