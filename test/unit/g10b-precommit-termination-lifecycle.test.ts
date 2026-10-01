@@ -156,7 +156,7 @@ describe('G10b precommit termination lifecycle', () => {
     });
   });
 
-  test('an asynchronous sender rejection still settles its owned permit, allowing an explicit next decision', async () => {
+  test('an asynchronous sender rejection preserves its original error after it settles its owned permit', async () => {
     const h = createHarness();
     preparePrecommit(h);
     const group = h.lifecycle.reserveAbortGroup();
@@ -168,6 +168,16 @@ describe('G10b precommit termination lifecycle', () => {
     h.lifecycle.terminate(group, 'NO_EFFECT_CONFIRMED');
     expectLifecycleCode(() => h.lifecycle.reserveAbortGroup(), 'LIFECYCLE_TERMINATED');
     expect(h.ledger.snapshot()).toMatchObject({ nativeGroupActive: false, nativeGroupsReserved: 1 });
+  });
+
+  test('a synchronous sender rejection preserves its original error after it settles its owned permit', async () => {
+    const h = createHarness();
+    preparePrecommit(h);
+    const group = h.lifecycle.reserveAbortGroup();
+    const failure = new Error('driver abort threw');
+
+    await expect(h.lifecycle.executeAbort(group, () => { throw failure; })).rejects.toBe(failure);
+    expect(h.lifecycle.snapshot()).toMatchObject({ abortCommandInFlight: false, abortCommandsAdmitted: 1 });
   });
 
   test('termination closes the lifecycle-owned send gate, so no callback can run late', async () => {

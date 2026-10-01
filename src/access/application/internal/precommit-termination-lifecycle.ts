@@ -238,13 +238,31 @@ export function createPrecommitTerminationLifecycle(
       try {
         result = send(command.context);
       } catch (error: unknown) {
-        settleCommand(command);
+        try {
+          settleCommand(command);
+        } catch (lifecycleError: unknown) {
+          // A permit/owner/budget settlement failure has fail-closed
+          // precedence over the callback failure and must not be retried.
+          return Promise.reject(lifecycleError);
+        }
+        // The lifecycle only owns permit settlement.  It must preserve the
+        // driver's original rejection so the terminator can record an
+        // uncertain outcome, but it must never turn that rejection into an
+        // authorization for a second high-level driver abort call.
         return Promise.reject(error);
       }
       return Promise.resolve(result).then(
         () => { settleCommand(command); },
         (error: unknown) => {
-          settleCommand(command);
+          try {
+            settleCommand(command);
+          } catch (lifecycleError: unknown) {
+            // Preserve lifecycle errors exactly.  They do not mean the
+            // driver callback is eligible for a second abort attempt.
+            throw lifecycleError;
+          }
+          // See the synchronous path: preserving the original error prevents
+          // this lower layer from encoding any retry policy for the driver.
           throw error;
         },
       );
