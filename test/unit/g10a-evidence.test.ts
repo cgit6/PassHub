@@ -182,6 +182,14 @@ describe('G10a private evidence boundary', () => {
     const evidence = await loadEvidence();
     expect(() => evidence.createG10aEvidenceResults({ status: 'PASS', categoryEvidenceStatus: 'COMPLETE', phases: [phase('test:g10a:unit', 0, 1, 1, 1)] })).toThrow('PASS results are incomplete');
     expect(() => evidence.createG10aEvidenceResults({ status: 'FAIL', categoryEvidenceStatus: 'INCOMPLETE', phases: [phase('test:g10a:unit', 0, 1, 1, 1)], environment: environmentProof() })).toThrow('FAIL results require a failed phase');
+    const zeroTotals = [
+      phase('test:g10a:unit', 0, 1, 1, 1),
+      phase('test:g10a:socket', 0, 1, 0, 0),
+      phase('test:g10a:integration', 0, 1, 1, 1),
+    ];
+    expect(() => evidence.createG10aEvidenceResults({ status: 'PASS', categoryEvidenceStatus: 'COMPLETE', phases: zeroTotals, environment: environmentProof() })).toThrow('PASS results are incomplete');
+    expect(() => evidence.createG10aEvidenceResults({ status: 'INCOMPLETE', categoryEvidenceStatus: 'INCOMPLETE', phases: zeroTotals, environment: environmentProof() })).toThrow('INCOMPLETE results are invalid');
+    expect(() => evidence.createG10aEvidenceResults({ status: 'FAIL', categoryEvidenceStatus: 'INCOMPLETE', phases: zeroTotals, environment: environmentProof() })).not.toThrow();
     expect(() => evidence.createG10aEvidenceCleanup({ status: 'PASS', dockerContainersAbsent: false, composeContainersAbsent: true, composeNetworksAbsent: true })).toThrow('status does not match outcomes');
   });
 

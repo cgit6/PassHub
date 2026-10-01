@@ -48,9 +48,17 @@ export async function runG10aEvidence({
     const durationMs = safeDuration(now() - startedAt);
     const parsed = parseJestCounts(commandResult?.stdout);
     const exitCode = normalizeExitCode(commandResult?.exitCode);
+    // A zero process exit alone is not evidence that a Jest tier actually ran.
+    // The private result schema deliberately records both totals, so accepting
+    // a missing/garbled summary would let an arbitrary successful command turn
+    // into an INCOMPLETE category run. Keep the actual process exit code for
+    // provenance, but make the phase itself fail closed.
+    if (exitCode === 0 && !hasCompleteJestTotals(parsed)) {
+      phaseFailure = new Error(`${identifier} did not emit valid Jest total counts`);
+    }
     if (identifier === 'test:g10a:integration') {
       environment = parseG10aEnvironmentProofFromOutput(commandResult?.stdout);
-      if (exitCode === 0 && environment === undefined) {
+      if (exitCode === 0 && environment === undefined && phaseFailure === undefined) {
         phaseFailure = new Error('test:g10a:integration did not emit a valid G10a environment proof');
       }
     }
@@ -123,7 +131,7 @@ function parseJestCount(output, label) {
   const match = new RegExp(`^${label}:\\s*(?:\\d+\\s+(?:passed|failed|skipped),\\s*)?(\\d+)\\s+total\\s*$`, 'mu').exec(output);
   if (match === null) return null;
   const count = Number(match[1]);
-  return Number.isSafeInteger(count) && count >= 0 ? count : null;
+  return Number.isSafeInteger(count) && count > 0 ? count : null;
 }
 
 async function executeNpmCommand(identifier, root) {
@@ -161,6 +169,7 @@ async function dockerList(args) {
 
 function normalizeExitCode(value) { return Number.isInteger(value) && value >= 0 ? value : 1; }
 function safeDuration(value) { return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0; }
+function hasCompleteJestTotals({ suiteCount, testCount }) { return Number.isSafeInteger(suiteCount) && suiteCount > 0 && Number.isSafeInteger(testCount) && testCount > 0; }
 function createRunId() { return `g10a-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${randomUUID().replaceAll('-', '')}`; }
 function emptyDockerCleanup() { return { dockerContainersAbsent: false, composeContainersAbsent: false, composeNetworksAbsent: false }; }
 function isDockerCleanupInspection(value) {

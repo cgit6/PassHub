@@ -408,11 +408,15 @@ function assertResults(value, requiresRunId = true) {
     assertExactKeys(phase, ['identifier', 'exitCode', 'durationMs', 'suiteCount', 'testCount'], 'phase');
     if (phase.identifier !== PHASE_IDENTIFIERS[index] || !Number.isInteger(phase.exitCode) || phase.exitCode < 0 || !Number.isSafeInteger(phase.durationMs) || phase.durationMs < 0 || !isCount(phase.suiteCount) || !isCount(phase.testCount)) throw new Error('G10a evidence results are invalid');
   }
-  const completePhases = value.phases.length === PHASE_IDENTIFIERS.length && value.phases.every((phase) => phase.exitCode === 0 && phase.suiteCount !== null && phase.testCount !== null);
+  const completePhases = value.phases.length === PHASE_IDENTIFIERS.length && value.phases.every((phase) => phase.exitCode === 0 && hasCompleteJestTotals(phase));
   if (value.status === 'PASS' && (!completePhases || value.categoryEvidenceStatus !== 'COMPLETE')) throw new Error('G10a evidence PASS results are incomplete');
   if (value.status === 'INCOMPLETE' && (!completePhases || value.categoryEvidenceStatus !== 'INCOMPLETE')) throw new Error('G10a evidence INCOMPLETE results are invalid');
   if (value.status === 'FAILED' && (!completePhases || value.categoryEvidenceStatus !== 'FAILED')) throw new Error('G10a evidence FAILED results are invalid');
-  if (value.status === 'FAIL' && !value.phases.some((phase) => phase.exitCode !== 0) && value.environment !== null) throw new Error('G10a evidence FAIL results require a failed phase or missing environment proof');
+  // A phase can fail closed despite a zero process exit when its stdout did not
+  // yield both Jest totals. Preserve that real exit code while ensuring an
+  // incomplete stdout can never be classified as category-only INCOMPLETE.
+  const failedPhaseEvidence = value.phases.some((phase) => phase.exitCode !== 0 || !hasCompleteJestTotals(phase));
+  if (value.status === 'FAIL' && !failedPhaseEvidence && value.environment !== null) throw new Error('G10a evidence FAIL results require a failed phase, missing Jest totals, or missing environment proof');
   if (value.status === 'PASS' || value.status === 'INCOMPLETE' || value.status === 'FAILED') assertEnvironmentProof(value.environment);
   else if (value.environment !== null) assertEnvironmentProof(value.environment);
 }
@@ -482,6 +486,7 @@ function assertEnvironmentProof(value) {
 }
 
 function isCount(value) { return value === null || (Number.isSafeInteger(value) && value >= 0); }
+function hasCompleteJestTotals({ suiteCount, testCount }) { return Number.isSafeInteger(suiteCount) && suiteCount > 0 && Number.isSafeInteger(testCount) && testCount > 0; }
 
 function assertCleanup(value, requiresRunId = true) {
   assertExactKeys(value, CLEANUP_KEYS, 'cleanup');

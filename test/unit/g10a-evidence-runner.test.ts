@@ -111,6 +111,75 @@ describe('G10a evidence top-level runner', () => {
     expect(writes[0].results.environment).toBeNull();
   });
 
+  test.each([
+    ['missing test total', 'Test Suites: 1 passed, 1 total', 1, null],
+    ['malformed suite total', 'Test Suites: 1 passed, one total\nTests: 1 passed, 1 total', null, 1],
+    ['zero totals', 'Test Suites: 0 total\nTests: 0 total', null, null],
+  ])('treats zero-exit %s as a failed phase and writes a closed artifact', async (_caseName, stdout, suiteCount, testCount) => {
+    const runner = await loadRunner();
+    const calls: string[] = [];
+    const writes: any[] = [];
+    await expect(runner.runG10aEvidence({
+      root: '/safe/workspace', outputRoot: '/safe/private-output', runId: 'g10a-20261001-missing-counts', now: sequenceNow(0, 1),
+      assertOutputRoot: async () => '/safe/private-output', assertClean: async () => undefined, collectProvenance: async () => provenance(),
+      executeCommand: async (identifier: string) => { calls.push(identifier); return { exitCode: 0, stdout }; },
+      collectCategories: async () => incompleteCategories(),
+      inspectDocker: async () => ({ dockerContainersAbsent: true, composeContainersAbsent: true, composeNetworksAbsent: true }),
+      writeArtifacts: async (input: any) => { writes.push(input); return {}; },
+    })).rejects.toThrow('test:g10a:unit did not emit valid Jest total counts');
+    expect(calls).toEqual(['test:g10a:unit']);
+    expect(writes).toHaveLength(1);
+    expect(writes[0].results).toMatchObject({ status: 'FAIL', categoryEvidenceStatus: 'INCOMPLETE' });
+    expect(writes[0].results.phases).toEqual([
+      { identifier: 'test:g10a:unit', exitCode: 0, durationMs: 1, suiteCount, testCount },
+    ]);
+    expect(Object.values(writes[0].categories).every((category: any) => category.status === 'NOT_COLLECTED')).toBe(true);
+  });
+
+  test('preserves a valid integration environment proof but fails closed when its Jest totals are incomplete', async () => {
+    const runner = await loadRunner();
+    const writes: any[] = [];
+    await expect(runner.runG10aEvidence({
+      root: '/safe/workspace', outputRoot: '/safe/private-output', runId: 'g10a-20261001-integration-missing-counts', now: sequenceNow(0, 1, 1, 2, 2, 3),
+      assertOutputRoot: async () => '/safe/private-output', assertClean: async () => undefined, collectProvenance: async () => provenance(),
+      executeCommand: async (identifier: string) => ({
+        exitCode: 0,
+        stdout: identifier === 'test:g10a:integration'
+          ? `Test Suites: 1 passed, 1 total\n${environmentProof}`
+          : 'Test Suites: 1 passed, 1 total\nTests: 1 passed, 1 total',
+      }),
+      collectCategories: async () => incompleteCategories(),
+      inspectDocker: async () => ({ dockerContainersAbsent: true, composeContainersAbsent: true, composeNetworksAbsent: true }),
+      writeArtifacts: async (input: any) => { writes.push(input); return {}; },
+    })).rejects.toThrow('test:g10a:integration did not emit valid Jest total counts');
+    expect(writes).toHaveLength(1);
+    expect(writes[0].results).toMatchObject({ status: 'FAIL', categoryEvidenceStatus: 'INCOMPLETE', environment: JSON.parse(environmentProof.slice('G10A_ENVIRONMENT_PROOF='.length)) });
+    expect(writes[0].results.phases).toEqual([
+      { identifier: 'test:g10a:unit', exitCode: 0, durationMs: 1, suiteCount: 1, testCount: 1 },
+      { identifier: 'test:g10a:socket', exitCode: 0, durationMs: 1, suiteCount: 1, testCount: 1 },
+      { identifier: 'test:g10a:integration', exitCode: 0, durationMs: 1, suiteCount: 1, testCount: null },
+    ]);
+  });
+
+  test('writes closed failed phase evidence when a command runner throws', async () => {
+    const runner = await loadRunner();
+    const writes: any[] = [];
+    await expect(runner.runG10aEvidence({
+      root: '/safe/workspace', outputRoot: '/safe/private-output', runId: 'g10a-20261001-command-throws', now: sequenceNow(0, 1),
+      assertOutputRoot: async () => '/safe/private-output', assertClean: async () => undefined, collectProvenance: async () => provenance(),
+      executeCommand: async () => { throw new Error('raw command failure must not escape'); },
+      collectCategories: async () => incompleteCategories(),
+      inspectDocker: async () => ({ dockerContainersAbsent: true, composeContainersAbsent: true, composeNetworksAbsent: true }),
+      writeArtifacts: async (input: any) => { writes.push(input); return {}; },
+    })).rejects.toThrow('test:g10a:unit failed with exit 1');
+    expect(writes).toHaveLength(1);
+    expect(writes[0].results).toMatchObject({ status: 'FAIL', categoryEvidenceStatus: 'INCOMPLETE' });
+    expect(writes[0].results.phases).toEqual([
+      { identifier: 'test:g10a:unit', exitCode: 1, durationMs: 1, suiteCount: null, testCount: null },
+    ]);
+    expect(JSON.stringify(writes[0])).not.toContain('raw command failure');
+  });
+
   test('does not read output, provenance, or commands when clean preflight fails', async () => {
     const runner = await loadRunner();
     const calls: string[] = [];
@@ -190,6 +259,8 @@ describe('G10a evidence top-level runner', () => {
     const runner = await loadRunner();
     expect(runner.parseJestCounts('\u001b[32mTest Suites:\u001b[0m 2 passed, 2 total\nTests:       15 passed, 15 total')).toEqual({ suiteCount: 2, testCount: 15 });
     expect(runner.parseJestCounts('arbitrary request body token=not-a-summary')).toEqual({ suiteCount: null, testCount: null });
+    expect(runner.parseJestCounts('Test Suites: 1 passed, one total\nTests: 1 passed, 1 total')).toEqual({ suiteCount: null, testCount: 1 });
+    expect(runner.parseJestCounts('Test Suites: 0 total\nTests: 0 total')).toEqual({ suiteCount: null, testCount: null });
   });
 });
 
