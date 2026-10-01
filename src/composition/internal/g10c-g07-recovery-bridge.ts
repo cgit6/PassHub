@@ -36,6 +36,7 @@ export interface G10cG07RecoveryBridge {
   beginIssuedPersistence(
     context: AdmissionWorkContext,
     lease: IssuedPersistenceLease,
+    kind: G10cG07RecoveryWorkKind,
   ): void;
   finishIssuedPersistence(context: AdmissionWorkContext): void;
   /** Returns true only for the exact G10c handoff retained during this work. */
@@ -73,11 +74,23 @@ export interface G10cG07PausedTicketOwner {
  * expected images remain encapsulated in the handoff implementation.
  */
 export interface G10cG07PausedTicketTerminal {
+  /**
+   * Classification is deliberately limited to scheduler policy.  It does not
+   * disclose a request, session, scope, or business input.
+   */
+  readonly kind: G10cG07RecoveryWorkKind;
   createOriginalCommitTerminator(): G10cRetainedOriginalCommitTerminator;
   createCanonicalConfirmationReader(): G10cCanonicalConfirmationReader;
-  confirmedPersisted(result: AdmissionWriterOutcome): Promise<void>;
+  /**
+   * Publish a private confirmation sentinel after Mongo has already proved
+   * the retained transaction.  A recovery worker cannot invent a business
+   * response or re-run the original CRUD callback.
+   */
+  confirmedPersisted(): Promise<void>;
   failClosed(error: unknown): void;
 }
+
+export type G10cG07RecoveryWorkKind = 'MANAGEMENT' | 'RECOGNITION';
 
 export interface G10cG07RecoveryBridgeOptions {
   readonly adapter: G04bMongoPersistenceAdapter;
@@ -87,6 +100,7 @@ export interface G10cG07RecoveryBridgeOptions {
 interface ActiveInvocation {
   readonly context: AdmissionWorkContext;
   readonly lease: IssuedPersistenceLease;
+  readonly kind: G10cG07RecoveryWorkKind;
   handoff: G10cPostCommitUnknownHandoff | null;
   ticket: G10cG07PausedTicket | null;
   finished: boolean;
@@ -103,6 +117,11 @@ interface PausedTicketState {
 }
 
 const bridges = new WeakSet<object>();
+const pausedTicketOwners = new WeakSet<object>();
+// This value is only a coordinator lifecycle sentinel.  It has no HTTP plan,
+// external payload, or domain success fields, so a delayed confirmation can
+// never fabricate a result to the original caller.
+const CONFIRMED_RECOVERY_SENTINEL = Object.freeze({});
 
 /**
  * Attach one composition-owned forwarding sink to one concrete adapter.
@@ -200,11 +219,9 @@ export function createG10cG07RecoveryBridge(
           assertCurrent();
           return createG10cCanonicalConfirmationReader(options.handoffs.owner, state.handoff);
         },
-        async confirmedPersisted(this: unknown, result: AdmissionWriterOutcome): Promise<void> {
+        kind: state.invocation.kind,
+        async confirmedPersisted(this: unknown): Promise<void> {
           if (this !== terminal) throw new TypeError('G10c G07 paused recovery terminal is foreign');
-          if (result === undefined || result === null) {
-            throw new TypeError('G10c G07 confirmed recovery result is required');
-          }
           assertCurrent();
           let cleaner;
           try {
@@ -218,7 +235,7 @@ export function createG10cG07RecoveryBridge(
           }
           try {
             await cleaner.cleanupAfterConfirmedOutcome();
-            if (!state.recovery.businessResultPersisted(result)) {
+            if (!state.recovery.businessResultPersisted(CONFIRMED_RECOVERY_SENTINEL)) {
               // The coordinator's lifecycle observer already rejected and
               // fenced FIFO work.  Its failure means the G07 terminal was not
               // successfully published, so do not make RuntimeControl appear
@@ -259,16 +276,24 @@ export function createG10cG07RecoveryBridge(
       }
       recoveryOwner = owner;
     },
-    beginIssuedPersistence(context: AdmissionWorkContext, lease: IssuedPersistenceLease): void {
+    beginIssuedPersistence(
+      context: AdmissionWorkContext,
+      lease: IssuedPersistenceLease,
+      kind: G10cG07RecoveryWorkKind,
+    ): void {
       if (active !== null) throw new TypeError('G10c G07 recovery bridge already has an active writer');
       if (!isObject(context) || !Object.isFrozen(context) || !isObject(lease)
         || typeof lease.release !== 'function') {
         throw new TypeError('G10c G07 recovery bridge invocation is invalid');
       }
+      if (kind !== 'MANAGEMENT' && kind !== 'RECOGNITION') {
+        throw new TypeError('G10c G07 recovery bridge work kind is invalid');
+      }
       if (recoveryOwner === null) throw new TypeError('G10c G07 recovery owner is not bound');
       active = {
         context,
         lease,
+        kind,
         handoff: null,
         ticket: null,
         finished: false,
@@ -343,6 +368,7 @@ export function createG10cG07RecoveryBridge(
     },
     pausedTickets,
   });
+  pausedTicketOwners.add(pausedTickets as object);
   bridges.add(bridge as object);
   return bridge;
 
@@ -352,6 +378,15 @@ export function createG10cG07RecoveryBridge(
       throw new TypeError('G10c G07 recovery bridge writer is foreign or stale');
     }
     return current;
+  }
+}
+
+/** Reject a structural lookalike before it can claim a retained writer. */
+export function assertG10cG07PausedTicketOwner(
+  value: unknown,
+): asserts value is G10cG07PausedTicketOwner {
+  if (!isObject(value) || !pausedTicketOwners.has(value)) {
+    throw new TypeError('G10c G07 paused ticket owner is not trusted');
   }
 }
 

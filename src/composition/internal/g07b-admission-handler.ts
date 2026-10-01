@@ -557,6 +557,7 @@ export function createG07bAdmissionHandler(
     operation: () => Promise<T>,
     identity: RuntimeIdentity | null,
     admissionContext: AdmissionWorkContext,
+    recoveryKind: 'MANAGEMENT' | 'RECOGNITION',
   ): Promise<T> => {
     if (writerPermissionAcquire === undefined) return invokeNativePromise(operation);
     const lease = writerPermissionAcquire();
@@ -570,7 +571,7 @@ export function createG07bAdmissionHandler(
     let bridgeStarted = false;
     try {
       if (postCommitUnknownRecoveryBridge !== undefined) {
-        postCommitUnknownRecoveryBridge.beginIssuedPersistence(admissionContext, lease);
+        postCommitUnknownRecoveryBridge.beginIssuedPersistence(admissionContext, lease, recoveryKind);
         bridgeStarted = true;
       }
     } catch (error: unknown) {
@@ -725,6 +726,7 @@ export function createG07bAdmissionHandler(
       admissionContext = workContext(context, input.runtimeIdentity, createOperationBudgetBinding);
       const outcome = await invokeG08WriterWork(
         () => managementWork(input.workInput, admissionContext!), input.runtimeIdentity, admissionContext,
+        'MANAGEMENT',
       );
       postCommitUnknownRecoveryBridge?.assertNoRetainedHandoff(admissionContext);
       settleWriterOutcome(input.owner, settlement, outcome);
@@ -856,6 +858,7 @@ export function createG07bAdmissionHandler(
           () => recognitionWork(input.workInput, admissionContext),
           input.runtimeIdentity,
           admissionContext,
+          'RECOGNITION',
         ),
         renderResponsePlan,
       );

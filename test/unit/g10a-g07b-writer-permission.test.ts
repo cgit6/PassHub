@@ -22,8 +22,12 @@ import { G04bMongoPersistenceAdapter } from '../../src/infrastructure/mongo/g04b
 import {
   createG10cPostCommitUnknownHandoffBundle,
   handoffG10cPostCommitUnknown,
+  prepareG10cManagementExpectedImage,
+  type G10cManagementExpectedImage,
 } from '../../src/infrastructure/mongo/internal/g10c-post-commit-unknown-handoff.js';
 import { createG10cG07RecoveryBridge, type G10cG07RecoveryBridge } from '../../src/composition/internal/g10c-g07-recovery-bridge.js';
+import { createG10cRecoveryScheduler } from '../../src/composition/internal/g10c-recovery-scheduler.js';
+import type { G04bManagementCanonicalSnapshot } from '../../src/infrastructure/mongo/g04b-persistence-adapter.js';
 import type { NarrowHttpResponse } from '../../src/composition/internal/http-response-owner.js';
 
 const EPOCH = '11111111-1111-4111-8111-111111111111';
@@ -72,6 +76,7 @@ function makeHandler(
   validationGate?: Promise<void>,
   validationOverride?: (input: AdmissionValidationInput) => Promise<AdmissionValidationResult>,
   postCommitUnknownRecoveryBridge?: G10cG07RecoveryBridge,
+  budgetClock?: { nowMs(): number },
 ): ReturnType<typeof createG07bAdmissionHandler> {
   const plans = plansOverride ?? createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
   const handoff = createAdmissionWorkHandoffBundle();
@@ -135,7 +140,7 @@ function makeHandler(
     writerPermission: createG10aWriterPermissionBinding(control),
     ...(postCommitUnknownRecoveryBridge === undefined ? {} : {
       operationBudgetBindingFactory: createG10bOperationBudgetBindingFactory({
-        clock: { nowMs: () => 0 },
+        clock: budgetClock ?? { nowMs: () => 0 },
         assertContinuationEvidence: () => undefined,
       }),
       postCommitUnknownRecoveryBridge,
@@ -188,7 +193,12 @@ function g10cBridgeHarness(): Readonly<{
 function retainPostCommitUnknown(
   adapter: G04bMongoPersistenceAdapter,
   context: Parameters<AdmissionWorkPort['management']>[1],
-): { readonly commitTransaction: jest.Mock; readonly endSession: jest.Mock } {
+  withManagementImage = false,
+): {
+  readonly commitTransaction: jest.Mock;
+  readonly endSession: jest.Mock;
+  readonly managementImage: G10cManagementExpectedImage | null;
+} {
   const scope = createAccessScopeContext({ epoch: EPOCH, owner: RUN, generation: '44444444-4444-4444-8444-444444444444' });
   const binding = bindG10bOperationBudgetOnFirstScopedPersistenceUse(context, scope);
   const round = beginOperationExecutionRound(binding);
@@ -212,8 +222,76 @@ function retainPostCommitUnknown(
     sourceFacts: new Map(), sourceGuards: new Map(), qualifications: new Map(), mappings: new Map(),
     recognitionEvent: null, stage: 'commit',
   });
+  const managementImage = withManagementImage ? Object.freeze({
+    operationId: context.operationId,
+    operation: 'UPDATE' as const,
+    qualification: Object.freeze({
+      qualificationId: '77777777-7777-4777-8777-777777777777',
+      incarnation: '88888888-8888-4888-8888-888888888888',
+      version: 3,
+      displayName: 'Recovery scheduler',
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      state: Object.freeze({
+        validFromMs: 0,
+        validUntilMs: 10_000,
+        presence: 'NOT_ENTERED' as const,
+        enteredAtMs: null,
+        exitedAtMs: null,
+        revokedAtMs: null,
+        revocationReason: null,
+        expiredTerminalAtMs: null,
+      }),
+    }),
+    mapping: null,
+    guardVersions: Object.freeze({ qr: 4, face: 8 }),
+  }) satisfies G10cManagementExpectedImage : null;
+  if (managementImage !== null) {
+    const captured = adapter as unknown as {
+      readonly g10cManagementExpectedImageCapture: Parameters<typeof prepareG10cManagementExpectedImage>[0];
+    };
+    prepareG10cManagementExpectedImage(captured.g10cManagementExpectedImageCapture, scope, managementImage);
+  }
   handoffG10cPostCommitUnknown(adapter, scope, session as never, binding as never);
-  return session;
+  return Object.freeze({ ...session, managementImage });
+}
+
+function managementSnapshot(image: G10cManagementExpectedImage): G04bManagementCanonicalSnapshot {
+  return Object.freeze({
+    receipt: Object.freeze({
+      operationId: image.operationId,
+      operation: image.operation,
+      qualificationId: image.qualification.qualificationId,
+      qualificationIncarnation: image.qualification.incarnation,
+      qualificationVersion: image.qualification.version,
+    }),
+    qualification: image.qualification,
+    mapping: image.mapping,
+    guardVersions: image.guardVersions,
+  });
+}
+
+class ManualRecoveryTimer {
+  value = 0;
+  readonly delays: number[] = [];
+  private readonly tasks: Array<{ readonly callback: () => void; readonly at: number; active: boolean }> = [];
+
+  nowMs = (): number => this.value;
+  setTimeout = (callback: () => void, delayMs: number): object => {
+    this.delays.push(delayMs);
+    const task = { callback, at: this.value + delayMs, active: true };
+    this.tasks.push(task);
+    return task;
+  };
+  clearTimeout = (handle: unknown): void => { (handle as { active?: boolean }).active = false; };
+  get pendingCount(): number { return this.tasks.filter((candidate) => candidate.active).length; }
+  runNext(): void {
+    const task = this.tasks.filter((candidate) => candidate.active).sort((a, b) => a.at - b.at)[0];
+    if (task === undefined) throw new Error('no timer is armed');
+    task.active = false;
+    this.value = task.at;
+    task.callback();
+  }
 }
 
 describe('G10a A3 eligible-original G07b writer permission seam', () => {
@@ -256,10 +334,7 @@ describe('G10a A3 eligible-original G07b writer permission seam', () => {
     expect(h.bridge.pausedTickets.pending()).toHaveLength(0);
     const resend = terminal.createOriginalCommitTerminator();
     await expect(resend.attemptOriginalCommit()).resolves.toMatchObject({ delivery: 'COMMIT_CONFIRMED' });
-    await terminal.confirmedPersisted({
-      disposition: 'BUSINESS_RESULT_PERSISTED',
-      response: plans.business.issue(200, { recovered: kind }),
-    });
+    await terminal.confirmedPersisted();
     expect(() => terminal.failClosed(new Error('late'))).toThrow(/stale/i);
     expect(h.handoffs.owner.pending()).toHaveLength(0);
     // The G07 invocation retains its issued lease while paused, then the one
@@ -328,10 +403,7 @@ describe('G10a A3 eligible-original G07b writer permission seam', () => {
     const terminal = h.bridge.pausedTickets.claim(h.bridge.pausedTickets.pending()[0]!);
     await terminal.createOriginalCommitTerminator().attemptOriginalCommit();
     retained.endSession.mockRejectedValueOnce(new Error('session close failed'));
-    await expect(terminal.confirmedPersisted({
-      disposition: 'BUSINESS_RESULT_PERSISTED',
-      response: plans.business.issue(200, { recovered: true }),
-    })).rejects.toThrow(/session release failed/i);
+    await expect(terminal.confirmedPersisted()).rejects.toThrow(/session release failed/i);
 
     expect(control.snapshot().issuedPersistence).toBe(1);
     expect(h.bridge.pausedTickets.pending()).toHaveLength(0);
@@ -352,6 +424,159 @@ describe('G10a A3 eligible-original G07b writer permission seam', () => {
 
     expect(response.statusCode).toBe(503);
     expect(control.snapshot().issuedPersistence).toBe(0);
+  });
+
+  test('G10c scheduler sends original, waits one second, then confirms management canonically without re-running business work', async () => {
+    const control = makeRuntimeControl();
+    const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
+    const h = g10cBridgeHarness();
+    const timer = new ManualRecoveryTimer();
+    let workCalls = 0;
+    let retained!: ReturnType<typeof retainPostCommitUnknown>;
+    h.adapter.readG10cManagementCanonicalSnapshot = jest.fn(async () => managementSnapshot(retained.managementImage!));
+    const handler = makeHandler(control, {
+      management: (_token, context) => {
+        workCalls += 1;
+        retained = retainPostCommitUnknown(h.adapter, context, true);
+        retained.commitTransaction.mockRejectedValueOnce(new Error('post-send response lost'));
+        return Promise.resolve({ disposition: 'UNKNOWN_EFFECT', response: plans.technical.issue('PERSISTENCE_UNAVAILABLE') });
+      },
+    }, undefined, plans, undefined, undefined, undefined, undefined, h.bridge, timer);
+
+    const response = invoke(handler, '/qualifications/11111111-1111-4111-8111-111111111111', undefined, 'PATCH');
+    await flush();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await flush();
+    expect(response.statusCode).toBe(503);
+    const scheduler = createG10cRecoveryScheduler({ clock: timer, timer, pausedTickets: h.bridge.pausedTickets });
+
+    scheduler.wake();
+    await flush();
+    expect(retained.commitTransaction).toHaveBeenCalledTimes(1);
+    expect(timer.delays).toEqual([1_000]);
+    expect(workCalls).toBe(1);
+
+    timer.runNext();
+    await flush();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await flush();
+
+    expect(h.adapter.readG10cManagementCanonicalSnapshot).toHaveBeenCalledTimes(1);
+    expect(workCalls).toBe(1);
+    expect(retained.endSession).toHaveBeenCalledTimes(1);
+    expect(control.snapshot().issuedPersistence).toBe(0);
+    expect(scheduler.snapshot()).toEqual({ state: 'IDLE', timerArmed: false });
+  });
+
+  test('G10c scheduler alternates after an inconclusive canonical read and resumes only the retained original commit', async () => {
+    const control = makeRuntimeControl();
+    const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
+    const h = g10cBridgeHarness();
+    const timer = new ManualRecoveryTimer();
+    let workCalls = 0;
+    let retained!: ReturnType<typeof retainPostCommitUnknown>;
+    h.adapter.readG10cManagementCanonicalSnapshot = jest.fn(async () => null);
+    const handler = makeHandler(control, {
+      management: (_token, context) => {
+        workCalls += 1;
+        retained = retainPostCommitUnknown(h.adapter, context, true);
+        retained.commitTransaction.mockRejectedValueOnce(new Error('first response lost'));
+        return Promise.resolve({ disposition: 'UNKNOWN_EFFECT', response: plans.technical.issue('PERSISTENCE_UNAVAILABLE') });
+      },
+    }, undefined, plans, undefined, undefined, undefined, undefined, h.bridge, timer);
+
+    invoke(handler, '/qualifications/11111111-1111-4111-8111-111111111111', undefined, 'PATCH');
+    await flush();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await flush();
+    const scheduler = createG10cRecoveryScheduler({ clock: timer, timer, pausedTickets: h.bridge.pausedTickets });
+
+    scheduler.wake();
+    await flush();
+    timer.runNext();
+    await flush();
+    expect(timer.delays).toEqual([1_000, 2_000]);
+    expect(h.adapter.readG10cManagementCanonicalSnapshot).toHaveBeenCalledTimes(1);
+
+    timer.runNext();
+    await flush();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await flush();
+
+    expect(retained.commitTransaction).toHaveBeenCalledTimes(2);
+    expect(workCalls).toBe(1);
+    expect(control.snapshot().issuedPersistence).toBe(0);
+    expect(scheduler.snapshot()).toEqual({ state: 'IDLE', timerArmed: false });
+  });
+
+  test('G10c scheduler fails closed when the prescribed cadence reaches the final original-commit window', async () => {
+    const control = makeRuntimeControl();
+    const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
+    const h = g10cBridgeHarness();
+    const timer = new ManualRecoveryTimer();
+    let retained!: ReturnType<typeof retainPostCommitUnknown>;
+    h.adapter.readG10cManagementCanonicalSnapshot = jest.fn(async () => null);
+    const handler = makeHandler(control, {
+      management: (_token, context) => {
+        retained = retainPostCommitUnknown(h.adapter, context, true);
+        retained.commitTransaction.mockRejectedValue(new Error('all responses lost'));
+        return Promise.resolve({ disposition: 'UNKNOWN_EFFECT', response: plans.technical.issue('PERSISTENCE_UNAVAILABLE') });
+      },
+    }, undefined, plans, undefined, undefined, undefined, undefined, h.bridge, timer);
+
+    invoke(handler, '/qualifications/11111111-1111-4111-8111-111111111111', undefined, 'PATCH');
+    await flush();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await flush();
+    const scheduler = createG10cRecoveryScheduler({ clock: timer, timer, pausedTickets: h.bridge.pausedTickets });
+
+    scheduler.wake();
+    await flush();
+    for (let index = 0; index < 8 && timer.pendingCount > 0; index += 1) {
+      await flush();
+      timer.runNext();
+      await flush();
+    }
+    await flush();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await flush();
+
+    expect(h.adapter.readG10cManagementCanonicalSnapshot).toHaveBeenCalledTimes(3);
+    // The first retry waits one second, then the ledger requires two-second
+    // spacing: original/canonical/original/canonical/original/canonical.
+    // At t=11s the final original sender is outside the 10-second window.
+    expect(timer.delays).toEqual([1_000, 2_000, 2_000, 2_000, 2_000, 2_000]);
+    expect(retained.commitTransaction).toHaveBeenCalledTimes(3);
+    expect(control.snapshot().issuedPersistence).toBe(1);
+    expect(scheduler.snapshot()).toEqual({ state: 'FAILED_CLOSED', timerArmed: false });
+  });
+
+  test('G10c scheduler fails closed before issuing a recognition confirmation command', async () => {
+    const control = makeRuntimeControl();
+    const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
+    const h = g10cBridgeHarness();
+    const timer = new ManualRecoveryTimer();
+    let retained!: ReturnType<typeof retainPostCommitUnknown>;
+    const handler = makeHandler(control, {
+      recognition: (_token, context) => {
+        retained = retainPostCommitUnknown(h.adapter, context);
+        return Promise.resolve({ disposition: 'UNKNOWN_EFFECT', response: plans.technical.issue('PERSISTENCE_UNAVAILABLE') });
+      },
+    }, undefined, plans, undefined, undefined, undefined, undefined, h.bridge, timer);
+
+    invoke(handler, '/recognition/attempts');
+    await flush();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await flush();
+    const scheduler = createG10cRecoveryScheduler({ clock: timer, timer, pausedTickets: h.bridge.pausedTickets });
+
+    scheduler.wake();
+    await flush();
+
+    expect(retained.commitTransaction).not.toHaveBeenCalled();
+    expect(timer.delays).toEqual([]);
+    expect(control.snapshot().issuedPersistence).toBe(1);
+    expect(scheduler.snapshot()).toEqual({ state: 'FAILED_CLOSED', timerArmed: false });
   });
 
   test('writer wake binding rejects foreign receivers and duplicate binding; a deferred throwing wake cannot roll back release', async () => {
