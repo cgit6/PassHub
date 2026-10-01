@@ -145,6 +145,28 @@ describe('G10c retained original-commit terminator', () => {
     }, () => now);
   });
 
+  test('permits a later one-shot original sender after the intervening canonical read remains unknown', async () => {
+    let now = 1_000;
+    await withActiveBinding(async (binding) => {
+      const h = mongoHarness();
+      h.commitTransaction.mockRejectedValueOnce(new Error('first response dropped'));
+      h.commitTransaction.mockRejectedValueOnce(new Error('second response dropped'));
+      const retained = takeUnknownHandoff(h, binding, 'g10c_original_commit_later_turn');
+
+      await expect(createG10cRetainedOriginalCommitTerminator(retained.bundle.owner, retained.handoff)
+        .attemptOriginalCommit()).resolves.toMatchObject({ delivery: 'REJECTED_STILL_UNKNOWN', attempt: 0 });
+      now += 1_000;
+      const canonical = retained.bundle.owner.admitNextConfirmation(retained.handoff);
+      expect(canonical.kind).toBe('CANONICAL_READ');
+      retained.bundle.owner.settleConfirmation(retained.handoff, canonical, 'STILL_UNKNOWN');
+      now += 2_000;
+
+      await expect(createG10cRetainedOriginalCommitTerminator(retained.bundle.owner, retained.handoff)
+        .attemptOriginalCommit()).resolves.toMatchObject({ delivery: 'REJECTED_STILL_UNKNOWN', attempt: 2 });
+      expect(h.commitTransaction).toHaveBeenCalledTimes(2);
+    }, () => now);
+  });
+
   test('is a one-shot initial sender and leaves no later confirmation action after a resolved commit', async () => {
     await withActiveBinding(async (binding) => {
       const h = mongoHarness();

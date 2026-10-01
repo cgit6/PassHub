@@ -618,6 +618,14 @@ export function createG10cPostCommitUnknownHandoffBundle(): G10cPostCommitUnknow
         outcome,
       );
       actionState.active = false;
+      state.confirmationActionAdmitted = false;
+      // A rejected original sender is not terminal.  After the intervening
+      // canonical read also remains unknown, the ledger deliberately makes a
+      // later ORIGINAL_COMMIT due again.  Release this construction claim so
+      // a future cadence coordinator can obtain a fresh one-shot sender.
+      if (action.kind === 'ORIGINAL_COMMIT' && outcome === 'STILL_UNKNOWN') {
+        state.originalCommitTerminatorClaimed = false;
+      }
     },
   });
   ownerSinks.set(owner as object, sink);
@@ -625,11 +633,12 @@ export function createG10cPostCommitUnknownHandoffBundle(): G10cPostCommitUnknow
 }
 
 /**
- * Create the first G10c command sender for a taken handoff.  It can only be
- * claimed before any other confirmation action, which makes the ledger's
- * first prescribed action unambiguously ORIGINAL_COMMIT.  The retained Mongo
- * session stays encapsulated here; callers receive neither it nor a raw
- * budget permit.
+ * Create one sender for the currently due ORIGINAL_COMMIT turn.  Each sender
+ * itself is one-shot.  A rejected original sender releases only its local
+ * construction claim after settlement, so a future (not yet implemented)
+ * cadence coordinator can issue the next ORIGINAL_COMMIT after an intervening
+ * canonical read also remains unknown.  The retained Mongo session stays
+ * encapsulated here; callers receive neither it nor a raw budget permit.
  */
 export function createG10cRetainedOriginalCommitTerminator(
   owner: G10cPostCommitUnknownHandoffOwner,
@@ -643,7 +652,7 @@ export function createG10cRetainedOriginalCommitTerminator(
   if (state.originalCommitTerminatorClaimed || state.confirmationActionAdmitted) {
     throw new G10cRetainedOriginalCommitTerminatorError(
       'TERMINATOR_NOT_INITIAL',
-      'G10c retained original commit terminator requires the initial confirmation action',
+      'G10c retained original commit terminator requires an idle original confirmation turn',
     );
   }
   state.originalCommitTerminatorClaimed = true;
@@ -662,8 +671,7 @@ export function createG10cRetainedOriginalCommitTerminator(
 
       const action = owner.admitNextConfirmation(handoff);
       if (action.kind !== 'ORIGINAL_COMMIT') {
-        // The construction guard above makes this unreachable for an honest
-        // owner.  Never route a canonical-read permit to commitTransaction.
+        // Never route a canonical-read permit to commitTransaction.
         owner.settleConfirmation(handoff, action, 'STILL_UNKNOWN');
         throw new G10cRetainedOriginalCommitTerminatorError(
           'TERMINATOR_NOT_INITIAL',

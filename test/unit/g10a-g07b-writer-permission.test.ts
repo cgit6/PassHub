@@ -188,7 +188,7 @@ function g10cBridgeHarness(): Readonly<{
 function retainPostCommitUnknown(
   adapter: G04bMongoPersistenceAdapter,
   context: Parameters<AdmissionWorkPort['management']>[1],
-): void {
+): { readonly commitTransaction: jest.Mock; readonly endSession: jest.Mock } {
   const scope = createAccessScopeContext({ epoch: EPOCH, owner: RUN, generation: '44444444-4444-4444-8444-444444444444' });
   const binding = bindG10bOperationBudgetOnFirstScopedPersistenceUse(context, scope);
   const round = beginOperationExecutionRound(binding);
@@ -199,14 +199,28 @@ function retainPostCommitUnknown(
     endSession: jest.fn(async () => undefined),
     inTransaction: jest.fn(() => false),
   };
+  // Model the exact post-initial-sender state retained by G04b.  This test is
+  // about G07/G10c ownership transfer; dedicated G04b tests cover transaction
+  // creation and the real driver path.
+  const internal = adapter as unknown as { readonly transactions: WeakMap<object, object> };
+  internal.transactions.set(scope as object, {
+    session,
+    g10bScopedPersistenceBinding: binding,
+    g10bExecutionFacade: undefined,
+    initialCommitInvoked: true,
+    datasetEpoch: EPOCH,
+    sourceFacts: new Map(), sourceGuards: new Map(), qualifications: new Map(), mappings: new Map(),
+    recognitionEvent: null, stage: 'commit',
+  });
   handoffG10cPostCommitUnknown(adapter, scope, session as never, binding as never);
+  return session;
 }
 
 describe('G10a A3 eligible-original G07b writer permission seam', () => {
   test.each([
     ['management', '/qualifications'],
     ['recognition', '/recognition/attempts'],
-  ] as const)('G10c %s handoff pauses the current writer and retains issued persistence', async (kind, path) => {
+  ] as const)('G10c %s handoff pairs the paused writer lease with one opaque recovery ticket', async (kind, path) => {
     const control = makeRuntimeControl();
     const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
     const h = g10cBridgeHarness();
@@ -230,12 +244,98 @@ describe('G10a A3 eligible-original G07b writer permission seam', () => {
 
     expect(response.statusCode).toBe(503);
     expect(JSON.parse(response.bodies[0] as string)).toMatchObject({ code: 'REQUEST_STATUS_UNCONFIRMED' });
-    expect(h.handoffs.owner.pending()).toHaveLength(1);
-    expect(h.handoffs.owner.take(h.handoffs.owner.pending()[0]!)).toBeDefined();
+    // The raw Mongo handoff has already been claimed by the bridge.  The
+    // future coordinator gets only its opaque ticket, never the session or
+    // canonical image retained behind the G10c handoff boundary.
     expect(h.handoffs.owner.pending()).toHaveLength(0);
-    // The G07 invocation has ended, but its lease belongs to the still-current
-    // G10c recovery owner instead of being released by invoke-finally.
+    const [ticket] = h.bridge.pausedTickets.pending();
+    expect(ticket).toBeDefined();
+    expect(Object.isFrozen(ticket!)).toBe(true);
+    expect(Reflect.ownKeys(ticket!)).toEqual([]);
+    const terminal = h.bridge.pausedTickets.claim(ticket!);
+    expect(h.bridge.pausedTickets.pending()).toHaveLength(0);
+    const resend = terminal.createOriginalCommitTerminator();
+    await expect(resend.attemptOriginalCommit()).resolves.toMatchObject({ delivery: 'COMMIT_CONFIRMED' });
+    await terminal.confirmedPersisted({
+      disposition: 'BUSINESS_RESULT_PERSISTED',
+      response: plans.business.issue(200, { recovered: kind }),
+    });
+    expect(() => terminal.failClosed(new Error('late'))).toThrow(/stale/i);
+    expect(h.handoffs.owner.pending()).toHaveLength(0);
+    // The G07 invocation retains its issued lease while paused, then the one
+    // terminal confirmed path releases it exactly once.
+    expect(control.snapshot().issuedPersistence).toBe(0);
+  });
+
+  test('a fail-closed paused ticket retains the issued lease and leaves the writer FIFO blocked', async () => {
+    const control = makeRuntimeControl();
+    const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
+    const h = g10cBridgeHarness();
+    let calls = 0;
+    const handler = makeHandler(control, {
+      management: (_token, context) => {
+        calls += 1;
+        if (calls === 1) {
+          retainPostCommitUnknown(h.adapter, context);
+          return Promise.resolve({ disposition: 'UNKNOWN_EFFECT', response: plans.technical.issue('PERSISTENCE_UNAVAILABLE') });
+        }
+        return Promise.resolve({ disposition: 'BUSINESS_RESULT_PERSISTED', response: plans.business.issue(200, { ordinal: calls }) });
+      },
+    }, undefined, plans, undefined, undefined, undefined, undefined, h.bridge);
+
+    const first = invoke(handler, '/qualifications');
+    const queued = invoke(handler, '/qualifications/11111111-1111-4111-8111-111111111111', undefined, 'PATCH');
+    await flush();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await flush();
+
+    expect(first.statusCode).toBe(503);
+    expect(calls).toBe(1);
     expect(control.snapshot().issuedPersistence).toBe(1);
+    const ticket = h.bridge.pausedTickets.pending()[0]!;
+    const terminal = h.bridge.pausedTickets.claim(ticket);
+    terminal.failClosed(new Error('cannot prove committed outcome'));
+    await flush();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await flush();
+
+    // The retained Mongo outcome has not been proved safe.  Keeping this
+    // lease prevents RuntimeControl from reporting DRAINED for this process.
+    expect(control.snapshot().issuedPersistence).toBe(1);
+    expect(calls).toBe(1);
+    expect(queued.writableEnded).toBe(false);
+    expect(() => terminal.failClosed(new Error('duplicate'))).toThrow(/stale/i);
+  });
+
+  test('confirmed Mongo cleanup failure retains the issued lease and does not reopen the writer', async () => {
+    const control = makeRuntimeControl();
+    const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
+    const h = g10cBridgeHarness();
+    let retained!: ReturnType<typeof retainPostCommitUnknown>;
+    const handler = makeHandler(control, {
+      management: (_token, context) => {
+        retained = retainPostCommitUnknown(h.adapter, context);
+        return Promise.resolve({ disposition: 'UNKNOWN_EFFECT', response: plans.technical.issue('PERSISTENCE_UNAVAILABLE') });
+      },
+    }, undefined, plans, undefined, undefined, undefined, undefined, h.bridge);
+
+    const response = invoke(handler, '/qualifications');
+    await flush();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await flush();
+    expect(response.statusCode).toBe(503);
+
+    const terminal = h.bridge.pausedTickets.claim(h.bridge.pausedTickets.pending()[0]!);
+    await terminal.createOriginalCommitTerminator().attemptOriginalCommit();
+    retained.endSession.mockRejectedValueOnce(new Error('session close failed'));
+    await expect(terminal.confirmedPersisted({
+      disposition: 'BUSINESS_RESULT_PERSISTED',
+      response: plans.business.issue(200, { recovered: true }),
+    })).rejects.toThrow(/session release failed/i);
+
+    expect(control.snapshot().issuedPersistence).toBe(1);
+    expect(h.bridge.pausedTickets.pending()).toHaveLength(0);
+    expect(() => terminal.failClosed(new Error('late'))).toThrow(/stale/i);
   });
 
   test('ordinary UNKNOWN without a G10c handoff preserves the old release behavior', async () => {

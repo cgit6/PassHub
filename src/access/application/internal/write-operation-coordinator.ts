@@ -96,7 +96,12 @@ declare const postCommitUnknownRecoveryHandleBrand: unique symbol;
 export interface PostCommitUnknownRecoveryHandle {
   readonly [postCommitUnknownRecoveryHandleBrand]: never;
   assertCurrent(): void;
-  businessResultPersisted(result: unknown): void;
+  /**
+   * Returns true only when the terminal lifecycle publication succeeded and
+   * the coordinator has safely reopened its FIFO.  A false result is already
+   * fail-closed and must retain any external recovery resources.
+   */
+  businessResultPersisted(result: unknown): boolean;
   failClosed(error: unknown): void;
 }
 
@@ -533,7 +538,7 @@ export function createWriteOperationCoordinatorBundle<
     operation.reject(error);
   };
 
-  const finalizeRecoveredBusinessResult = (operation: Operation, result: unknown): void => {
+  const finalizeRecoveredBusinessResult = (operation: Operation, result: unknown): boolean => {
     if (result === undefined) throw new TypeError('post-commit unknown recovery result must be defined');
     if (operation.recoveryPhase !== 'PAUSED') {
       throw new Error('post-commit unknown recovery operation is not paused');
@@ -543,8 +548,15 @@ export function createWriteOperationCoordinatorBundle<
     operation.active = false;
     operation.recoveryPhase = 'TERMINAL';
     current = null;
-    if (!notifyLifecycle(operation, 'BUSINESS_RESULT_PERSISTED')) return;
+    if (!notifyLifecycle(operation, 'BUSINESS_RESULT_PERSISTED')) return false;
+    // A recovered result reaches this path only through the explicit opaque
+    // recovery handle.  The original pause deliberately fenced FIFO work;
+    // lift that fence only after this terminal lifecycle publication has
+    // succeeded, then resume the existing queue in order.
+    blocked = false;
     operation.resolve(result);
+    scheduleDrain();
+    return true;
   };
 
   const recoveryAccess: CoordinatorRecoveryAccess = Object.freeze({
@@ -564,7 +576,13 @@ export function createWriteOperationCoordinatorBundle<
           if (leaseState.adoptedBy !== null || leaseState.handle !== null) {
             throw new Error('post-commit unknown recovery lease was already adopted');
           }
-          if (operation.recoveryPhase !== 'PAUSED' || operation.recoveryLease !== lease) {
+          // G07 receives the lease synchronously while the executor is still
+          // unwinding.  It may bind its private recovery owner during the
+          // REQUESTED micro-phase, but the resulting handle cannot perform a
+          // recovery command until runOperation has verified the one legal
+          // settlement and moved the operation to PAUSED.
+          if ((operation.recoveryPhase !== 'REQUESTED' && operation.recoveryPhase !== 'PAUSED')
+            || operation.recoveryLease !== lease) {
             throw new Error('post-commit unknown recovery lease is not paused');
           }
           assertCurrent(operation);
@@ -584,10 +602,10 @@ export function createWriteOperationCoordinatorBundle<
               if (this !== handle) throw new TypeError('post-commit unknown recovery handle is foreign');
               assertHandleCurrent();
             },
-            businessResultPersisted(this: unknown, result: unknown): void {
+            businessResultPersisted(this: unknown, result: unknown): boolean {
               if (this !== handle) throw new TypeError('post-commit unknown recovery handle is foreign');
               assertHandleCurrent();
-              finalizeRecoveredBusinessResult(operation, result);
+              return finalizeRecoveredBusinessResult(operation, result);
             },
             failClosed(this: unknown, error: unknown): void {
               if (this !== handle) throw new TypeError('post-commit unknown recovery handle is foreign');

@@ -1,4 +1,8 @@
-import type { WriteOperationSettlement } from '../../access/application/internal/write-operation-coordinator.js';
+import type {
+  PostCommitUnknownRecoveryHandle,
+  PostCommitUnknownRecoveryOwner,
+  WriteOperationSettlement,
+} from '../../access/application/internal/write-operation-coordinator.js';
 import type { AdmissionWorkContext, AdmissionWriterOutcome } from './g07b-admission-handler.js';
 import { readG10bScopedPersistenceForAdmission } from './g10b-operation-bridge.js';
 import type { IssuedPersistenceLease } from '../../runtime/internal/runtime-control.js';
@@ -6,10 +10,17 @@ import type { G04bMongoPersistenceAdapter } from '../../infrastructure/mongo/g04
 import {
   assertG10cPostCommitUnknownHandoffBinding,
   attachG10cPostCommitUnknownHandoffSink,
+  createG10cPostCommitUnknownTerminalCleaner,
   createG10cPostCommitUnknownForwardingSink,
+  createG10cRetainedOriginalCommitTerminator,
   type G10cPostCommitUnknownHandoff,
   type G10cPostCommitUnknownHandoffBundle,
+  type G10cRetainedOriginalCommitTerminator,
 } from '../../infrastructure/mongo/internal/g10c-post-commit-unknown-handoff.js';
+import {
+  createG10cCanonicalConfirmationReader,
+  type G10cCanonicalConfirmationReader,
+} from '../../infrastructure/mongo/internal/g10c-canonical-confirmation-reader.js';
 
 /**
  * Private bridge between G07's issued-persistence accounting and the G10c
@@ -17,6 +28,11 @@ import {
  * timer, recovery result, or public HTTP capability.
  */
 export interface G10cG07RecoveryBridge {
+  /**
+   * Bind the coordinator-owned recovery authority once, before any writer
+   * starts.  The bridge never manufactures this authority itself.
+   */
+  bindRecoveryOwner(owner: PostCommitUnknownRecoveryOwner): void;
   beginIssuedPersistence(
     context: AdmissionWorkContext,
     lease: IssuedPersistenceLease,
@@ -30,6 +46,37 @@ export interface G10cG07RecoveryBridge {
   ): boolean;
   /** Reject a contradictory known result after a genuine unknown handoff. */
   assertNoRetainedHandoff(context: AdmissionWorkContext): void;
+  /** Internal queue owned by the future G10c confirmation coordinator. */
+  readonly pausedTickets: G10cG07PausedTicketOwner;
+}
+
+declare const g10cG07PausedTicketBrand: unique symbol;
+
+/**
+ * Opaque, one-to-one pairing of one G07 writer recovery lease, one retained
+ * G04b handoff and one issued-persistence lease.  It has no session, image,
+ * scope or result fields.
+ */
+export interface G10cG07PausedTicket {
+  readonly [g10cG07PausedTicketBrand]: never;
+}
+
+/** The future coordinator can inspect and claim a single paused ticket. */
+export interface G10cG07PausedTicketOwner {
+  pending(): readonly G10cG07PausedTicket[];
+  claim(ticket: G10cG07PausedTicket): G10cG07PausedTicketTerminal;
+}
+
+/**
+ * Claimed ticket capability.  It exposes only existing opaque G10c command
+ * primitives and exactly one terminal decision; Mongo session and canonical
+ * expected images remain encapsulated in the handoff implementation.
+ */
+export interface G10cG07PausedTicketTerminal {
+  createOriginalCommitTerminator(): G10cRetainedOriginalCommitTerminator;
+  createCanonicalConfirmationReader(): G10cCanonicalConfirmationReader;
+  confirmedPersisted(result: AdmissionWriterOutcome): Promise<void>;
+  failClosed(error: unknown): void;
 }
 
 export interface G10cG07RecoveryBridgeOptions {
@@ -41,8 +88,18 @@ interface ActiveInvocation {
   readonly context: AdmissionWorkContext;
   readonly lease: IssuedPersistenceLease;
   handoff: G10cPostCommitUnknownHandoff | null;
+  ticket: G10cG07PausedTicket | null;
   finished: boolean;
   paused: boolean;
+  leaseReleased: boolean;
+}
+
+interface PausedTicketState {
+  readonly invocation: ActiveInvocation;
+  readonly handoff: G10cPostCommitUnknownHandoff;
+  readonly recovery: PostCommitUnknownRecoveryHandle;
+  claimed: boolean;
+  terminal: boolean;
 }
 
 const bridges = new WeakSet<object>();
@@ -60,6 +117,9 @@ export function createG10cG07RecoveryBridge(
   }
 
   let active: ActiveInvocation | null = null;
+  let recoveryOwner: PostCommitUnknownRecoveryOwner | null = null;
+  const queuedTickets: G10cG07PausedTicket[] = [];
+  const ticketStates = new WeakMap<object, PausedTicketState>();
   const observeRetained = (handoff: G10cPostCommitUnknownHandoff): void => {
     const current = active;
     if (current === null || current.finished || current.handoff !== null) {
@@ -78,14 +138,143 @@ export function createG10cG07RecoveryBridge(
   );
   attachG10cPostCommitUnknownHandoffSink(options.adapter, forwarding);
 
+  const releaseInvocationLease = (current: ActiveInvocation): void => {
+    if (current.leaseReleased) return;
+    current.leaseReleased = true;
+    current.lease.release();
+  };
+
+  const completeTicketTerminal = (ticket: G10cG07PausedTicket, state: PausedTicketState): void => {
+    if (state.terminal) return;
+    state.terminal = true;
+    const index = queuedTickets.indexOf(ticket);
+    if (index >= 0) queuedTickets.splice(index, 1);
+    ticketStates.delete(ticket as object);
+    if (active === state.invocation) active = null;
+    releaseInvocationLease(state.invocation);
+  };
+
+  /**
+   * An unsafe terminal does close the ticket capability, but deliberately
+   * keeps the bridge invocation and issued-persistence lease alive.  The
+   * writer coordinator is blocked and RuntimeControl must not report DRAINED
+   * while the retained session/outcome cannot be proved safe.
+   */
+  const retainUnsafeInvocation = (ticket: G10cG07PausedTicket, state: PausedTicketState): void => {
+    if (state.terminal) return;
+    state.terminal = true;
+    const index = queuedTickets.indexOf(ticket);
+    if (index >= 0) queuedTickets.splice(index, 1);
+    ticketStates.delete(ticket as object);
+  };
+
+  let pausedTickets!: G10cG07PausedTicketOwner;
+  pausedTickets = Object.freeze({
+    pending(): readonly G10cG07PausedTicket[] {
+      return Object.freeze([...queuedTickets]);
+    },
+    claim(ticket: G10cG07PausedTicket): G10cG07PausedTicketTerminal {
+      const state = ticketStates.get(ticket as object);
+      if (state === undefined || state.terminal || state.claimed || !queuedTickets.includes(ticket)
+        || active !== state.invocation || !state.invocation.paused) {
+        throw new TypeError('G10c G07 paused recovery ticket is foreign or stale');
+      }
+      state.claimed = true;
+      const index = queuedTickets.indexOf(ticket);
+      queuedTickets.splice(index, 1);
+      let terminal!: G10cG07PausedTicketTerminal;
+      const assertCurrent = (): void => {
+        if (state.terminal || active !== state.invocation || !state.claimed) {
+          throw new TypeError('G10c G07 paused recovery ticket is stale');
+        }
+        state.recovery.assertCurrent();
+      };
+      terminal = Object.freeze({
+        createOriginalCommitTerminator(this: unknown): G10cRetainedOriginalCommitTerminator {
+          if (this !== terminal) throw new TypeError('G10c G07 paused recovery terminal is foreign');
+          assertCurrent();
+          return createG10cRetainedOriginalCommitTerminator(options.handoffs.owner, state.handoff);
+        },
+        createCanonicalConfirmationReader(this: unknown): G10cCanonicalConfirmationReader {
+          if (this !== terminal) throw new TypeError('G10c G07 paused recovery terminal is foreign');
+          assertCurrent();
+          return createG10cCanonicalConfirmationReader(options.handoffs.owner, state.handoff);
+        },
+        async confirmedPersisted(this: unknown, result: AdmissionWriterOutcome): Promise<void> {
+          if (this !== terminal) throw new TypeError('G10c G07 paused recovery terminal is foreign');
+          if (result === undefined || result === null) {
+            throw new TypeError('G10c G07 confirmed recovery result is required');
+          }
+          assertCurrent();
+          let cleaner;
+          try {
+            // This succeeds only after the retained original sender or a
+            // canonical reader has terminally confirmed the exact handoff.
+            cleaner = createG10cPostCommitUnknownTerminalCleaner(options.handoffs.owner, state.handoff);
+          } catch (error: unknown) {
+            // A premature "confirmed" call is not terminal and must leave
+            // the ticket recoverable for its genuine confirmation path.
+            throw error;
+          }
+          try {
+            await cleaner.cleanupAfterConfirmedOutcome();
+            if (!state.recovery.businessResultPersisted(result)) {
+              // The coordinator's lifecycle observer already rejected and
+              // fenced FIFO work.  Its failure means the G07 terminal was not
+              // successfully published, so do not make RuntimeControl appear
+              // drained even though Mongo cleanup itself completed.
+              retainUnsafeInvocation(ticket, state);
+              throw new Error('G10c G07 confirmed recovery lifecycle failed');
+            }
+          } catch (error: unknown) {
+            // Session cleanup or coordinator publication failed after the
+            // terminal claim.  It is no longer safe to resume FIFO work or
+            // let RuntimeControl drain; retain the issued lease as a safety
+            // fence even after the ticket capability has been spent.
+            try { state.recovery.failClosed(error); } catch { /* already fail-closed */ }
+            retainUnsafeInvocation(ticket, state);
+            throw error;
+          }
+          completeTicketTerminal(ticket, state);
+        },
+        failClosed(this: unknown, error: unknown): void {
+          if (this !== terminal) throw new TypeError('G10c G07 paused recovery terminal is foreign');
+          if (error === undefined || error === null) throw new TypeError('G10c G07 fail-closed error is required');
+          assertCurrent();
+          try {
+            state.recovery.failClosed(error);
+          } finally {
+            retainUnsafeInvocation(ticket, state);
+          }
+        },
+      }) as G10cG07PausedTicketTerminal;
+      return terminal;
+    },
+  });
+
   const bridge: G10cG07RecoveryBridge = Object.freeze({
+    bindRecoveryOwner(owner: PostCommitUnknownRecoveryOwner): void {
+      if (active !== null || recoveryOwner !== null || !isObject(owner) || typeof owner.adopt !== 'function') {
+        throw new TypeError('G10c G07 recovery owner binding is invalid');
+      }
+      recoveryOwner = owner;
+    },
     beginIssuedPersistence(context: AdmissionWorkContext, lease: IssuedPersistenceLease): void {
       if (active !== null) throw new TypeError('G10c G07 recovery bridge already has an active writer');
       if (!isObject(context) || !Object.isFrozen(context) || !isObject(lease)
         || typeof lease.release !== 'function') {
         throw new TypeError('G10c G07 recovery bridge invocation is invalid');
       }
-      active = { context, lease, handoff: null, finished: false, paused: false };
+      if (recoveryOwner === null) throw new TypeError('G10c G07 recovery owner is not bound');
+      active = {
+        context,
+        lease,
+        handoff: null,
+        ticket: null,
+        finished: false,
+        paused: false,
+        leaseReleased: false,
+      };
     },
     finishIssuedPersistence(context: AdmissionWorkContext): void {
       const current = requireActive(context);
@@ -93,7 +282,7 @@ export function createG10cG07RecoveryBridge(
       current.finished = true;
       if (current.handoff === null) {
         active = null;
-        current.lease.release();
+        releaseInvocationLease(current);
       }
       // A retained handoff deliberately keeps the lease.  The future G10c
       // confirmation owner, not this invoke-finally callback, owns terminal
@@ -110,7 +299,38 @@ export function createG10cG07RecoveryBridge(
         throw new TypeError('G10c G07 recovery bridge handoff is not ready to pause');
       }
       if (error === undefined || error === null) throw new TypeError('G10c post-commit unknown pause requires an error');
-      settlement.pausePostCommitUnknown(error);
+      if (recoveryOwner === null) throw new TypeError('G10c G07 recovery owner is not bound');
+      const recoveryLease = settlement.pausePostCommitUnknown(error);
+      let recovery: PostCommitUnknownRecoveryHandle;
+      try {
+        recovery = recoveryOwner.adopt(recoveryLease);
+      } catch (adoptionError: unknown) {
+        // The pause has already been recorded.  A failed internal authority
+        // handoff must remain blocked and retain its issued lease: releasing
+        // it would let RuntimeControl claim DRAINED while the original commit
+        // outcome/session is unsafe.
+        throw adoptionError;
+      }
+      let handoff: G10cPostCommitUnknownHandoff;
+      try {
+        handoff = options.handoffs.owner.take(current.handoff);
+      } catch (handoffError: unknown) {
+        try { recovery.failClosed(handoffError); } catch { /* already blocked */ }
+        // Keep `active` and its issued lease for the same fail-closed reason
+        // as above.  A contradictory handoff can never become a drainable
+        // completed writer.
+        throw handoffError;
+      }
+      const ticket = Object.freeze({}) as G10cG07PausedTicket;
+      ticketStates.set(ticket as object, {
+        invocation: current,
+        handoff,
+        recovery,
+        claimed: false,
+        terminal: false,
+      });
+      queuedTickets.push(ticket);
+      current.ticket = ticket;
       current.paused = true;
       return true;
     },
@@ -121,6 +341,7 @@ export function createG10cG07RecoveryBridge(
         throw new TypeError('G10c post-commit unknown handoff cannot produce a known writer outcome');
       }
     },
+    pausedTickets,
   });
   bridges.add(bridge as object);
   return bridge;

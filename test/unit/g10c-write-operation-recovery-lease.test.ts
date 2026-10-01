@@ -43,7 +43,7 @@ function pendingState<T>(promise: Promise<T>): Promise<'resolved' | 'rejected' |
 }
 
 describe('G10c write-operation post-commit unknown recovery lease', () => {
-  test('pauses the current writer, preserves its owner, and does not auto-unblock FIFO after a controlled persisted-result terminal', async () => {
+  test('pauses the current writer, then resumes FIFO only after the explicit persisted-result terminal', async () => {
     let lease!: PostCommitUnknownRecoveryLease;
     let context!: WriteOperationContext;
     const second = jest.fn((input: string, _context: WriteOperationContext, settlement: WriteOperationSettlement<string>) => {
@@ -78,9 +78,9 @@ describe('G10c write-operation post-commit unknown recovery lease', () => {
 
     handle.businessResultPersisted('confirmed-first');
     await expect(first).resolves.toBe('confirmed-first');
-    await expect(pendingState(queued)).resolves.toBe('pending');
-    expect(second).not.toHaveBeenCalled();
-    await expect(coordinator.recognition.enqueue('later')).rejects.toThrow('blocked by unknown effect');
+    await expect(queued).resolves.toBe('second');
+    expect(second).toHaveBeenCalledTimes(1);
+    await expect(coordinator.recognition.enqueue('later')).resolves.toBe('later');
     expect(() => handle.assertCurrent()).toThrow('not paused');
     expect(() => context.assertCurrent()).toThrow('not current');
   });
@@ -153,6 +153,37 @@ describe('G10c write-operation post-commit unknown recovery lease', () => {
     const terminal = new Error('recovery inconclusive');
     owner.adopt(lease).failClosed(terminal);
     await expect(first).rejects.toBe(terminal);
+    await expect(pendingState(queued)).resolves.toBe('pending');
+    expect(next).not.toHaveBeenCalled();
+    await expect(coordinator.recognition.enqueue('later')).rejects.toThrow('blocked by unknown effect');
+  });
+
+  test('a failed recovered-result lifecycle stays blocked and reports no confirmed terminal', async () => {
+    let lease!: PostCommitUnknownRecoveryLease;
+    const next = jest.fn();
+    const coordinator = createWriteOperationCoordinatorBundle({
+      clock: { nowMs: () => 1_000 },
+      lifecycleObserver: {
+        settled: (event) => {
+          if (event.disposition === 'BUSINESS_RESULT_PERSISTED') {
+            throw new Error('lifecycle persistence publication failed');
+          }
+        },
+      },
+      executors: channels({
+        managementCreate: (_input, _context, settlement) => {
+          lease = settlement.pausePostCommitUnknown(new Error('unknown'));
+        },
+        managementUpdate: next,
+      }),
+    });
+    const first = coordinator.managementCreate.enqueue('first');
+    const queued = coordinator.managementUpdate.enqueue('next');
+    await flushMicrotasks();
+
+    const recovered = createPostCommitUnknownRecoveryOwner(coordinator).adopt(lease);
+    expect(recovered.businessResultPersisted('confirmed')).toBe(false);
+    await expect(first).rejects.toThrow('lifecycle observer failed');
     await expect(pendingState(queued)).resolves.toBe('pending');
     expect(next).not.toHaveBeenCalled();
     await expect(coordinator.recognition.enqueue('later')).rejects.toThrow('blocked by unknown effect');

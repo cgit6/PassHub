@@ -12,6 +12,7 @@ import {
 } from './unknown-recognition-coordinator.js';
 import { issueUnknownRecognitionRecoveryToken } from './unknown-recognition-recovery.js';
 import {
+  createPostCommitUnknownRecoveryOwner,
   createWriteOperationCoordinatorBundle,
   type WriteOperationContext,
   type WriteOperationLifecycleEvent,
@@ -672,6 +673,14 @@ export function createG07bAdmissionHandler(
       recognition: executeRecognition,
     }),
   });
+  // G10c's bridge needs the exact recovery authority for this private FIFO
+  // coordinator.  Bind it only after the coordinator exists and before any
+  // request may invoke a writer.
+  if (postCommitUnknownRecoveryBridge !== undefined) {
+    postCommitUnknownRecoveryBridge.bindRecoveryOwner(
+      createPostCommitUnknownRecoveryOwner(coordinator),
+    );
+  }
   writerQuiescence.bindCoordinatorWake(() => wakeCoordinator());
   writerPermissionBindWake?.(() => wakeCoordinator());
   writerPermissionBindMaintenanceReadySettlement?.(() => {
