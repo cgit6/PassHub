@@ -19,6 +19,10 @@ import {
   assertG10aRuntimeCapabilities,
   type G10aRuntimeCapabilities,
 } from './g10a-runtime-owner.js';
+import {
+  assertG10aDriverLogBinding,
+  type G10aDriverLogBinding,
+} from './g10a-driver-log-binding.js';
 
 /**
  * A request-local, nominal ingress fact.  It is deliberately not an HTTP DTO:
@@ -51,6 +55,8 @@ export interface G10aIngressIdentityHandlerOptions {
    * destinations would make a single request record internally inconsistent.
    */
   readonly runtime: G10aRuntimeCapabilities;
+  /** Private Mongo monitoring attribution for QUERY/LOGIN only. */
+  readonly driverLogBinding?: G10aDriverLogBinding;
   /** Internal clock seam for deterministic tests; default is the native wall clock. */
   readonly now?: () => Date;
 }
@@ -132,6 +138,9 @@ export function createG10aIngressIdentityHandler(
         // Best-effort observability is never allowed to alter admission.
       }
     }
+    if (runtimeIdentity !== null && options.driverLogBinding !== undefined) {
+      return options.driverLogBinding.run(runtimeIdentity, () => options.handler(accepted, request, response, next));
+    }
     return options.handler(accepted, request, response, next);
   };
 }
@@ -184,6 +193,7 @@ function routeFor(route: BusinessRouteId): RuntimeRoute {
 function captureOptions(input: unknown): Readonly<{
   readonly handler: AcceptedIngressHandler;
   readonly runtime: G10aRuntimeCapabilities;
+  readonly driverLogBinding: G10aDriverLogBinding | undefined;
   readonly runtimeFacts: Readonly<{ readonly datasetEpoch: string; readonly processRunId: string }>;
   readonly now: () => Date;
 }> {
@@ -194,9 +204,9 @@ function captureOptions(input: unknown): Readonly<{
     const keys = Reflect.ownKeys(record);
     const required = ['handler', 'runtime'];
     if (keys.some((key) => typeof key !== 'string')
-      || keys.length < required.length || keys.length > required.length + 1
+      || keys.length < required.length || keys.length > required.length + 2
       || required.some((key) => !keys.includes(key))
-      || keys.some((key) => key !== 'handler' && key !== 'runtime' && key !== 'now')) throw new Error();
+      || keys.some((key) => key !== 'handler' && key !== 'runtime' && key !== 'now' && key !== 'driverLogBinding')) throw new Error();
     const descriptors = Object.getOwnPropertyDescriptors(record);
     for (const key of keys) {
       if (typeof key !== 'string') throw new Error();
@@ -206,8 +216,10 @@ function captureOptions(input: unknown): Readonly<{
     const handler = descriptors.handler?.value;
     const runtime = descriptors.runtime?.value;
     const now = descriptors.now?.value ?? (() => new Date());
+    const driverLogBinding = descriptors.driverLogBinding?.value;
     if (nodeTypes.isProxy(handler) || nodeTypes.isProxy(now) || typeof handler !== 'function' || typeof now !== 'function') throw new Error();
     assertG10aRuntimeCapabilities(runtime);
+    if (driverLogBinding !== undefined) assertG10aDriverLogBinding(driverLogBinding);
     // The issuer itself owns these immutable facts.  It exposes no public state;
     // issue/read a read-only nominal identity once to capture them safely.
     const probe = runtime.identityIssuer.issue({
@@ -217,6 +229,7 @@ function captureOptions(input: unknown): Readonly<{
     return Object.freeze({
       handler: handler as AcceptedIngressHandler,
       runtime,
+      driverLogBinding: driverLogBinding as G10aDriverLogBinding | undefined,
       runtimeFacts: Object.freeze({ datasetEpoch: facts.datasetEpoch, processRunId: facts.processRunId }),
       now: now as () => Date,
     });

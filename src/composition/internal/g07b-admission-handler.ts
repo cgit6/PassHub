@@ -84,6 +84,10 @@ import {
   assertG10aBusinessStepLogBinding,
   type G10aBusinessStepLogBinding,
 } from './g10a-business-step-log-binding.js';
+import {
+  assertG10aDriverLogBinding,
+  type G10aDriverLogBinding,
+} from './g10a-driver-log-binding.js';
 import type { RuntimeIdentity } from '../../runtime/internal/runtime-control.js';
 import { assertRuntimeLiveCounterBridge, notifyRuntimeLiveCounterBridge, type RuntimeLiveCounterBridge } from '../../runtime/internal/runtime-live-counter-bridge.js';
 import {
@@ -226,6 +230,8 @@ export interface G07bAdmissionHandlerOptions {
   readonly businessStepLogBinding?: unknown;
   /** Internal push-only STATUS metrics notifier. */
   readonly runtimeCounterBridge?: RuntimeLiveCounterBridge;
+  /** Internal async attribution for true Mongo driver command monitoring. */
+  readonly driverLogBinding?: G10aDriverLogBinding;
 }
 
 interface WriterInput {
@@ -435,6 +441,8 @@ export function createG07bAdmissionHandler(
     ?? createWriterQuiescence({ clock: wallClock });
   const runtimeCounterBridge = options.runtimeCounterBridge;
   if (runtimeCounterBridge !== undefined) assertRuntimeLiveCounterBridge(runtimeCounterBridge);
+  const driverLogBinding = options.driverLogBinding;
+  if (driverLogBinding !== undefined) assertG10aDriverLogBinding(driverLogBinding);
 
   const acquireBundle = resources.tryAcquire.bind(resources);
   const releaseHttp = resources.releaseHttp.bind(resources);
@@ -519,7 +527,10 @@ export function createG07bAdmissionHandler(
     }
     try {
       try { step?.issued(); } catch { /* never alter work */ }
-      return invokeNativePromise(operation).finally(() => {
+      const attributed = identity !== null && driverLogBinding !== undefined
+        ? () => driverLogBinding.run(identity, operation)
+        : operation;
+      return invokeNativePromise(attributed).finally(() => {
         try { step?.settled(); } catch { /* never alter work */ }
         lease.release();
       });
@@ -1812,6 +1823,7 @@ function captureOptions(options: G07bAdmissionHandlerOptions): G07bAdmissionHand
     operationIdentityBinding: captureOptionalConstructionProperty(options, 'operationIdentityBinding', 'G07b options'),
     businessStepLogBinding: captureOptionalConstructionProperty(options, 'businessStepLogBinding', 'G07b options'),
     runtimeCounterBridge: captureOptionalConstructionProperty(options, 'runtimeCounterBridge', 'G07b options'),
+    driverLogBinding: captureOptionalConstructionProperty(options, 'driverLogBinding', 'G07b options'),
   }) as G07bAdmissionHandlerOptions;
 }
 

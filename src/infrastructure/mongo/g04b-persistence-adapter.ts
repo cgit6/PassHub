@@ -48,6 +48,7 @@ import {
   readManagementPersistenceEnvelope,
   readRecognitionPersistenceEnvelope,
 } from '../../access/ports/trusted-operation.js';
+import { bindG10aMongoCommandMonitoring } from './g10a-driver-command-monitoring.js';
 
 export const G04B_MONGO_VERSION = '8.0.32';
 export const G04B_DEFAULT_DATABASE = 'passhub_g04b_atomic';
@@ -200,6 +201,7 @@ export class G04bMongoPersistenceAdapter
   ) {
     if (databaseName.length === 0) throw new TypeError('G04b database name must not be empty');
     this.database = client.db(databaseName);
+    bindG10aMongoCommandMonitoring(client);
   }
 
   public static async connect(
@@ -208,7 +210,7 @@ export class G04bMongoPersistenceAdapter
     clock: G04bClock = SYSTEM_CLOCK,
   ): Promise<G04bMongoPersistenceAdapter> {
     if (uri.length === 0) throw new TypeError('MongoDB URI must not be empty');
-    const client = new MongoClient(uri, { retryReads: false, retryWrites: false, maxAdaptiveRetries: 0 });
+    const client = new MongoClient(uri, { retryReads: false, retryWrites: false, maxAdaptiveRetries: 0, monitorCommands: true });
     await client.connect();
     const adapter = new G04bMongoPersistenceAdapter(client, databaseName, clock);
     try {

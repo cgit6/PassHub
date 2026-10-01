@@ -23,6 +23,7 @@ import type { AcceptedIngressHandler } from '../../shared/internal/http/index.js
 import { createG10aIngressIdentityHandler } from './g10a-ingress-identity.js';
 import { createG10aOperationIdentityBinding } from './g10a-operation-identity-binding.js';
 import { createG10aBusinessStepLogBinding } from './g10a-business-step-log-binding.js';
+import { createG10aDriverLogBinding } from './g10a-driver-log-binding.js';
 import {
   assertG10aRuntimeCapabilities,
   type G10aRuntimeCapabilities,
@@ -101,6 +102,7 @@ export function createG10aAdmissionRuntimeComposition(
       throw new TypeError('G10a runtime owner identity does not match admission runtime');
     }
   }
+  const driverLogBinding = runtime === undefined ? undefined : createG10aDriverLogBinding(runtime);
   const writerPermission = createG10aWriterPermissionBinding(control);
   const queryPermission = createG10aQueryPermissionBinding(control);
   let refreshCounters: (() => void) | undefined;
@@ -115,6 +117,7 @@ export function createG10aAdmissionRuntimeComposition(
     ...(runtime === undefined ? {} : {
       operationIdentityBinding: createG10aOperationIdentityBinding(runtime),
       businessStepLogBinding: createG10aBusinessStepLogBinding(runtime),
+      ...(driverLogBinding === undefined ? {} : { driverLogBinding }),
     }),
     runtimeCounterBridge: counterBridge,
   });
@@ -133,6 +136,7 @@ export function createG10aAdmissionRuntimeComposition(
       // Local standalone compositions intentionally retain their old handler
       // until a real process owner supplies the indivisible runtime.
       runtime,
+      ...(driverLogBinding === undefined ? {} : { driverLogBinding }),
     });
   return Object.freeze({ handler, control });
 }
