@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 const requiredEnvironment = Object.freeze([
   'G10_FAULT_APP_MONGO_URI',
   'G10_FAULT_OBSERVER_MONGO_URI',
+  'G10_FAULT_INTERFERER_MONGO_URI',
   'G10_FAULT_TOXIPROXY_API_URL',
 ]);
 

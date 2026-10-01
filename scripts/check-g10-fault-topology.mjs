@@ -32,6 +32,7 @@ assert.match(compose, /g10-fault:\n\s+internal: true/u);
 assert.doesNotMatch(compose, /^\s{2}ports:/mu, 'fault services must not publish a host port');
 assert.match(compose, /G10_FAULT_APP_MONGO_URI: mongodb:\/\/toxiproxy-g10:27032\/\?replicaSet=rs0/u);
 assert.match(compose, /G10_FAULT_OBSERVER_MONGO_URI: mongodb:\/\/mongo-g10:27031\/\?directConnection=true&replicaSet=rs0/u);
+assert.match(compose, /G10_FAULT_INTERFERER_MONGO_URI: mongodb:\/\/mongo-g10:27031\/\?directConnection=true&replicaSet=rs0/u);
 assert.match(compose, /G10_FAULT_TOXIPROXY_API_URL: http:\/\/toxiproxy-g10:8474/u);
 assert.match(compose, /node scripts\/g10-fault-topology-init\.mjs && exec node scripts\/g10-fault-runner\.mjs --print-contract/u);
 
@@ -45,6 +46,7 @@ assert.match(initializer, /retryWrites: false/u);
 
 assert.match(runner, /G10_FAULT_APP_MONGO_URI/u);
 assert.match(runner, /G10_FAULT_OBSERVER_MONGO_URI/u);
+assert.match(runner, /G10_FAULT_INTERFERER_MONGO_URI/u);
 assert.match(runner, /G10_FAULT_TOXIPROXY_API_URL/u);
 assert.doesNotMatch(`${compose}\n${toxiproxy}\n${runner}\n${initializer}`, /(?:mongodb(?:\+srv)?:\/\/[^\s:@/]+:[^\s@/]+@|password|secret|api[_-]?key|token)/iu);
 
@@ -54,12 +56,14 @@ const { stdout } = await execute(process.execPath, ['scripts/g10-fault-runner.mj
     ...process.env,
     G10_FAULT_APP_MONGO_URI: 'mongodb://toxiproxy-g10:27032/?replicaSet=rs0',
     G10_FAULT_OBSERVER_MONGO_URI: 'mongodb://mongo-g10:27031/?directConnection=true&replicaSet=rs0',
+    G10_FAULT_INTERFERER_MONGO_URI: 'mongodb://mongo-g10:27031/?directConnection=true&replicaSet=rs0',
     G10_FAULT_TOXIPROXY_API_URL: 'http://toxiproxy-g10:8474',
   },
 });
 assert.deepEqual(JSON.parse(stdout), {
   G10_FAULT_APP_MONGO_URI: 'mongodb://toxiproxy-g10:27032/?replicaSet=rs0',
   G10_FAULT_OBSERVER_MONGO_URI: 'mongodb://mongo-g10:27031/?directConnection=true&replicaSet=rs0',
+  G10_FAULT_INTERFERER_MONGO_URI: 'mongodb://mongo-g10:27031/?directConnection=true&replicaSet=rs0',
   G10_FAULT_TOXIPROXY_API_URL: 'http://toxiproxy-g10:8474',
 });
 

@@ -67,6 +67,7 @@ services:
       NPM_CONFIG_CACHE: /tmp/npm-cache
       G10_FAULT_APP_MONGO_URI: mongodb://toxiproxy-g10:27032/?replicaSet=rs0
       G10_FAULT_OBSERVER_MONGO_URI: mongodb://mongo-g10:27031/?directConnection=true&replicaSet=rs0
+      G10_FAULT_INTERFERER_MONGO_URI: mongodb://mongo-g10:27031/?directConnection=true&replicaSet=rs0
       G10_FAULT_TOXIPROXY_API_URL: http://toxiproxy-g10:8474
     command:
       - sh
