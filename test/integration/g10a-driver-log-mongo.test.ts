@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
+import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -110,6 +111,23 @@ function sendHttp(port: number, method: 'GET' | 'POST', path: string, body?: Rec
   });
 }
 
+/** Speaks the production AF_UNIX service without echoing request/response data. */
+function exchangeControlSocket(socketPath: string, value: Readonly<Record<string, unknown>>): Promise<Record<string, unknown>> {
+  const request = Buffer.from(`${JSON.stringify(value)}\n`, 'utf8');
+  return new Promise((resolve, reject) => {
+    const socket = createConnection(socketPath);
+    const chunks: Buffer[] = [];
+    const timer = setTimeout(() => { socket.destroy(); reject(new Error('control socket exchange timed out')); }, 2_000);
+    socket.once('connect', () => socket.end(request));
+    socket.on('data', (chunk: Buffer) => chunks.push(chunk));
+    socket.once('error', () => { clearTimeout(timer); reject(new Error('control socket exchange failed')); });
+    socket.once('close', () => {
+      clearTimeout(timer);
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>); } catch { reject(new Error('control socket response was invalid')); }
+    });
+  });
+}
+
 async function status(control: RuntimeControl): Promise<ReturnType<RuntimeControl['snapshot']>> {
   const text = `${JSON.stringify({ v: 'c1', requestControlId: '99999999-9999-4999-8999-999999999999', command: 'STATUS', epoch: EPOCH, run: RUN })}\n`;
   const frame: RuntimeControlProtocolFrame = Object.freeze({ text, utf8Valid: true, hasBom: false, singleFinalLf: true, byteLength: Buffer.byteLength(text) });
@@ -208,6 +226,77 @@ describe('G10a true MongoDB driver command monitoring', () => {
     // private composite key. Concurrent real finds instead prove that each
     // emitted read record retains the read identity and lifecycle balances.
     expect(records.filter((record) => record.route === 'QUERY' && record.commandName === 'find' && record.code === 'DRIVER_STARTED').length).toBeGreaterThanOrEqual(13);
+  });
+
+  test('G10A_SECRET_LOG_REDACTION excludes a unique driver-payload canary from raw logs and real LOGS_READ while retaining driver allowlist fields', async () => {
+    const runtime = await owner.start();
+    const binding = createG10aDriverLogBinding(runtime);
+    const operationUUID = randomUUID();
+    const ownerRef = randomUUID();
+    const writer = runtime.identityIssuer.issue({
+      requestUUID: randomUUID(),
+      operationToken: runtime.identityIssuer.issueBusinessToken({ operationUUID, ownerRef }),
+      route: 'MANAGEMENT_CREATE',
+    });
+    const identity = runtime.identityIssuer.read(writer);
+    // This value is generated only at test runtime.  It enters the official
+    // Mongo command-monitoring payload, but is deliberately never emitted.
+    const canarySecret = `g10a-runtime-redaction-${randomUUID()}`;
+    const credentials = client.db(databaseName).collection<{ readonly _id: string; readonly credential: string }>('g10a_redaction_probe');
+
+    try {
+      await binding.run(writer, async () => {
+        await credentials.insertOne({ _id: randomUUID(), credential: canarySecret });
+      });
+    } catch {
+      // Mongo command errors can render their command payload in diagnostics.
+      throw new Error('redaction probe write failed');
+    }
+    await runtime.runtimeLogSink.flush();
+
+    const rawRuntimeLog = await readFile(join(parent, 'logs', 'runtime.log'), 'utf8');
+    // Assert booleans so a failure cannot render the dynamically generated
+    // secret in Jest's diagnostic output.
+    expect(rawRuntimeLog.includes(canarySecret)).toBe(false);
+    const rawRecords = rawRuntimeLog
+      .split('\n').filter((line) => line.length > 0)
+      .map((line) => validateRuntimeLogRecord(JSON.parse(line) as unknown));
+    const rawInsertRecords = rawRecords.filter((record) =>
+      record.requestUUID === identity.requestUUID && record.commandName === 'insert',
+    );
+    expect(rawInsertRecords).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'DRIVER', code: 'DRIVER_STARTED', route: 'MANAGEMENT_CREATE', phase: 'DRIVER',
+        requestUUID: identity.requestUUID, operationUUID, ownerRef, commandName: 'insert',
+        driverRequestId: expect.any(Number),
+      }),
+      expect.objectContaining({
+        kind: 'DRIVER', code: 'DRIVER_SUCCEEDED', route: 'MANAGEMENT_CREATE', phase: 'DRIVER',
+        requestUUID: identity.requestUUID, operationUUID, ownerRef, commandName: 'insert',
+        driverRequestId: expect.any(Number),
+      }),
+    ]));
+
+    const response = await exchangeControlSocket(runtime.socketPath, Object.freeze({
+      v: 'c1', requestControlId: randomUUID(), command: 'LOGS_READ', operationUUID, limit: 20,
+    }));
+    expect(JSON.stringify(response).includes(canarySecret)).toBe(false);
+    expect(response).toMatchObject({ ok: true, command: 'LOGS_READ', outcome: 'LOGS_READ', snapshot: null });
+    if (!Array.isArray(response.records)) throw new Error('LOGS_READ did not return records');
+    const readableRecords = response.records.map((record) => validateRuntimeLogRecord(record));
+    const readableInsertRecords = readableRecords.filter((record) => record.commandName === 'insert');
+    expect(readableInsertRecords).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'DRIVER', code: 'DRIVER_STARTED', route: 'MANAGEMENT_CREATE', phase: 'DRIVER',
+        requestUUID: identity.requestUUID, operationUUID, ownerRef, commandName: 'insert',
+        driverRequestId: expect.any(Number),
+      }),
+      expect.objectContaining({
+        kind: 'DRIVER', code: 'DRIVER_SUCCEEDED', route: 'MANAGEMENT_CREATE', phase: 'DRIVER',
+        requestUUID: identity.requestUUID, operationUUID, ownerRef, commandName: 'insert',
+        driverRequestId: expect.any(Number),
+      }),
+    ]));
   });
 
   test('closes one true HTTP G07→G08→G04b management path and a true query path under the same G10 owner', async () => {
