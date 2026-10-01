@@ -32,6 +32,7 @@ export type OperationBudgetBindingErrorCode =
   | 'BINDING_FROZEN'
   | 'INVALID_CONTEXT'
   | 'BINDING_ALREADY_CREATED'
+  | 'BINDING_CONTEXT_MISMATCH'
   | 'INVALID_BINDING'
   | 'INVALID_ROUND'
   | 'INVALID_COMMAND'
@@ -189,6 +190,39 @@ export function createOperationBudgetBindingFactory(
       config,
     ),
   }) as OperationBudgetBindingFactory;
+}
+
+/**
+ * Composition-only provenance assertion.  It intentionally is not re-exported
+ * from an application barrel: the G10b composition bridge needs to reject a
+ * structurally forged opaque binding before recording it against a scope.
+ */
+export function assertOperationBudgetBindingProvenance(binding: OperationBudgetBinding): void {
+  requireBinding(binding);
+}
+
+/**
+ * Composition-only ownership assertion.  A genuine opaque binding is useful
+ * only for the exact coordinator context that created it; matching public
+ * operation facts alone is deliberately insufficient.
+ */
+export function assertOperationBudgetBindingOwnership(
+  binding: OperationBudgetBinding,
+  context: WriteOperationContext,
+): void {
+  const state = requireBinding(binding);
+  if (state.context.context !== context) {
+    throw new OperationBudgetBindingError(
+      'BINDING_CONTEXT_MISMATCH',
+      'operation budget binding belongs to a different write operation context',
+    );
+  }
+}
+
+/** Composition-only liveness assertion for a binding before it reaches a scope. */
+export function assertOperationBudgetBindingCurrent(binding: OperationBudgetBinding): void {
+  const state = requireBinding(binding);
+  transition(state, () => undefined);
 }
 
 function createBinding(

@@ -88,6 +88,7 @@ import {
   assertG10aDriverLogBinding,
   type G10aDriverLogBinding,
 } from './g10a-driver-log-binding.js';
+import { registerG10bAdmissionWorkContext } from './g10b-operation-bridge.js';
 import type { RuntimeIdentity } from '../../runtime/internal/runtime-control.js';
 import { assertRuntimeLiveCounterBridge, notifyRuntimeLiveCounterBridge, type RuntimeLiveCounterBridge } from '../../runtime/internal/runtime-live-counter-bridge.js';
 import {
@@ -1738,12 +1739,14 @@ function isRelatedWrite(routeId: BusinessRouteId): boolean {
 }
 
 function workContext(context: WriteOperationContext, runtimeIdentity: RuntimeIdentity | null): AdmissionWorkContext {
-  return Object.freeze({
+  const admissionContext: AdmissionWorkContext = Object.freeze({
     operationId: context.operationId,
     receivedAtMs: context.receivedAtMs,
     sequence: context.sequence,
     runtimeIdentity,
   });
+  registerG10bAdmissionWorkContext(admissionContext, context);
+  return admissionContext;
 }
 
 function recognitionProgressPlan(
