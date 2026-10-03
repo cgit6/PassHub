@@ -67,7 +67,7 @@ npm=11.6.2
 
 首輪架構覆核指出 fault 測試只觀察 `findAndModify`／`find`，可能漏掉 UNKNOWN 後的 late CRUD 或清 claim；修正版已擴大整段 command window、加入 exact wire assertions，並在 replay 後增加第二次 majority snapshot 檢查。PM、架構師與測試員重新覆核 b1–b3 及回歸測試均 PASS。
 
-正式 b5 clean process evidence 見 `b5-runtime-clean.json`：12 個 exact process IDs、sourceDirty=false、固定 production image、canonical claim／ticket consumption、local ready、真實 login/create/QR ENTRY/query、ordinary restart closed、post-claim failure closed、SIGTERM 後 API／Mongo 消失與 claim 保留、全 phase 去敏掃描及 project cleanup 均通過。development run 另保存於 `b5-runtime-development.json`，明確標示不作 clean evidence。
+正式 b5 clean process evidence 見 `b5-runtime-clean-final.json`：12 個 exact process IDs、sourceDirty=false、固定 production image、canonical claim／ticket consumption、local ready、真實 login/create/QR ENTRY/query、ordinary restart closed、post-claim failure closed、SIGTERM 後 API／Mongo 消失與 claim 保留、全 phase 去敏掃描及 project cleanup 均通過。development run 另保存於 `b5-runtime-development.json`，明確標示不作 clean evidence。
 
 G11b aggregate manifest 見 `b5-manifest.json`：33 個 unit tests、9 個真 Mongo 情境（前 8 個為既有 adapter／fault evidence，第 9 個為 production process claim observation）及 12 個真 process 情境。既有 adapter UNKNOWN 證據仍限定為 adapter scope，不冒稱 production process 的 UNKNOWN boot；production 對非 `CLAIMED` 結果採 fail-closed。
 

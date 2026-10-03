@@ -12,12 +12,12 @@
     { "id": "G11B_B3B_MONGO_WIRE", "source": "docs/evidence/g11b/report.md", "tests": 6, "scope": "adapter" },
     { "id": "G11B_B3C_A_MONGO_COMPETITION", "source": "docs/evidence/g11b/report.md", "tests": 1, "scope": "adapter" },
     { "id": "G11B_B3C_B_MONGO_RESPONSE_LOSS", "source": "docs/evidence/g11b/report.md", "tests": 1, "scope": "adapter-fault" },
-    { "id": "G11B_RUNTIME_CANONICAL_CLAIM", "source": "docs/evidence/g11b/b5-runtime-clean.json", "tests": 1, "scope": "production-process-mongo" }
+    { "id": "G11B_RUNTIME_CANONICAL_CLAIM", "source": "docs/evidence/g11b/b5-runtime-clean-final.json", "tests": 1, "scope": "production-process-mongo" }
   ],
   "mongoCaseCount": 9,
   "scopeNote": "The first eight cases prove the existing adapter claim contract; the final case proves the production process observes and retains a BSON Date claim. This manifest does not relabel adapter fault evidence as a production-process UNKNOWN boot test.",
   "processCases": {
-    "source": "docs/evidence/g11b/b5-runtime-clean.json",
+    "source": "docs/evidence/g11b/b5-runtime-clean-final.json",
     "count": 12,
     "allExactIds": true
   }
