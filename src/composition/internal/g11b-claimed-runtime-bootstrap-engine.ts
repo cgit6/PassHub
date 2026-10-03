@@ -12,6 +12,15 @@ import type {
   VerifiedDataset,
   VerifiedDatasetVerifier,
 } from '../../deployment/internal/g11b-dataset-verification.js';
+import {
+  readG10aAdmissionCompositionProvenance,
+  type G10aAdmissionRuntimeComposition,
+} from './g10a-admission-runtime-composition.js';
+import {
+  readG10aRuntimeHttpApplicationProvenance,
+  type G10aRuntimeHttpApplication,
+} from './g10a-runtime-http-application.js';
+import { isG10aRuntimeCapabilitiesCurrent } from './g10a-runtime-owner.js';
 
 const BOOTSTRAP_MINT = Symbol('G11b claimed runtime bootstrap mint');
 const AUTHORITY_MINT = Symbol('G11b registry authority mint');
@@ -80,7 +89,7 @@ export class RegistryCompositionReceipt {
   }
 }
 
-/** b4 defines the nominal type but deliberately provides no mint path; b5 owns that fixed seam. */
+/** Issued only after the fixed completed HTTP/admission provenance check. */
 export class ProductionCompositionProof {
   declare private readonly nominalProductionCompositionProof: void;
 
@@ -101,6 +110,9 @@ export class LocalServiceGate {
   getState(): LocalServiceGateState {
     const state = gateStates.get(this);
     if (state === undefined) invalid('CLAIMED_RUNTIME_BOOTSTRAP_INVALID');
+    if (state.state === 'OPEN' && state.isCompositionCurrent !== undefined && !state.isCompositionCurrent()) {
+      state.state = 'SHUTDOWN';
+    }
     return state.state;
   }
 
@@ -143,7 +155,9 @@ export class RegistryAuthority {
       invalid('REGISTRY_COMPOSITION_FAILED');
     }
     const registryReceipt = new RegistryCompositionReceipt(REGISTRY_RECEIPT_MINT);
-    registryReceiptStates.set(registryReceipt, Object.freeze({ runtime }));
+    registryReceiptStates.set(registryReceipt, Object.freeze({
+      runtime, registry: composition.registry, capabilities: composition.capabilities,
+    }));
     return Object.freeze({
       registry: composition.registry,
       capabilities: composition.capabilities,
@@ -182,10 +196,16 @@ export class ClaimedRuntimeBootstrap {
       fail(runtime);
       invalid('BOOTSTRAP_LIFECYCLE_INVALID');
     }
+    if (!proofState.isCompositionCurrent()) {
+      fail(runtime);
+      invalid('BOOTSTRAP_LIFECYCLE_INVALID');
+    }
     usedProductionProofs.add(proof);
     gateState(runtime).state = 'AUTHORIZABLE';
     const receipt = new BootstrapReceipt(RECEIPT_MINT);
-    receiptStates.set(receipt, Object.freeze({ runtime }));
+    receiptStates.set(receipt, Object.freeze({
+      runtime, isCompositionCurrent: proofState.isCompositionCurrent, isLifecycleCurrent: proofState.isLifecycleCurrent,
+    }));
     return receipt;
   }
 
@@ -198,7 +218,12 @@ export class ClaimedRuntimeBootstrap {
       fail(runtime);
       invalid('BOOTSTRAP_LIFECYCLE_INVALID');
     }
+    if (!receiptState.isCompositionCurrent()) {
+      fail(runtime);
+      invalid('BOOTSTRAP_LIFECYCLE_INVALID');
+    }
     usedReceipts.add(receipt);
+    gateState(runtime).isCompositionCurrent = receiptState.isLifecycleCurrent;
     gateState(runtime).state = 'OPEN';
   }
 }
@@ -221,16 +246,69 @@ interface RuntimeState {
 
 interface GateState {
   state: LocalServiceGateState;
+  isCompositionCurrent?: () => boolean;
 }
 
 const runtimeStates = new WeakMap<ClaimedRuntimeBootstrap, RuntimeState>();
 const gateStates = new WeakMap<LocalServiceGate, GateState>();
 const authorityStates = new WeakMap<RegistryAuthority, { readonly runtime: RuntimeState; used: boolean }>();
-const registryReceiptStates = new WeakMap<RegistryCompositionReceipt, { readonly runtime: RuntimeState }>();
-const productionProofStates = new WeakMap<ProductionCompositionProof, { readonly runtime: RuntimeState }>();
-const receiptStates = new WeakMap<BootstrapReceipt, { readonly runtime: RuntimeState }>();
+const registryReceiptStates = new WeakMap<RegistryCompositionReceipt, {
+  readonly runtime: RuntimeState;
+  readonly registry: OperationRegistry;
+  readonly capabilities: OperationRegistryCapabilityIssuer;
+}>();
+const productionProofStates = new WeakMap<ProductionCompositionProof, {
+  readonly runtime: RuntimeState;
+  readonly isCompositionCurrent: () => boolean;
+  readonly isLifecycleCurrent: () => boolean;
+}>();
+const receiptStates = new WeakMap<BootstrapReceipt, {
+  readonly runtime: RuntimeState;
+  readonly isCompositionCurrent: () => boolean;
+  readonly isLifecycleCurrent: () => boolean;
+}>();
 const usedProductionProofs = new WeakSet<ProductionCompositionProof>();
 const usedReceipts = new WeakSet<BootstrapReceipt>();
+const usedRegistryReceipts = new WeakSet<RegistryCompositionReceipt>();
+
+/** Fixed private completion seam; all structural or cross-runtime assemblies reject. */
+export function completeClaimedRuntimeProductionComposition(
+  bootstrap: ClaimedRuntimeBootstrap,
+  registryReceipt: RegistryCompositionReceipt,
+  admission: G10aAdmissionRuntimeComposition,
+  application: G10aRuntimeHttpApplication,
+): ProductionCompositionProof {
+  const runtime = runtimeStates.get(bootstrap);
+  if (runtime === undefined) invalid('CLAIMED_RUNTIME_BOOTSTRAP_INVALID');
+  try {
+    const registry = registryReceiptStates.get(registryReceipt);
+    const composed = readG10aAdmissionCompositionProvenance(admission);
+    const http = readG10aRuntimeHttpApplicationProvenance(application);
+    if (gateState(runtime).state !== 'COMPOSING' || registry === undefined
+      || registry.runtime !== runtime || usedRegistryReceipts.has(registryReceipt)
+      || composed.registry !== registry.registry || composed.capabilities !== registry.capabilities
+      || composed.epoch !== runtime.datasetEpoch || composed.run !== runtime.processRunId
+      || composed.runtime === undefined || composed.runtime !== http.runtime
+      || admission.handler !== http.handler || http.isClosing()
+      || !isG10aRuntimeCapabilitiesCurrent(http.runtime)) invalid('BOOTSTRAP_LIFECYCLE_INVALID');
+    const snapshot = http.runtime.control.snapshot();
+    if (snapshot.epoch !== runtime.datasetEpoch || snapshot.run !== runtime.processRunId
+      || snapshot.maintenance.active) invalid('BOOTSTRAP_LIFECYCLE_INVALID');
+    usedRegistryReceipts.add(registryReceipt);
+    const proof = new ProductionCompositionProof(PRODUCTION_PROOF_MINT);
+    const isLifecycleCurrent = () => !http.isClosing() && isG10aRuntimeCapabilitiesCurrent(http.runtime);
+    const isCompositionCurrent = () => {
+      if (!isLifecycleCurrent()) return false;
+      const current = http.runtime.control.snapshot();
+      return current.epoch === runtime.datasetEpoch && current.run === runtime.processRunId && !current.maintenance.active;
+    };
+    productionProofStates.set(proof, Object.freeze({ runtime, isCompositionCurrent, isLifecycleCurrent }));
+    return proof;
+  } catch {
+    fail(runtime);
+    invalid('BOOTSTRAP_LIFECYCLE_INVALID');
+  }
+}
 
 /** Private engine factory; the production facade fixes the G05c bridge. */
 export function createClaimedRuntimeBootstrapWithBridge(

@@ -16,6 +16,7 @@ import {
 } from './g11b-claimed-runtime-bootstrap-engine.js';
 
 export {
+  completeClaimedRuntimeProductionComposition,
   BootstrapReceipt,
   ClaimedRuntimeBootstrap,
   ClaimedRuntimeBootstrapError,

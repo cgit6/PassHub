@@ -70,6 +70,21 @@ export interface G10aAdmissionRuntimeComposition {
   readonly recoveryScheduler?: G10cRecoveryScheduler;
 }
 
+const compositionProvenance = new WeakMap<G10aAdmissionRuntimeComposition, Readonly<{
+  epoch: string;
+  run: string;
+  runtime: G10aRuntimeCapabilities | undefined;
+  registry: G07bAdmissionHandlerOptions['registry'];
+  capabilities: G07bAdmissionHandlerOptions['registryCapabilities'];
+}>>();
+
+/** Private bootstrap inspection: only factory-issued compositions have provenance. */
+export function readG10aAdmissionCompositionProvenance(composition: G10aAdmissionRuntimeComposition) {
+  const facts = compositionProvenance.get(composition);
+  if (facts === undefined) throw new TypeError('G10a admission composition is not trusted');
+  return facts;
+}
+
 const ADMISSION_REQUIRED = Object.freeze([
   'currentDatasetEpoch',
   'registry',
@@ -191,11 +206,16 @@ export function createG10aAdmissionRuntimeComposition(
       runtime,
       ...(driverLogBinding === undefined ? {} : { driverLogBinding }),
     });
-  return Object.freeze({
+  const composition = Object.freeze({
     handler,
     control,
     ...(recoveryScheduler === undefined ? {} : { recoveryScheduler }),
   });
+  compositionProvenance.set(composition, Object.freeze({
+    epoch: options.epoch, run: options.run, runtime,
+    registry: options.admission.registry, capabilities: options.admission.registryCapabilities,
+  }));
+  return composition;
 }
 
 function captureFactoryOptions(input: unknown): Readonly<{

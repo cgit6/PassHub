@@ -71,6 +71,12 @@ export interface G10aRuntimeOwner {
 // otherwise a caller could splice an unrelated issuer or sink into one run.
 const runtimeOwners = new WeakSet<object>();
 const runtimeCapabilities = new WeakSet<object>();
+const runtimeLifecycles = new WeakMap<object, () => boolean>();
+
+/** Private lifecycle check for an exact owner-issued runtime bundle. */
+export function isG10aRuntimeCapabilitiesCurrent(runtime: G10aRuntimeCapabilities): boolean {
+  return runtimeLifecycles.get(runtime)?.() === true;
+}
 
 export function assertG10aRuntimeOwner(value: unknown): asserts value is G10aRuntimeOwner {
   if (typeof value !== 'object' || value === null || !runtimeOwners.has(value)) {
@@ -162,6 +168,7 @@ class PrivateG10aRuntimeOwner implements G10aRuntimeOwner {
         loggingAvailable: logs.store !== null,
       }) as G10aRuntimeCapabilities;
       runtimeCapabilities.add(runtime);
+      runtimeLifecycles.set(runtime, () => this.state === 'RUNNING');
       if (this.state === 'CLOSING' || this.state === 'CLOSED') {
         // A concurrent close awaits this start and performs the canonical
         // listener-then-sink shutdown.  Do not create a second cleanup path.

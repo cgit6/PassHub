@@ -25,14 +25,28 @@ export interface G10aRuntimeHttpApplication {
   close(): Promise<void>;
 }
 
+const applicationProvenance = new WeakMap<G10aRuntimeHttpApplication, Readonly<{
+  runtime: G10aRuntimeCapabilities;
+  handler: AcceptedIngressHandler;
+  isClosing: () => boolean;
+}>>();
+
+/** Private inspection never accepts an assembled structural application. */
+export function readG10aRuntimeHttpApplicationProvenance(application: G10aRuntimeHttpApplication) {
+  const facts = applicationProvenance.get(application);
+  if (facts === undefined) throw new TypeError('G10a runtime HTTP application is not trusted');
+  return facts;
+}
+
 export async function createG10aRuntimeHttpApplication(
   input: G10aRuntimeHttpApplicationOptions,
 ): Promise<G10aRuntimeHttpApplication> {
   const options = captureOptions(input);
   const runtime = await options.runtimeOwner.start();
   let application: PassHubHttpApplication;
+  let handler: AcceptedIngressHandler;
   try {
-    const handler = options.createAcceptedHandler(runtime);
+    handler = options.createAcceptedHandler(runtime);
     if (typeof handler !== 'function') throw new TypeError('G10a accepted handler factory returned invalid handler');
     application = await createPassHubHttpApplication(handler);
   } catch (error) {
@@ -40,7 +54,28 @@ export async function createG10aRuntimeHttpApplication(
     throw error;
   }
   let closePromise: Promise<void> | undefined;
-  return Object.freeze({
+  let nestClosing = false;
+  let serverClosing = false;
+  const originalNestApplication = application.nestApplication;
+  const closeNestApplication = originalNestApplication.close.bind(originalNestApplication);
+  // Nest's own Proxy ignores ordinary property assignments. Retain a private
+  // outer handle that observes close before delegating to the original Proxy.
+  const observedClose = (...args: Parameters<typeof closeNestApplication>) => {
+    nestClosing = true;
+    return closeNestApplication(...args);
+  };
+  application = Object.freeze({
+    ...application,
+    nestApplication: new Proxy(originalNestApplication, {
+      get: (target, property) => property === 'close' ? observedClose : Reflect.get(target, property, target),
+    }),
+  });
+  const closeHttpServer = application.server.close.bind(application.server);
+  application.server.close = (...args: Parameters<typeof closeHttpServer>) => {
+    serverClosing = true;
+    return closeHttpServer(...args);
+  };
+  const composed = Object.freeze({
     application,
     close(): Promise<void> {
       if (closePromise !== undefined) return closePromise;
@@ -61,6 +96,10 @@ export async function createG10aRuntimeHttpApplication(
       return closePromise;
     },
   });
+  applicationProvenance.set(composed, Object.freeze({
+    runtime, handler, isClosing: () => serverClosing || nestClosing || closePromise !== undefined,
+  }));
+  return composed;
 }
 
 function captureOptions(input: unknown): Readonly<G10aRuntimeHttpApplicationOptions> {

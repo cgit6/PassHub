@@ -19,10 +19,17 @@ import {
   RegistryCompositionReceipt,
   createClaimedRuntimeBootstrap,
   createOrdinaryReadOnlyServiceGate,
+  completeClaimedRuntimeProductionComposition,
   type ClaimedRuntimeBootstrapClaim,
   type ClaimedRuntimeBootstrapClaimer,
   type RegistryCompositionOptions,
 } from '../../src/composition/internal/g11b-claimed-runtime-bootstrap.js';
+import { createG10aAdmissionRuntimeComposition, type G10aAdmissionRuntimeComposition } from '../../src/composition/internal/g10a-admission-runtime-composition.js';
+import { createG10aRuntimeHttpApplication, type G10aRuntimeHttpApplication } from '../../src/composition/internal/g10a-runtime-http-application.js';
+import { createG10aRuntimeOwner } from '../../src/composition/internal/g10a-runtime-owner.js';
+import { RUNTIME_CONTROL_SOCKET_FILE_NAME } from '../../src/runtime/internal/runtime-control-socket-path.js';
+import { createLegacyQueryAdmissionCapability } from '../../src/composition/internal/query-admission-binding.js';
+import { createAdmissionWorkHandoffBundle, createHttpResponsePlanBundle, createUnknownRecognitionCoordinatorBundle } from '../../src/composition/internal/index.js';
 import { createVerifiedDatasetVerifierForTest } from '../support/g11b-dataset-verification-test-support.js';
 import {
   createPersistentRunClaimerForTest,
@@ -30,8 +37,10 @@ import {
 import { createG11bRunTicketIntakeForFsTest } from '../support/g11b-run-ticket-test-support.js';
 
 const temporaryDirectories: string[] = [];
+const applications: G10aRuntimeHttpApplication[] = [];
 
 afterEach(async () => {
+  await Promise.all(applications.splice(0).map((application) => application.close()));
   const results = await Promise.allSettled(temporaryDirectories.splice(0).map(async (directory) => {
     if (!directory.startsWith(join(tmpdir(), 'passhub-b4-'))) throw new Error('unsafe cleanup');
     await rm(directory, { recursive: true, force: true });
@@ -132,6 +141,51 @@ function compose(bundle: ReturnType<typeof createBootstrap>) {
   return bundle.bootstrap.takeRegistryAuthority().composeRegistry(registryOptions());
 }
 
+async function completedComposition() {
+  const ctx = await claimContext();
+  const bundle = createBootstrap(ctx);
+  const registry = compose(bundle);
+  const directory = await mkdtemp(join(tmpdir(), 'passhub-b4-'));
+  temporaryDirectories.push(directory);
+  const owner = createG10aRuntimeOwner({
+    epoch: ctx.epoch, run: ctx.runId,
+    logDirectory: join(directory, 'logs'), controlDirectory: join(directory, 'control'),
+    controlSocketPath: join(directory, 'control', RUNTIME_CONTROL_SOCKET_FILE_NAME),
+    monotonicClock: { nowMs: () => performance.now() }, awaitObservation: () => undefined,
+  });
+  const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: ctx.epoch });
+  const handoff = createAdmissionWorkHandoffBundle();
+  const query = createLegacyQueryAdmissionCapability({
+    validate: async () => ({ kind: 'REJECTED', response: plans.technical.issue('INVALID_REQUEST') }),
+    query: async () => plans.technical.issue('INVALID_REQUEST'),
+  });
+  let admission!: G10aAdmissionRuntimeComposition;
+  const application = await createG10aRuntimeHttpApplication({
+    runtimeOwner: owner,
+    createAcceptedHandler(runtime) {
+      admission = createG10aAdmissionRuntimeComposition({
+        epoch: ctx.epoch, run: ctx.runId, runtime,
+        monotonicClock: { nowMs: () => performance.now() }, awaitObservation: () => undefined,
+        admission: {
+          currentDatasetEpoch: ctx.epoch, registry: registry.registry, registryCapabilities: registry.capabilities,
+          responsePlans: plans, workHandoff: handoff, validator: query.validator,
+          unknownRecognition: createUnknownRecognitionCoordinatorBundle().handler,
+          work: {
+            query: query.work.query,
+            login: async () => plans.technical.issue('INVALID_REQUEST'),
+            management: async () => ({ disposition: 'KNOWN_NO_EFFECT', response: plans.technical.issue('INVALID_REQUEST') }),
+            recognition: async () => ({ disposition: 'KNOWN_NO_EFFECT', response: plans.technical.issue('INVALID_REQUEST') }),
+          },
+        },
+      });
+      return admission.handler;
+    },
+  });
+  applications.push(application);
+  return { ctx, bundle, registry, admission, application, owner,
+    proof: () => completeClaimedRuntimeProductionComposition(bundle.bootstrap, registry.registryReceipt, admission, application) };
+}
+
 describe('G11b-b4a claimed provenance and nominal G05c bridge', () => {
   test('exact six-element provenance produces one genuine WRITABLE registry authority', async () => {
     const ctx = await claimContext();
@@ -213,6 +267,158 @@ describe('G11b-b4a claimed provenance and nominal G05c bridge', () => {
 });
 
 describe('G11b-b4b bootstrap receipt and local service gate', () => {
+  test('genuine completed composition issues opaque proof and receipt and opens exactly once', async () => {
+    const composed = await completedComposition();
+    const proof = composed.proof();
+    expect(proof).toBeInstanceOf(ProductionCompositionProof);
+    expect(composed.bundle.serviceGate.getState()).toBe('COMPOSING');
+    const receipt = composed.bundle.bootstrap.markCompositionComplete(proof);
+    expect(receipt).toBeInstanceOf(BootstrapReceipt);
+    expect(composed.bundle.serviceGate.getState()).toBe('AUTHORIZABLE');
+    for (const token of [proof, receipt]) {
+      expect(Object.isFrozen(token)).toBe(true);
+      expect(Reflect.ownKeys(token)).toEqual([]);
+      expect(JSON.stringify(token)).toBe('{}');
+    }
+    composed.bundle.bootstrap.authorizeReady(receipt);
+    expect(composed.bundle.serviceGate.isOpen()).toBe(true);
+    expectCode(() => composed.bundle.bootstrap.authorizeReady(receipt), 'BOOTSTRAP_LIFECYCLE_INVALID');
+    expect(composed.bundle.serviceGate.isOpen()).toBe(false);
+  });
+
+  test.each(['registry', 'admission', 'application'] as const)(
+    'completion refuses foreign %s provenance against a fresh COMPOSING bootstrap', async (member) => {
+    const first = await completedComposition();
+    const foreign = await completedComposition();
+    expect(first.bundle.serviceGate.getState()).toBe('COMPOSING');
+    expectCode(() => completeClaimedRuntimeProductionComposition(
+      first.bundle.bootstrap,
+      member === 'registry' ? foreign.registry.registryReceipt : first.registry.registryReceipt,
+      member === 'admission' ? foreign.admission : first.admission,
+      member === 'application' ? foreign.application : first.application,
+    ), 'BOOTSTRAP_LIFECYCLE_INVALID');
+    expect(first.bundle.serviceGate.getState()).toBe('FAILED');
+    expect(foreign.bundle.serviceGate.getState()).toBe('COMPOSING');
+  });
+
+  test('completion refuses structural HTTP application against fresh COMPOSING bootstrap', async () => {
+    const foreign = await completedComposition();
+    expectCode(() => completeClaimedRuntimeProductionComposition(
+      foreign.bundle.bootstrap, foreign.registry.registryReceipt, foreign.admission,
+      { application: foreign.application.application, close: foreign.application.close },
+    ), 'BOOTSTRAP_LIFECYCLE_INVALID');
+  });
+
+  test('genuine foreign proofs and receipts cannot open another bootstrap', async () => {
+    const first = await completedComposition();
+    const second = await completedComposition();
+    const proof = first.proof();
+    expectCode(() => second.bundle.bootstrap.markCompositionComplete(proof), 'BOOTSTRAP_LIFECYCLE_INVALID');
+    const receipt = first.bundle.bootstrap.markCompositionComplete(proof);
+    const third = await completedComposition();
+    third.bundle.bootstrap.markCompositionComplete(third.proof());
+    expect(third.bundle.serviceGate.getState()).toBe('AUTHORIZABLE');
+    expectCode(() => third.bundle.bootstrap.authorizeReady(receipt), 'BOOTSTRAP_LIFECYCLE_INVALID');
+    expect(third.bundle.serviceGate.getState()).toBe('FAILED');
+    expect(first.bundle.serviceGate.getState()).toBe('AUTHORIZABLE');
+    first.bundle.bootstrap.authorizeReady(receipt);
+    expect(first.bundle.serviceGate.isOpen()).toBe(true);
+  });
+
+  test('proof mint and mark are one-use and genuine receipt remains stale after shutdown', async () => {
+    const first = await completedComposition();
+    first.proof();
+    expectCode(first.proof, 'BOOTSTRAP_LIFECYCLE_INVALID');
+    const second = await completedComposition();
+    const proof = second.proof();
+    const receipt = second.bundle.bootstrap.markCompositionComplete(proof);
+    expectCode(() => second.bundle.bootstrap.markCompositionComplete(proof), 'BOOTSTRAP_LIFECYCLE_INVALID');
+    expectCode(() => second.bundle.bootstrap.authorizeReady(receipt), 'BOOTSTRAP_LIFECYCLE_INVALID');
+    const third = await completedComposition();
+    const stale = third.bundle.bootstrap.markCompositionComplete(third.proof());
+    third.bundle.serviceGate.beginShutdown();
+    expectCode(() => third.bundle.bootstrap.authorizeReady(stale), 'BOOTSTRAP_LIFECYCLE_INVALID');
+    expect(third.bundle.serviceGate.getState()).toBe('SHUTDOWN');
+  });
+
+  test('actual HTTP application shutdown invalidates pending proof, receipt and open readiness', async () => {
+    const pendingProof = await completedComposition();
+    const proof = pendingProof.proof();
+    await pendingProof.application.close();
+    expectCode(() => pendingProof.bundle.bootstrap.markCompositionComplete(proof), 'BOOTSTRAP_LIFECYCLE_INVALID');
+    const pendingReceipt = await completedComposition();
+    const receipt = pendingReceipt.bundle.bootstrap.markCompositionComplete(pendingReceipt.proof());
+    await pendingReceipt.application.close();
+    expectCode(() => pendingReceipt.bundle.bootstrap.authorizeReady(receipt), 'BOOTSTRAP_LIFECYCLE_INVALID');
+    const open = await completedComposition();
+    open.bundle.bootstrap.authorizeReady(open.bundle.bootstrap.markCompositionComplete(open.proof()));
+    expect(open.bundle.serviceGate.isOpen()).toBe(true);
+    const closing = open.application.close();
+    expect(open.bundle.serviceGate.getState()).toBe('SHUTDOWN');
+    await closing;
+    const closed = await completedComposition();
+    await closed.application.close();
+    expectCode(closed.proof, 'BOOTSTRAP_LIFECYCLE_INVALID');
+  });
+
+  test.each(['nest', 'owner'] as const)('direct %s close invalidates a genuine pending proof', async (closer) => {
+    const composed = await completedComposition();
+    const proof = composed.proof();
+    const closing = closer === 'nest'
+      ? composed.application.application.nestApplication.close()
+      : composed.owner.close();
+    expectCode(() => composed.bundle.bootstrap.markCompositionComplete(proof), 'BOOTSTRAP_LIFECYCLE_INVALID');
+    expect(composed.bundle.serviceGate.isOpen()).toBe(false);
+    await closing;
+  });
+
+  test.each(['nest', 'owner'] as const)('direct %s close invalidates a genuine AUTHORIZABLE receipt', async (closer) => {
+    const composed = await completedComposition();
+    const receipt = composed.bundle.bootstrap.markCompositionComplete(composed.proof());
+    const closing = closer === 'nest'
+      ? composed.application.application.nestApplication.close()
+      : composed.owner.close();
+    expectCode(() => composed.bundle.bootstrap.authorizeReady(receipt), 'BOOTSTRAP_LIFECYCLE_INVALID');
+    await closing;
+  });
+
+  test.each(['proof', 'receipt'] as const)('maintenance after %s issuance prevents authorization', async (stage) => {
+    const composed = await completedComposition();
+    const proof = composed.proof();
+    const receipt = stage === 'receipt' ? composed.bundle.bootstrap.markCompositionComplete(proof) : undefined;
+    const current = composed.admission.control.snapshot();
+    await composed.admission.control.drain({
+      requestControlId: randomUUID(), epoch: composed.ctx.epoch, run: composed.ctx.runId,
+      expectedRevision: current.revision, timeoutMs: 100,
+    });
+    expect(composed.admission.control.snapshot().maintenance.active).toBe(true);
+    if (receipt === undefined) {
+      expectCode(() => composed.bundle.bootstrap.markCompositionComplete(proof), 'BOOTSTRAP_LIFECYCLE_INVALID');
+    } else {
+      expectCode(() => composed.bundle.bootstrap.authorizeReady(receipt), 'BOOTSTRAP_LIFECYCLE_INVALID');
+    }
+    expect(composed.bundle.serviceGate.isOpen()).toBe(false);
+  });
+
+  test.each(['proof', 'receipt', 'open'] as const)('direct HTTP server close invalidates %s lifecycle', async (stage) => {
+    const composed = await completedComposition();
+    await composed.application.application.nestApplication.listen(0, '127.0.0.1');
+    const proof = composed.proof();
+    const receipt = stage !== 'proof' ? composed.bundle.bootstrap.markCompositionComplete(proof) : undefined;
+    if (stage === 'open' && receipt !== undefined) composed.bundle.bootstrap.authorizeReady(receipt);
+    const closing = new Promise<void>((resolve, reject) => {
+      composed.application.application.server.close((error) => error === undefined ? resolve() : reject(error));
+    });
+    if (stage === 'proof') {
+      expectCode(() => composed.bundle.bootstrap.markCompositionComplete(proof), 'BOOTSTRAP_LIFECYCLE_INVALID');
+    } else if (stage === 'receipt' && receipt !== undefined) {
+      expectCode(() => composed.bundle.bootstrap.authorizeReady(receipt), 'BOOTSTRAP_LIFECYCLE_INVALID');
+    } else {
+      expect(composed.bundle.serviceGate.getState()).toBe('SHUTDOWN');
+    }
+    expect(composed.bundle.serviceGate.isOpen()).toBe(false);
+    await closing;
+  });
   test('registry-only receipt cannot mark production composition complete or authorize ready', async () => {
     const bundle = createBootstrap(await claimContext());
     const composition = compose(bundle);
@@ -334,8 +540,8 @@ describe('G11b-b4 private boundaries', () => {
     const engine = await readFile(
       join(process.cwd(), `src/composition/internal/${engineName}.ts`), 'utf8',
     );
-    expect(engine).not.toContain('productionProofStates.set');
-    expect(engine).not.toContain('new ProductionCompositionProof');
+    expect(engine.split('productionProofStates.set').length - 1).toBe(1);
+    expect(engine.split('new ProductionCompositionProof').length - 1).toBe(1);
   });
 
   test('engine has no Mongo, HTTP, ready route, reset, ticket parsing, or arbitrary WRITABLE mint', async () => {
