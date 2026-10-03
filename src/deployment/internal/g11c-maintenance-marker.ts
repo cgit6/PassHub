@@ -54,7 +54,7 @@ async function acquireMarker(directory: string, path: string): Promise<G11cMaint
     try {
       // Re-open the existing marker with O_NOFOLLOW and validate the same
       // descriptor that is adopted, avoiding an lstat-to-use pathname race.
-      const existing = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const existing = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
       try {
         const info = await existing.stat();
         if (!isSafeMarkerStat(info)) throw new Error('unsafe maintenance marker');

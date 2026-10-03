@@ -1,7 +1,9 @@
 import { chmod, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { statSync } from 'node:fs';
+import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 
 import {
   createG11cMaintenanceMarkerAdapter,
@@ -9,6 +11,7 @@ import {
 } from '../../src/deployment/internal/g11c-maintenance-marker.js';
 
 const directories: string[] = [];
+const execFileAsync = promisify(execFile);
 
 afterEach(async () => {
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
@@ -47,6 +50,13 @@ describe('G11c persistent maintenance marker adapter', () => {
     const root = await directory();
     const path = join(root, 'maintenance');
     await writeFile(path, 'unexpected', { mode: 0o600 });
+    const adapter = createG11cMaintenanceMarkerAdapter({ directory: root });
+    await expect(adapter.acquire()).rejects.toMatchObject({ code: 'MARKER_ACQUIRE_FAILED' });
+  });
+
+  test('rejects an existing FIFO without waiting for a writer', async () => {
+    const root = await directory();
+    await execFileAsync('mkfifo', [join(root, 'maintenance')]);
     const adapter = createG11cMaintenanceMarkerAdapter({ directory: root });
     await expect(adapter.acquire()).rejects.toMatchObject({ code: 'MARKER_ACQUIRE_FAILED' });
   });
