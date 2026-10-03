@@ -228,7 +228,7 @@ describe('G11b b5 process identity real-FS intake', () => {
 });
 
 describe('G11b b5 process identity production boundary', () => {
-  test('production path is fixed, derived from the canonical runtime directory, and not wired yet', async () => {
+  test('production path is fixed, derived from the canonical runtime directory, and wired through startup', async () => {
     expect(G11B_RUN_TICKET_DIRECTORY).toBe('/run/passhub/api');
     expect(G11B_PROCESS_IDENTITY_PATH).toBe('/run/passhub/api/process-run-id');
     const facade = await readFile(
@@ -239,8 +239,9 @@ describe('G11b b5 process identity production boundary', () => {
     expect(facade).not.toContain('process.argv');
     expect(facade).not.toContain('directory: string');
     const productionMain = await readFile(join(process.cwd(), 'src/deployment/production-main.ts'), 'utf8');
-    expect(productionMain).not.toContain('g11b-process-identity');
-    expect(productionMain).not.toContain('process-run-id');
+    expect(productionMain).toContain('g11b-process-identity-intake');
+    expect(productionMain).toContain('ProcessIdentityIntakeError');
+    expect(productionMain).toContain('G11B_PROCESS_IDENTITY_PATH');
   });
 
   test('configurable engine importers are exact and test support cannot enter production', async () => {
