@@ -23,7 +23,7 @@ const allowDirty = process.argv[2] === '--allow-dirty-development';
 if (process.argv.length > (allowDirty ? 3 : 2)) throw new Error('G11c runtime arguments are invalid');
 const cases = [];
 let sourceCommit; let sourceDirty; let sourceSha256; let imageId; let buildAttempted = false; let failure;
-let epoch; const runId = randomUUID(); let ticketId; let port; let noLateObservations;
+let epoch; const runId = randomUUID(); let ticketId; let port; let noLateObservations; let apiProcessEvidence; let mongoProcessEvidence;
 
 function command(binary, args, options = {}) {
   try { return execFileSync(binary, args, { encoding: 'utf8', env, timeout: options.timeout ?? 120_000, input: options.input, stdio: ['pipe', 'pipe', 'pipe'] }).trim(); }
@@ -138,6 +138,9 @@ function mongoPrimary() {
 }
 function fingerprint() { const files = command('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z']).split('\0').filter(Boolean).sort(); const hash = createHash('sha256'); for (const file of files) hash.update(`${file}\0`).update(readFileSync(join(repository, file))).update('\0'); return hash.digest('hex'); }
 function findPort() { return new Promise((resolvePort, reject) => { const server = createServer(); server.once('error', reject); server.listen(0, '127.0.0.1', () => { const address = server.address(); server.close((error) => error ? reject(error) : resolvePort(address.port)); }); }); }
+function identityEvidence(identity) {
+  return { idSha256: createHash('sha256').update(identity.id).digest('hex'), pidBefore: identity.pidBefore, finalState: identity.state };
+}
 
 try {
   assert(process.geteuid?.() === 1000, 'G11c formal runtime requires uid 1000');
@@ -155,8 +158,8 @@ try {
   compose(['up', '-d', 'api', 'proxy']); await waitFor('API ready', runtimeReady); assert(metadata().claim?.runId === runId, 'bootstrap claim missing'); cases.push('G11C_BOOTSTRAP_READY');
   const before = metadata(); const beforeSnapshot = datasetSnapshot(); const markerPath = acquireMarker(); assert(existsSync(markerPath), 'persistent marker missing'); cases.push('G11C_MARKER_ACTIVE');
   const drain = privateDrain(30_000); cases.push(`G11C_PRIVATE_DRAIN_${drain.outcome}`);
-  const api = stopAndObserve('api'); assert(!existsSync(join(runtime, 'control', 'runtime-control.sock')), 'API private socket survived'); cases.push('G11C_API_PROCESS_GONE');
-  const mongo = stopAndObserve('mongo'); cases.push('G11C_MONGO_PROCESS_GONE');
+  const api = stopAndObserve('api'); apiProcessEvidence = identityEvidence(api); assert(!existsSync(join(runtime, 'control', 'runtime-control.sock')), 'API private socket survived'); cases.push('G11C_API_PROCESS_GONE');
+  const mongo = stopAndObserve('mongo'); mongoProcessEvidence = identityEvidence(mongo); cases.push('G11C_MONGO_PROCESS_GONE');
   await mongoPrimary(); cases.push('G11C_MONGO_PRIMARY_RECOVERED');
   assert(existsSync(markerPath), 'maintenance marker disappeared during recovery'); assert(containerState(api.id).Running === false); assert(containerState(mongo.id).Running === true);
   const after = metadata(); assert(JSON.stringify(after) === JSON.stringify(before), 'no-late-work metadata changed across isolated recovery');
@@ -172,4 +175,4 @@ finally {
 if (failure !== undefined) throw failure;
 assert(cases.includes('G11C_NO_LATE_WORK_OBSERVED'), 'G11c manifest incomplete');
 assert(fingerprint() === sourceSha256, 'source changed during G11c runtime');
-process.stdout.write(`${JSON.stringify({ gate: 'G11c', status: 'PASS', evidenceScope: sourceDirty ? 'development-runtime-slice' : 'clean-runtime-slice', cases, apiProcess: { id: 'redacted', pidBefore: 'redacted' }, mongoProcess: { id: 'redacted', pidBefore: 'redacted' }, markerRemains: true, apiRemainsOff: true, mongoPrimaryRecovered: true, metadataStable: true, noLateObservations, sourceCommit, sourceDirty, sourceSha256, apiImageId: imageId, composeSha256: createHash('sha256').update(readFileSync(composeFile)).digest('hex') })}\n`);
+process.stdout.write(`${JSON.stringify({ gate: 'G11c', status: 'PASS', evidenceScope: sourceDirty ? 'development-runtime-slice' : 'clean-runtime-slice', cases, apiProcess: apiProcessEvidence, mongoProcess: mongoProcessEvidence, markerRemains: true, apiRemainsOff: true, mongoPrimaryRecovered: true, metadataStable: true, noLateObservations, sourceCommit, sourceDirty, sourceSha256, apiImageId: imageId, composeSha256: createHash('sha256').update(readFileSync(composeFile)).digest('hex') })}\n`);
