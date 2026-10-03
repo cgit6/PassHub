@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -29,20 +29,21 @@ function fileSha256(path) {
   return createHash('sha256').update(readFileSync(join(repository, path))).digest('hex');
 }
 
+function git(args) {
+  return execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim();
+}
+
 function sourceFingerprint() {
-  const paths = [
-    'src/deployment/ingress-client-address.ts',
-    'src/deployment/production-main.ts',
-    'src/deployment/internal/g11a-topology-contract.ts',
-    'scripts/g11/check-g11a-topology.mjs',
-    'scripts/g11/test-g11a-runtime.mjs',
-    'scripts/g11/test-g11a.mjs',
-    'test/unit/g11a-topology-contract.test.ts',
-  ];
+  const paths = git(['ls-files', '-z']).split('\0').filter(Boolean).sort();
   const hash = createHash('sha256');
   for (const path of paths) hash.update(`${path}\0`).update(readFileSync(join(repository, path))).update('\0');
   return hash.digest('hex');
 }
+
+const trackedStatus = git(['status', '--porcelain', '--untracked-files=no']);
+if (trackedStatus.length > 0) throw new Error('G11a formal evidence requires a clean tracked worktree');
+const sourceCommit = git(['rev-parse', 'HEAD']);
+if (!/^[0-9a-f]{40}$/u.test(sourceCommit)) throw new Error('G11a source commit is invalid');
 
 function run(args, timeout) {
   const result = spawnSync('npm', args, {
@@ -109,7 +110,7 @@ try {
     unit: { suites: 1, tests: 18 },
     staticCases: STATIC_CASES,
     runtimeCases: RUNTIME_CASES,
-    fingerprints: { sourceSha256: sourceFingerprint(), ...runtimeFingerprints },
+    fingerprints: { sourceCommit, sourceSha256: sourceFingerprint(), ...runtimeFingerprints },
   };
 } catch (error) {
   primaryFailure = error;
