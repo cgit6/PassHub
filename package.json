@@ -99,6 +99,7 @@
     "test:g11b:b3c-a:integration": "node scripts/test-g11b-b3c-a-integration.mjs",
     "test:g11b:b3c-b:fault": "node scripts/test-g11b-b3c-b-fault.mjs",
     "test:g11b:b4:unit": "npm run clean && npm run build && timeout --foreground 60s env NODE_OPTIONS=--experimental-vm-modules jest --config jest.g11b.b4.unit.config.cjs",
+    "test:g11b:b5-process-identity:unit": "npm run clean && npm run build && timeout --foreground 60s env NODE_OPTIONS=--experimental-vm-modules jest --config jest.g11b.b5-process-identity.unit.config.cjs",
     "test:integration": "npm run build && NODE_OPTIONS=--experimental-vm-modules jest --config jest.integration.config.cjs",
     "test:g04a": "node scripts/test-g04a-integration.mjs",
     "test:g04b": "node scripts/test-g04b-integration.mjs",
