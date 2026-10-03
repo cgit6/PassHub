@@ -23,7 +23,7 @@ aliases:
   - "PassHub 求職作品範圍決策"
   - "PassHub 架構辯論"
 created: "2026-09-15"
-updated: "2026-10-03"
+updated: "2026-10-04"
 ---
 
 # PassHub v1 業務邊界與架構討論紀錄
@@ -31,16 +31,16 @@ updated: "2026-10-03"
 ## 快速檢索卡
 
 - 核心問題：在小型訪客資格／模擬辨識決策業務上，形成合理、模組化、可驗證的Node.js/TypeScript架構與逐關方案；不以兩天時限取代品質論證。
-- 當前結論：D160完成規劃封口；G02–G11a各自限定 evidence 已保存，目前停止於 G11a。D187 同步七個 reset target、canonical writeRunClaim 語意及 G11a–G11g STOP；下一合法 gate 為 G11b，完整 v1 未完成。
+- 當前結論：D160完成規劃封口；G02–G11b各自限定 evidence 已保存，目前停止於 G11b。D187 同步七個 reset target、canonical writeRunClaim 語意及 G11a–G11g STOP；下一合法 gate 為 G11c，完整 v1 未完成。
 - 關鍵爭點：D129原生中止兩送有界組預扣不退、跨窗口局部例外；D130較早確認起點／D131七格；D143 Face反向unique同txn替換必须G04a先真測。D149同epoch普通restart關寫是明示可用性代價，不能依memory空接管。
 - 適用於：D01–D187有效採用／修正、獨立角色公開論點、官方查證及剩餘gate風險。採Nest預設Express/strictTS/官方driver/單API/單Mongo member replica set，非無框架或HA；D157原25STOP經D187拆分G11後現為31STOP，見實作方案。
 - 不適用於：把歷史候選／官方語法／manifest／獨立唯讀實驗當PassHub已完成成果。D117 JSON v2已取代binary v1，D130永久終局候選未採，D89安全條件續辦仍有效；D161只有A01為V。
-- 待驗證：G10及其後gate。G09a已證安全查詢，G09b已完成固定fixture、4,000 raw及40 executionStats限定實驗；D184只使G10a logger／private control契約READY，仍未驗其程式，以及G10b driver wire／native清理、G10c真回程loss、G11部署及完整release。
+- 待驗證：G11c及其後gate。G09a已證安全查詢，G09b已完成固定fixture、4,000 raw及40 executionStats限定實驗；G10a–G10c與G11a–G11b限定證據已保存，仍未驗G11c maintenance lifecycle、G11d reset／seed、G11e排程、G11f fault matrix、G11g綜合release及完整G12。
 - 實作者入口：[實作方案](implementation-plan.md)，再讀[136要求矩陣](requirements-traceability.md)及[業務規格](business-scope.md)，並回查對應D原文。未來每子關報實際證據後STOP，D114不授權未來不停實作。
 
 ## 閱讀狀態與階段界線
 
-- 最新狀態：G10a、G10b、G10c 限定 gate 已通過；G11 deployment／maintenance 與完整 v1 尚未完成。D187 使下一合法 gate G11a READY。
+- 最新狀態：G10a、G10b、G10c、G11a、G11b 限定 gate 已通過；G11c–G11g maintenance 與完整 v1 尚未完成。下一合法 gate 為 G11c。
 - D01–D35 及所有較早摘要／交接保留歷史；其中「K1尚未同步」「尚未開始第二階段」「API/schema未定」不代表當前狀態。最新有效版本由D117/119/122/125/129–139/140–157及後續明確覆核修正判定，歷史block不回寫。下方回溯狀態描述只對當時有效，不能用來覆蓋新版。
 - 文件整體settled代表有效規劃已採用；D161留下舊碼處理證據，D163–D179留下G02–G08b各自限定證據，D180／D181留下G09a契約及證據，D182／D183留下G09b契約及證據，D184留下G10a開發前契約。partially-sourced仍含專案取捨、官方查證與未實測組合；上述限定gates不代表G10工程、G11部署或其餘107要求通過。
 - 「使用者已接受」與「辯論暫定」逐 block 區分。授權保存辯論不等於確認候選架構，也不等於授權重寫程式。
@@ -3464,3 +3464,11 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - `processRunId` 固定由 API runtime directory 的 direct-child private file 提供：`/run/passhub/api/process-run-id`。檔案必須 real directory 下的 regular non-symlink、API euid 擁有、mode `0400`、UTF-8 單一 LF、canonical lowercase UUIDv4；不接受 env、argv、HTTP、Mongo 或任意可由部署者改寫的 path。G11e 之後負責在同一 private runtime mount 中簽發對應檔案與 ticket。
 - G04b production activation 必須新增 verification-only 的既有 schema seam：只在同一 Mongo `Db`、同一 `VerifiedDatasetVerifier`、同一 `VerifiedDataset` provenance 成立後取得七個既有 collection handles；不得呼叫 `ensureSchema`、建 collection/index、`collMod`、repair、seed 或寫入。structural／foreign／未驗證輸入一律拒絕。
 - 兩個 seam 完成前不接 `production-main`、不產 `ProductionCompositionProof`，G11b 仍未通過；避免用 always-503 或 test-only fake 冒充 b5。
+
+### D193｜G11b b1–b5 完整證據通過，解鎖 G11c
+
+- 日期：2026-10-04；狀態：PM、架構師與測試員對最終修正版各自覆核後 PASS；G11b STOP 解除，下一合法 gate 為 G11c。`docs/evidence/g11b/report.md` 與 `b5-runtime-clean-final4.json` 為正式證據。本紀錄不改變 G11c–G11g 未完成的狀態。
+- b5 unit manifest 已封閉為 exact 6 suites／33 tests，failed／pending／todo 均為 0；不再接受只剩 18 個測試仍算通過的縮減 manifest。clean exact runner 使用 Node `v24.21.0`／npm `11.19.0`，source commit `ec9ca6e`、sourceDirty=false，12 個 exact runtime case 全數通過。
+- production runtime 真實走 immutable API image、G11a Compose、Mongo rs0 與 HTTPS business flow；驗證 canonical claim、one-use ticket consumption、local-ready、login／create／QR ENTRY／query、same-epoch ordinary restart closed、post-claim failure closed、SIGTERM 後 API graceful exit、private socket 消失、API Mongo connection 歸零及 cleanup。Mongo process 的確停留待 G11c，不在 G11b 證據中宣稱。
+- secret scan 擴大至 API／Mongo／proxy 的 argv、environment、container／rotated logs、HTTP response body（僅 login／create 宣告 body 欄位可回傳的 access token／QR token 例外，headers 與其他 body 仍掃描）、Mongo document snapshot、production canonical／host ticket path／wire 與 final process evidence；並在 API stop 後再次掃描。其餘秘密與 ticket material 仍必須不存在。
+- 架構與邊界：G11b 只解除 persistent claim、one-use ticket、nominal WRITABLE bridge、bootstrap receipt／single-use ready 與 production process 接線；不建立 marker／drain／API／Mongo 確停、reset／seed、host flock／systemd、fault／rerun matrix 或公開 HTTPS release。下一步只能開始 G11c。

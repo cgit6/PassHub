@@ -1,0 +1,22 @@
+{
+  "gate": "G11b",
+  "slice": "b5",
+  "status": "PASS",
+  "evidenceScope": "clean-process-slice",
+  "toolchain": { "image": "passhub-g11b-exact-runner:local", "node": "v24.21.0", "npm": "11.19.0", "runner": "node scripts/g11/test-g11b-runtime.mjs" },
+  "cases": ["G11B_RUNTIME_IMMUTABLE_IMAGE", "G11B_RUNTIME_BEFORE_CLAIM_CLOSED", "G11B_RUNTIME_TICKET_CONSUMED", "G11B_RUNTIME_CANONICAL_CLAIM", "G11B_RUNTIME_LOCAL_READY", "G11B_RUNTIME_BUSINESS_FLOW", "G11B_RUNTIME_PRIVATE_SOCKET", "G11B_RUNTIME_SECRET_SCAN", "G11B_RUNTIME_SIGTERM_DISAPPEARANCE", "G11B_RUNTIME_ORDINARY_RESTART_CLOSED", "G11B_RUNTIME_POSTCLAIM_FAILURE_CLOSED", "G11B_RUNTIME_CLEANUP"],
+  "fingerprints": {
+    "sourceCommit": "ec9ca6e370f78baa02300b9e92bc0ae94f3b9c39",
+    "sourceDirty": false,
+    "sourceSha256": "bf4d4a026ca950f4297a2f431a60eed21bb286fef63a5e02ff0fbe3b5407e65a",
+    "apiImageId": "sha256:c152769e37094a774281c89cc4af28a4ec2f729b5fd6606c8a71c9c688cb7a0c",
+    "composeSha256": "9637ed74abbd520321f3ce2bfcf4e631a7f7966aa11fe3694d4e3198442561f9",
+    "dockerfileSha256": "6d022c40336cbc94c9ac1de707957c2790dd9b7d6637fc9a34a8f2b65f51afe3"
+  },
+  "verification": {
+    "exactUnitManifest": "6 suites / 33 tests / failed=0 / pending=0 / todo=0",
+    "runtimeCommand": "docker run --user 1000:1000 --group-add <docker-socket-gid> --network host ... passhub-g11b-exact-runner:local node scripts/g11/test-g11b-runtime.mjs",
+    "secretScan": "argv/env/container logs/rotated logs/HTTP response bodies with only declared login/create body-field allowances removed before scanning and headers always scanned/Mongo snapshot/canonical and host ticket path and wire/final process evidence; repeated after API stop",
+    "cleanup": "compose project resources, image tag and temporary runtime tree absent"
+  }
+}
