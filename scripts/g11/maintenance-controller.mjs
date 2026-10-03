@@ -1,4 +1,4 @@
-import { closeSync, existsSync, openSync, readFileSync, writeFileSync, chmodSync, lstatSync, statSync } from 'node:fs';
+import { closeSync, constants, existsSync, openSync, readFileSync, writeFileSync, chmodSync, lstatSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 
@@ -34,7 +34,7 @@ if (datasetEpoch === null || processRunId === null) {
 } else {
   const wire = `${JSON.stringify({ v: 'g11b.run-ticket.v1', ticketId, datasetEpoch, processRunId })}\n`;
   try {
-    const fd = openSync(ticketPath, 'wx', 0o400);
+    const fd = openSync(ticketPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o400);
     try { writeFileSync(fd, wire, { encoding: 'utf8' }); } finally { closeSync(fd); }
     chmodSync(ticketPath, 0o400);
     process.stdout.write(JSON.stringify({ ok: true }) + '\n');

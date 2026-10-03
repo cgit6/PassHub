@@ -4,16 +4,19 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-User=passhub
+User=1000
+Group=1000
 WorkingDirectory=/opt/passhub
 RuntimeDirectory=passhub/maintenance
 RuntimeDirectoryMode=0700
+StateDirectory=passhub/maintenance
+StateDirectoryMode=0700
 Environment=PASSHUB_MAINTENANCE_RUNTIME_DIR=/run/passhub/maintenance
 Environment=PASSHUB_MAINTENANCE_LOCK_PATH=/run/passhub/maintenance/controller.lock
-Environment=PASSHUB_DATASET_EPOCH_FILE=/run/passhub/maintenance/dataset-epoch
+Environment=PASSHUB_DATASET_EPOCH_FILE=/var/lib/passhub/maintenance/dataset-epoch
+Environment=PASSHUB_RESET_RESULT_FILE=/var/lib/passhub/maintenance/reset-result.json
 Environment=PASSHUB_RUNTIME_DIRECTORY=/run/passhub/api
 ConditionPathExists=/run/passhub/api/process-run-id
-ConditionPathExists=/run/passhub/maintenance/dataset-epoch
 ExecStart=/opt/passhub/scripts/g11/run-maintenance.sh
 NoNewPrivileges=yes
 PrivateTmp=yes
@@ -25,4 +28,4 @@ ProtectKernelModules=yes
 ProtectControlGroups=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
-ReadWritePaths=/run/passhub/maintenance /run/passhub/api
+ReadWritePaths=/run/passhub/maintenance /run/passhub/api /var/lib/passhub/maintenance

@@ -14,17 +14,19 @@ const run = '22222222-2222-4222-8222-222222222222';
 mkdirSync(runtime, { mode: 0o700 });
 mkdirSync(maintenance, { mode: 0o700 });
 writeFileSync(join(runtime, 'process-run-id'), `${run}\n`, { mode: 0o400 });
-writeFileSync(join(root, 'dataset-epoch'), `${epoch}\n`, { mode: 0o400 });
 function start(extra = {}) {
-  return spawn(script, { cwd: process.cwd(), env: { ...process.env, PASSHUB_RUNTIME_DIRECTORY: runtime, PASSHUB_MAINTENANCE_RUNTIME_DIR: join(root, 'maintenance'), PASSHUB_MAINTENANCE_LOCK_PATH: lock, PASSHUB_DATASET_EPOCH_FILE: join(root, 'dataset-epoch'), ...extra }, stdio: ['ignore', 'pipe', 'pipe'] });
+  return spawn(script, { cwd: process.cwd(), env: { ...process.env, PASSHUB_RUNTIME_DIRECTORY: runtime, PASSHUB_MAINTENANCE_RUNTIME_DIR: maintenance, PASSHUB_MAINTENANCE_LOCK_PATH: lock, PASSHUB_DATASET_EPOCH_FILE: join(root, 'published-epoch'), PASSHUB_RESET_RESULT_FILE: join(root, 'reset-result.json'), ...extra }, stdio: ['ignore', 'pipe', 'pipe'] });
 }
 function collect(child) { return new Promise((resolve) => { let out = ''; let err = ''; child.stdout.on('data', (x) => { out += x; }); child.stderr.on('data', (x) => { err += x; }); child.on('close', (code) => resolve({ code, out, err })); }); }
 try {
+  const publishResult = join(root, 'reset-result.json');
+  writeFileSync(publishResult, JSON.stringify({ database: 'passhub_demo', datasetEpoch: epoch, indexesPreserved: true }) + '\n', { mode: 0o400 });
   const first = start({ PASSHUB_MAINTENANCE_HOLD_MS: '600' });
   await new Promise((resolve) => setTimeout(resolve, 100));
   const second = await collect(start());
   const firstResult = await collect(first);
   if (second.code !== 75 || firstResult.code !== 0) throw new Error('nonblocking lock did not select one controller');
+  if (firstResult.out.trim().split('\n').some((line) => line !== '{"ok":true}')) throw new Error('controller output leaked handoff metadata');
   const ticketPath = join(runtime, 'bootstrap-ticket.json');
   const ticket = JSON.parse(readFileSync(ticketPath, 'utf8'));
   if (ticket.v !== 'g11b.run-ticket.v1' || ticket.datasetEpoch !== epoch || ticket.processRunId !== run) throw new Error('ticket wire mismatch');
@@ -32,5 +34,5 @@ try {
   unlinkSync(ticketPath);
   const timerRun = await collect(start());
   if (timerRun.code !== 0) throw new Error('shared timer command did not run after lock release');
-  process.stdout.write(JSON.stringify({ ok: true, cases: ['ONE_CONTROLLER_WINS', 'SECOND_CONTROLLER_NONBLOCKING_BUSY', 'TICKET_WIRE_AND_MODE', 'SHARED_ENTRY_REUSE'] }) + '\n');
+  process.stdout.write(JSON.stringify({ ok: true, cases: ['EPOCH_HANDOFF_FROM_G11D_RESULT', 'ONE_CONTROLLER_WINS', 'SECOND_CONTROLLER_NONBLOCKING_BUSY', 'TICKET_WIRE_AND_MODE', 'SHARED_ENTRY_REUSE'] }) + '\n');
 } finally { rmSync(root, { recursive: true, force: true }); }

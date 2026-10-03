@@ -13,4 +13,7 @@ if ! flock -n 9; then
   printf '%s\n' 'G11E_CONTROLLER_BUSY' >&2
   exit 75
 fi
+if [ -n "${PASSHUB_RESET_RESULT_FILE:-}" ]; then
+  node "$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)/scripts/g11/publish-dataset-epoch.mjs"
+fi
 exec node "$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)/scripts/g11/maintenance-controller.mjs"
