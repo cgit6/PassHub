@@ -1,0 +1,28 @@
+{
+  "gate": "G11b",
+  "slice": "b5",
+  "status": "PASS",
+  "evidenceScope": "development-process-slice",
+  "cases": [
+    "G11B_RUNTIME_IMMUTABLE_IMAGE",
+    "G11B_RUNTIME_BEFORE_CLAIM_CLOSED",
+    "G11B_RUNTIME_TICKET_CONSUMED",
+    "G11B_RUNTIME_CANONICAL_CLAIM",
+    "G11B_RUNTIME_LOCAL_READY",
+    "G11B_RUNTIME_BUSINESS_FLOW",
+    "G11B_RUNTIME_PRIVATE_SOCKET",
+    "G11B_RUNTIME_SECRET_SCAN",
+    "G11B_RUNTIME_SIGTERM_DISAPPEARANCE",
+    "G11B_RUNTIME_ORDINARY_RESTART_CLOSED",
+    "G11B_RUNTIME_POSTCLAIM_FAILURE_CLOSED",
+    "G11B_RUNTIME_CLEANUP"
+  ],
+  "fingerprints": {
+    "sourceCommit": "20b8ab5d8b16587cf073ff1a1098768a61d7a85c",
+    "sourceDirty": true,
+    "sourceSha256": "22aa98b3fc2177fdb69c0a7a9e8c6b96ddb419058d7e2272ac5aba78caacaf4a",
+    "apiImageId": "sha256:c263d6f908242033435b7056ca1766ebd0db2f8f3f05e395a5e62bd9ae194250",
+    "composeSha256": "9637ed74abbd520321f3ce2bfcf4e631a7f7966aa11fe3694d4e3198442561f9",
+    "dockerfileSha256": "6d022c40336cbc94c9ac1de707957c2790dd9b7d6637fc9a34a8f2b65f51afe3"
+  }
+}

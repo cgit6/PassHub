@@ -30,6 +30,8 @@ import { createG10aRuntimeOwner } from '../../src/composition/internal/g10a-runt
 import { RUNTIME_CONTROL_SOCKET_FILE_NAME } from '../../src/runtime/internal/runtime-control-socket-path.js';
 import { createLegacyQueryAdmissionCapability } from '../../src/composition/internal/query-admission-binding.js';
 import { createAdmissionWorkHandoffBundle, createHttpResponsePlanBundle, createUnknownRecognitionCoordinatorBundle } from '../../src/composition/internal/index.js';
+import { createG11bProductionHttpHandler } from '../../src/deployment/internal/g11b-production-http-lifecycle.js';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createVerifiedDatasetVerifierForTest } from '../support/g11b-dataset-verification-test-support.js';
 import {
   createPersistentRunClaimerForTest,
@@ -267,6 +269,36 @@ describe('G11b-b4a claimed provenance and nominal G05c bridge', () => {
 });
 
 describe('G11b-b4b bootstrap receipt and local service gate', () => {
+  test('production raw gate returns 503 until authorizeReady, then real business response, and closes on shutdown', async () => {
+    const composed = await completedComposition();
+    const business = jest.fn((_request: IncomingMessage, response: ServerResponse) => {
+      response.writeHead(200);
+      response.end(JSON.stringify({ business: true }));
+    });
+    const handler = createG11bProductionHttpHandler(composed.bundle.serviceGate, business, '172.31.211.10');
+    const invoke = (url: string, peer = '127.0.0.1') => {
+      let status = 0;
+      let wire = '';
+      const response = {
+        writeHead: (code: number) => { status = code; }, end: (body: string) => { wire = body; },
+      } as unknown as ServerResponse;
+      handler({ url, headers: {}, socket: { remoteAddress: peer } } as IncomingMessage, response);
+      return { status, body: JSON.parse(wire) as Record<string, unknown> };
+    };
+    expect(invoke('/internal/ready').status).toBe(503);
+    expect(invoke('/qualifications').status).toBe(503);
+    const receipt = composed.bundle.bootstrap.markCompositionComplete(composed.proof());
+    expect(invoke('/internal/ready').status).toBe(503);
+    composed.bundle.bootstrap.authorizeReady(receipt);
+    expect(invoke('/internal/ready')).toEqual({ status: 200, body: { ready: true } });
+    expect(invoke('/internal/ready', '172.31.211.10').status).toBe(404);
+    expect(invoke('/qualifications')).toEqual({ status: 200, body: { business: true } });
+    expect(business).toHaveBeenCalledTimes(1);
+    composed.bundle.serviceGate.beginShutdown();
+    expect(invoke('/internal/ready').status).toBe(503);
+    expect(invoke('/qualifications').status).toBe(503);
+    expect(business).toHaveBeenCalledTimes(1);
+  });
   test('genuine completed composition issues opaque proof and receipt and opens exactly once', async () => {
     const composed = await completedComposition();
     const proof = composed.proof();
@@ -497,7 +529,7 @@ describe('G11b-b4b bootstrap receipt and local service gate', () => {
 });
 
 describe('G11b-b4 private boundaries', () => {
-  test('engine importer and public barrel graph are locked; b4 is not wired to production main', async () => {
+  test('engine, fixed production composition importers, public barrels and sole WRITABLE mint are locked', async () => {
     const engineName = ['g11b', 'claimed', 'runtime', 'bootstrap', 'engine'].join('-');
     const facadeName = ['g11b', 'claimed', 'runtime', 'bootstrap'].join('-');
     const importers: string[] = [];
@@ -517,7 +549,10 @@ describe('G11b-b4 private boundaries', () => {
       const count = source.split('.issueWriteRunClaim(').length - 1;
       if (count > 0) writableMinters.push({ path: `src/${name}`, count });
     }
-    expect(productionFacadeImporters).toEqual([]);
+    expect(productionFacadeImporters.sort()).toEqual([
+      'src/deployment/internal/g11b-production-application.ts',
+      'src/deployment/internal/g11b-production-http-lifecycle.ts',
+    ]);
     expect(writableMinters).toEqual([{
       path: 'src/composition/internal/g11b-claimed-runtime-bootstrap.ts', count: 1,
     }]);

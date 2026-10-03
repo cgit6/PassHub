@@ -14,6 +14,8 @@ import {
 import { createLegacyQueryAdmissionCapability } from '../../src/composition/internal/query-admission-binding.js';
 import { createPassHubHttpApplication, type PassHubHttpApplication } from '../../src/composition/internal/http-application.js';
 import { createOperationRegistry, createOperationRegistryCapabilityIssuer } from '../../src/access/application/internal/operation-registry.js';
+import { createG11bProductionLoginDelegate } from '../../src/deployment/internal/g11b-production-login.js';
+import type { HumanLoginInput, HumanLoginResult } from '../../src/auth/application/index.js';
 
 const EPOCH = '11111111-1111-4111-8111-111111111111';
 
@@ -43,6 +45,7 @@ async function harness(options: {
   readonly validate?: (input: AdmissionValidationInput, standard: () => AdmissionValidationResult) => Promise<AdmissionValidationResult>;
   readonly recognitionDisposition?: AdmissionWriterOutcome['disposition'];
   readonly claim?: 'WRITABLE' | 'READ_ONLY';
+  readonly login?: (input: HumanLoginInput) => Promise<HumanLoginResult>;
 } = {}): Promise<Harness> {
   const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
   const handoff = createAdmissionWorkHandoffBundle();
@@ -67,14 +70,17 @@ async function harness(options: {
     }
     return Object.freeze({ kind: 'QUERY', accountId: 'account-1', workInput: handoff.issuer.issue(input.routeId) });
   };
-  const validate = (input: AdmissionValidationInput) => options.validate?.(input, () => standard(input)) ?? Promise.resolve(standard(input));
+  const productionLogin = options.login === undefined ? undefined : createG11bProductionLoginDelegate({ login: options.login }, plans, handoff);
+  const validate = (input: AdmissionValidationInput) => input.routeId === 'AUTH_LOGIN' && productionLogin !== undefined
+    ? productionLogin.validate(input)
+    : options.validate?.(input, () => standard(input)) ?? Promise.resolve(standard(input));
   const query = () => { calls.push('query'); return Promise.resolve(ok('query')); };
   const queryAdmission = createLegacyQueryAdmissionCapability({ validate, query });
   const handler = createG07bAdmissionHandler({ currentDatasetEpoch: EPOCH, registry, registryCapabilities: capabilities, responsePlans: plans,
     workHandoff: handoff, unknownRecognition: unknown.handler,
     validator: queryAdmission.validator,
     work: {
-      login: () => { calls.push('login'); return Promise.resolve(ok('login')); },
+      login: (token) => { calls.push('login'); return productionLogin?.login(token) ?? Promise.resolve(ok('login')); },
       query: queryAdmission.work.query,
       management: (_token, context) => { calls.push(`management:${context.sequence}`); return Promise.resolve(Object.freeze({ disposition: 'BUSINESS_RESULT_PERSISTED', response: ok('management') })); },
       recognition: (_token, context) => {
@@ -99,6 +105,38 @@ describe('G07b true HTTP admission composition', () => {
   const apps: PassHubHttpApplication[] = [];
   afterEach(async () => { await Promise.all(apps.splice(0).map((app) => app.nestApplication.close())); });
   const use = async (options?: Parameters<typeof harness>[0]): Promise<Harness> => { const h = await harness(options); apps.push(h.app); return h; };
+
+  test('overlapping production logins hold the scrypt lease through authentication, then permit a later login', async () => {
+    const entered = gate<void>();
+    const finish = gate<HumanLoginResult>();
+    const authenticate = jest.fn(async () => { entered.resolve(); return finish.promise; });
+    const h = await use({ login: authenticate });
+    const first = send(h.port, 'POST', '/auth/login', { username: 'operator', password: 'not-secret-fixture' });
+    await entered.promise;
+    const overlapping = await send(h.port, 'POST', '/auth/login', { username: 'viewer', password: 'not-secret-fixture' });
+    expect(overlapping.status).toBe(503);
+    expect(authenticate).toHaveBeenCalledTimes(1);
+    finish.resolve({ accessToken: 'opaque-fixture' });
+    expect((await first).status).toBe(200);
+    expect(h.calls).toEqual(['login']);
+    expect((await send(h.port, 'POST', '/auth/login', { username: 'viewer', password: 'not-secret-fixture' })).status).toBe(200);
+    expect(authenticate).toHaveBeenCalledTimes(2);
+  });
+
+  test('failed overlapping authentication releases its scrypt lease without a second authentication in response work', async () => {
+    const entered = gate<void>();
+    const finish = gate<void>();
+    const authenticate = jest.fn(async () => { entered.resolve(); await finish.promise; throw new Error('private derivation failure'); });
+    const h = await use({ login: authenticate });
+    const first = send(h.port, 'POST', '/auth/login', { username: 'operator', password: 'not-secret-fixture' });
+    await entered.promise;
+    expect((await send(h.port, 'POST', '/auth/login', { username: 'viewer', password: 'not-secret-fixture' })).status).toBe(503);
+    expect(authenticate).toHaveBeenCalledTimes(1);
+    finish.resolve();
+    expect(await first).toMatchObject({ status: 503, body: { code: 'AUTH_UNAVAILABLE' } });
+    expect((await send(h.port, 'POST', '/auth/login', { username: 'viewer', password: 'not-secret-fixture' })).status).toBe(503);
+    expect(authenticate).toHaveBeenCalledTimes(2);
+  });
 
   test('route/method/trailing slash and write epoch are rejected before validation', async () => {
     const h = await use();

@@ -69,6 +69,7 @@ import {
   type HttpResponsePlanBundle,
 } from './http-response-plan.js';
 import { getQueryAdmissionIdentity } from './query-admission-binding.js';
+import { readTrustedIngressClientAddress } from './trusted-ingress-client-address.js';
 import {
   assertG10aWriterPermissionBinding,
   type G10aWriterPermissionBinding,
@@ -1138,7 +1139,7 @@ export function createG07bAdmissionHandler(
     startNonWriter(
       accepted,
       classification,
-      request.socket.remoteAddress,
+      readTrustedIngressClientAddress(request) ?? request.socket.remoteAddress,
       response,
       bundle,
     );

@@ -5,9 +5,15 @@ import { isIP } from 'node:net';
 import { MongoClient } from 'mongodb';
 
 import { resolveIngressClientAddress } from './ingress-client-address.js';
+import { createG11bProductionApplication, G11bProductionAuthorityError, type G11bProductionApplication } from './internal/g11b-production-application.js';
+import { ProcessIdentityIntakeError } from './internal/g11b-process-identity-intake.js';
+import { RunTicketIntakeError } from './internal/g11b-run-ticket-intake.js';
+import { DatasetVerificationError } from './internal/g11b-dataset-verification.js';
+import { closeG11bProductionResources, createG11bProductionHttpHandler, G11bProductionLifecycleError, listenG11bProductionServer, takeG11bProductionBusinessListener } from './internal/g11b-production-http-lifecycle.js';
+import { installG11bProductionShutdown } from './internal/g11b-production-shutdown.js';
 
 const MAX_SECRET_BYTES = 4_096;
-const SHUTDOWN_DEADLINE_MS = 25_000;
+let startupStage = 'CONFIG';
 
 interface DeploymentConfig {
   readonly host: string;
@@ -15,6 +21,8 @@ interface DeploymentConfig {
   readonly trustedProxyIp: string;
   readonly mongoUri: string;
   readonly probeMode: boolean;
+  readonly jwtKey: Buffer;
+  readonly comparisonKey: Buffer;
 }
 
 function requiredEnvironment(name: string): string {
@@ -51,7 +59,13 @@ async function loadConfig(): Promise<DeploymentConfig> {
   }
   const probe = process.env.PASSHUB_G11A_PROBE_MODE;
   if (probe !== undefined && probe !== '1') throw new Error('deployment configuration is invalid');
-  return Object.freeze({ host, port, trustedProxyIp, mongoUri, probeMode: probe === '1' });
+  if (probe !== '1' && (Buffer.byteLength(jwtKey, 'utf8') !== 32 || !/^[0-9a-f]{64}$/u.test(comparisonKey))) {
+    throw new Error('deployment secret is invalid');
+  }
+  return Object.freeze({
+    host, port, trustedProxyIp, mongoUri, probeMode: probe === '1',
+    jwtKey: Buffer.from(jwtKey, 'utf8'), comparisonKey: Buffer.from(comparisonKey, 'hex'),
+  });
 }
 
 function reply(response: ServerResponse, status: number, body: Readonly<Record<string, unknown>>): void {
@@ -66,23 +80,49 @@ function reply(response: ServerResponse, status: number, body: Readonly<Record<s
 
 async function main(): Promise<void> {
   const config = await loadConfig();
+  startupStage = 'MONGO_CONNECT';
   const mongo = new MongoClient(config.mongoUri, {
     retryReads: false,
     retryWrites: false,
+    monitorCommands: true,
     maxAdaptiveRetries: 0,
     maxPoolSize: 8,
     serverSelectionTimeoutMS: 5_000,
     connectTimeoutMS: 5_000,
   });
-  await mongo.connect();
-  const hello = await mongo.db('admin').command({ hello: 1 }) as { setName?: unknown; isWritablePrimary?: unknown; hosts?: unknown };
-  if (hello.setName !== 'rs0' || hello.isWritablePrimary !== true || !Array.isArray(hello.hosts) || hello.hosts.length !== 1) {
-    await mongo.close();
-    throw new Error('deployment database is not ready');
+  try {
+    await mongo.connect();
+    const hello = await mongo.db('admin').command({ hello: 1 }) as { setName?: unknown; isWritablePrimary?: unknown; hosts?: unknown };
+    if (hello.setName !== 'rs0' || hello.isWritablePrimary !== true || !Array.isArray(hello.hosts) || hello.hosts.length !== 1) {
+      throw new Error('deployment database is not ready');
+    }
+  } catch (error) {
+    await mongo.close().catch(() => undefined);
+    throw error;
   }
 
+  let production: G11bProductionApplication | undefined;
+  try {
+    startupStage = 'DATASET_COMPOSITION';
+    if (!config.probeMode) production = await createG11bProductionApplication(mongo, config.jwtKey, config.comparisonKey);
+  } catch (error) {
+    await mongo.close();
+    throw error;
+  }
+  const server = production?.application?.application.server ?? createServer();
+  let businessHandler;
+  try {
+    startupStage = 'LISTENER_COMPOSITION';
+    businessHandler = takeG11bProductionBusinessListener(server, production !== undefined && production.application !== null);
+  } catch (error) {
+    await closeG11bProductionResources(async () => { await production?.close(); }, () => mongo.close()).catch(() => undefined);
+    throw error;
+  }
+  const productionHandler = production === undefined ? undefined
+    : createG11bProductionHttpHandler(production.serviceGate, businessHandler, config.trustedProxyIp);
   let forwardedRequests = 0;
   const handler = (request: IncomingMessage, response: ServerResponse): void => {
+    if (productionHandler !== undefined) return productionHandler(request, response);
     const ingress = resolveIngressClientAddress(
       request.socket.remoteAddress,
       request.headers['x-forwarded-for'],
@@ -91,7 +131,8 @@ async function main(): Promise<void> {
     const peer = ingress.peerAddress;
     if (request.url === '/internal/ready') {
       if (peer !== '127.0.0.1' && peer !== '::1') return reply(response, 404, { code: 'NOT_FOUND' });
-      return reply(response, 200, { ready: true });
+      const ready = config.probeMode || production?.serviceGate.isOpen() === true;
+      return ready ? reply(response, 200, { ready: true }) : reply(response, 503, { code: 'SERVICE_NOT_READY' });
     }
     if (config.probeMode && request.url === '/__g11a/observations') {
       if (peer !== '127.0.0.1' && peer !== '::1') return reply(response, 404, { code: 'NOT_FOUND' });
@@ -108,35 +149,33 @@ async function main(): Promise<void> {
     }
     return reply(response, 503, { code: 'SERVICE_NOT_READY' });
   };
-  const server = createServer(handler);
+  server.on('request', handler);
   server.headersTimeout = 5_000;
   server.keepAliveTimeout = 5_000;
   server.maxConnections = 64;
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(config.port, config.host, resolve);
-  });
+  try {
+    startupStage = 'LISTEN';
+    await listenG11bProductionServer(server, config.port, config.host);
+  } catch (error) {
+    await closeG11bProductionResources(async () => { await production?.close(); }, () => mongo.close()).catch(() => undefined);
+    throw error;
+  }
 
-  let closing = false;
-  const close = async (): Promise<void> => {
-    if (closing) return;
-    closing = true;
-    const deadline = setTimeout(() => process.exit(1), SHUTDOWN_DEADLINE_MS);
-    deadline.unref();
-    try {
-      await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
-      await mongo.close();
-      clearTimeout(deadline);
-      process.exitCode = 0;
-    } catch {
-      process.exitCode = 1;
-    }
-  };
-  process.once('SIGTERM', () => { void close(); });
-  process.once('SIGINT', () => { void close(); });
+  startupStage = 'READY';
+  installG11bProductionShutdown({
+    beginShutdown: () => { production?.serviceGate.beginShutdown(); },
+    closeHttp: async () => {
+      if (production !== undefined && production.application !== null) await production.close();
+      else await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
+    },
+    closeMongo: () => mongo.close(),
+  });
 }
 
-main().catch(() => {
-  process.stderr.write('PassHub deployment startup failed\n');
+main().catch((error: unknown) => {
+  const code = error instanceof G11bProductionAuthorityError || error instanceof ProcessIdentityIntakeError
+    || error instanceof RunTicketIntakeError || error instanceof DatasetVerificationError
+    ? error.code : error instanceof G11bProductionLifecycleError ? error.failures.join('+') : 'STARTUP_UNAVAILABLE';
+  process.stderr.write(`PassHub deployment startup failed: ${startupStage}:${code}\n`);
   process.exitCode = 1;
 });
