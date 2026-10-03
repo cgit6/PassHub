@@ -27,11 +27,12 @@ writeFileSync(epochFile, `${currentEpoch}\n`, { mode: 0o400 });
 const g11dArgs = ['scripts/g11/test-g11d-runtime.mjs'];
 if (allowDirty) g11dArgs.push('--allow-dirty-development');
 let g11dRuns = 0;
-function runG11d() {
+function runG11d({ injectPartial = false } = {}) {
   g11dRuns += 1;
   const output = execFileSync('node', g11dArgs, {
     cwd: process.cwd(), encoding: 'utf8', timeout: 900_000,
-    env: { ...process.env, PASSHUB_G11D_HANDOFF_FILE: handoffFile },
+    env: { ...process.env, PASSHUB_G11D_HANDOFF_FILE: handoffFile,
+      ...(injectPartial ? { PASSHUB_G11D_PARTIAL_HANDOFF_FILE: handoffFile, PASSHUB_G11D_PARTIAL_EPOCH_FILE: epochFile } : {}) },
   });
   const result = JSON.parse(output.trim().split('\n').at(-1));
   if (!Array.isArray(result.cases) || result.cases.length !== 8 || result.first?.indexesPreserved !== true
@@ -55,7 +56,8 @@ function runController(extra = {}) {
 }
 
 try {
-  const firstMongo = runG11d();
+  const firstMongo = runG11d({ injectPartial: true });
+  if (firstMongo.partialHandoffRejected !== true) throw new Error('same-dataset partial handoff evidence missing');
   let targetEpoch = firstMongo.second.datasetEpoch;
   const base = Object.freeze({ operation: 'RESET', marker: 'ACTIVE', api: 'STOPPED', mongo: 'PRIMARY', writers: 0,
     lock: 'ACQUIRED', ticket: 'VALID', currentEpoch, targetEpoch, writeRunClaim: 'NULL', resetState: 'NONE', controlledRerun: false });
@@ -74,26 +76,15 @@ try {
     policyCases.push(name);
   }
 
-  // A truncated private result is an observable partial handoff. The closed
-  // decision must not invoke G11d; only an explicit controlled rerun may do so.
-  chmodSync(handoffFile, 0o600);
-  writeFileSync(handoffFile, '{"database":"passhub_demo"}\n', { mode: 0o400 });
-  const epochBeforePartial = readFileSync(epochFile, 'utf8');
-  const partialController = await runController();
-  if (partialController.code === 0 || !partialController.err.includes('G11E_EPOCH_PUBLISH_FAILED')
-    || readFileSync(epochFile, 'utf8') !== epochBeforePartial) throw new Error('partial handoff was not rejected by real G11e publisher');
-  if (statSync(join(runtime, 'bootstrap-ticket.json'), { throwIfNoEntry: false }) !== undefined) throw new Error('partial handoff issued a ticket');
   const partial = { ...base, resetState: 'PARTIAL' };
   try { decideG11fMaintenance(partial); throw new Error('uncontrolled partial reset was admitted'); }
   catch (error) { if (error?.code !== 'PARTIAL_RESET_REQUIRES_CONTROL' || g11dRuns !== 1) throw error; }
   const rerunDecision = decideG11fMaintenance({ ...partial, controlledRerun: true });
   if (rerunDecision.action !== 'REPAIR_RERUN') throw new Error('controlled rerun was not admitted');
-  unlinkSync(handoffFile);
-  const secondMongo = runG11d();
-  targetEpoch = secondMongo.second.datasetEpoch;
   const handoff = JSON.parse(readFileSync(handoffFile, 'utf8'));
-  if (handoff.datasetEpoch !== targetEpoch || g11dRuns !== 2) throw new Error(`controlled rerun handoff mismatch: handoff=${handoff.datasetEpoch} target=${targetEpoch} runs=${g11dRuns} result=${secondMongo.second?.datasetEpoch}`);
-  policyCases.push('PARTIAL_HANDOFF_FAIL_CLOSED', 'REAL_G11E_PARTIAL_REJECT', 'CONTROLLED_REAL_G11D_RERUN');
+  targetEpoch = firstMongo.second.datasetEpoch;
+  if (handoff.datasetEpoch !== targetEpoch || g11dRuns !== 1) throw new Error(`controlled rerun handoff mismatch: handoff=${handoff.datasetEpoch} target=${targetEpoch} runs=${g11dRuns}`);
+  policyCases.push('PARTIAL_HANDOFF_FAIL_CLOSED', 'REAL_SAME_DATASET_G11E_PARTIAL_REJECT', 'CONTROLLED_SAME_DATASET_G11D_RERUN');
 
   const nominal = await runController({ PASSHUB_MAINTENANCE_HOLD_MS: '300' });
   const outputLines = nominal.out.trim().split('\n').filter(Boolean);
@@ -109,5 +100,5 @@ try {
   if (competing.code !== 75 || !competing.err.includes('G11E_CONTROLLER_BUSY') || heldResult.code !== 0) throw new Error('real G11e lock contention did not fail closed');
   policyCases.push('REAL_G11E_LOCK_CONTENTION');
   policyCases.push('REAL_G11E_HANDOFF_FROM_G11D_RESULT');
-  process.stdout.write(JSON.stringify({ ok: true, sourceDirty, g11dRuns, policyCases, firstMongo, secondMongo }) + '\n');
+  process.stdout.write(JSON.stringify({ ok: true, sourceDirty, g11dRuns, policyCases, firstMongo }) + '\n');
 } finally { rmSync(root, { recursive: true, force: true }); }

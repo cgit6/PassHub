@@ -112,6 +112,24 @@ try {
     const r=await resetAndSeedG11d(db,${JSON.stringify(epoch)});process.stdout.write(JSON.stringify(r));`)));
   const afterIndexes = JSON.parse(oneOff(mongoScript("const out={};for(const n of await db.listCollections({}, {nameOnly:true}).toArray())out[n.name]=await db.collection(n.name).listIndexes().toArray();process.stdout.write(JSON.stringify(out));")));
   const snapshot = JSON.parse(oneOff(mongoScript("const names=await db.listCollections({}, {nameOnly:true}).toArray();const out={};for(const n of names)out[n.name]=await db.collection(n.name).find({}).sort({_id:1}).toArray();const other=await c.db('other_demo').collection('keep').find({}).toArray();out.__other=other;process.stdout.write(JSON.stringify(out));")));
+  let partialHandoffRejected = false;
+  const partialHandoffFile = process.env.PASSHUB_G11D_PARTIAL_HANDOFF_FILE;
+  const partialEpochFile = process.env.PASSHUB_G11D_PARTIAL_EPOCH_FILE;
+  if (partialHandoffFile !== undefined && partialEpochFile !== undefined) {
+    const beforePublishedEpoch = readFileSync(partialEpochFile, 'utf8');
+    writeFileSync(partialHandoffFile, '{"database":"passhub_demo"}\n', { mode: 0o400 });
+    try {
+      execFileSync('node', ['scripts/g11/publish-dataset-epoch.mjs'], {
+        cwd: repository, env: { ...process.env, PASSHUB_RESET_RESULT_FILE: partialHandoffFile, PASSHUB_DATASET_EPOCH_FILE: partialEpochFile },
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (error) {
+      const stderr = typeof error === 'object' && error !== null && 'stderr' in error && typeof error.stderr === 'string' ? error.stderr : '';
+      partialHandoffRejected = stderr.includes('G11E_EPOCH_PUBLISH_FAILED');
+    }
+    assert(partialHandoffRejected, 'G11e did not reject the partial handoff inside the same Mongo run');
+    assert(readFileSync(partialEpochFile, 'utf8') === beforePublishedEpoch, 'partial handoff changed the published epoch');
+  }
   const secondEpoch = randomUUID();
   const second = JSON.parse(oneOff(mongoScript(`const{resetAndSeedG11d}=require('./dist/src/deployment/internal/g11d-reset-seed.js');const r=await resetAndSeedG11d(db,${JSON.stringify(secondEpoch)});process.stdout.write(JSON.stringify(r));`)));
   const secondSnapshot = JSON.parse(oneOff(mongoScript("const names=await db.listCollections({}, {nameOnly:true}).toArray();const out={};for(const n of names)if(['qualifications','faceSlots','events','users','sources','metadata','managementReceipts'].includes(n.name))out[n.name]=await db.collection(n.name).find({}).sort({_id:1}).toArray();process.stdout.write(JSON.stringify(out));")));
@@ -132,12 +150,14 @@ try {
   assert(stableJson(beforeSnapshot) === stableJson({ unrelated: snapshot.unrelated, __otherDb: snapshot.__other }), 'untouched baseline changed');
   assert(snapshot.unrelated?.[0]?._id === 'keep-me' && snapshot.__other?.[0]?._id === 'other-keep', 'unrelated data changed');
   assert(JSON.stringify(oldIndexes) === JSON.stringify(afterIndexes), 'indexes changed');
-  result = { cases: ['G11D_EXACT_COLLECTION_ALLOWLIST', 'G11D_TRANSACTIONAL_RESET', 'G11D_SEQUENTIAL_RESET', 'G11D_STABLE_SEED', 'G11D_NEW_EPOCH_NULL_CLAIM', 'G11D_INDEXES_PRESERVED', 'G11D_OTHER_DATA_UNTOUCHED', 'G11D_REPEAT_RESET'], first: reset, second: second, sourceEpoch: initial.epoch, sourceCommit, sourceDirty, sourceSha256, runtimeComposeSha256: createHash('sha256').update(readFileSync(runtimeComposeFile)).digest('hex') };
+  result = { cases: ['G11D_EXACT_COLLECTION_ALLOWLIST', 'G11D_TRANSACTIONAL_RESET', 'G11D_SEQUENTIAL_RESET', 'G11D_STABLE_SEED', 'G11D_NEW_EPOCH_NULL_CLAIM', 'G11D_INDEXES_PRESERVED', 'G11D_OTHER_DATA_UNTOUCHED', 'G11D_REPEAT_RESET'], first: reset, second: second, partialHandoffRejected, sourceEpoch: initial.epoch, sourceCommit, sourceDirty, sourceSha256, runtimeComposeSha256: createHash('sha256').update(readFileSync(runtimeComposeFile)).digest('hex') };
   const handoffFile = process.env.PASSHUB_G11D_HANDOFF_FILE;
   if (handoffFile !== undefined) {
     // The private handoff intentionally exposes only the publisher contract;
     // the full evidence remains on stdout for the calling runner.
+    chmodSync(handoffFile, 0o600);
     writeFileSync(handoffFile, `${JSON.stringify({ database: 'passhub_demo', datasetEpoch: second.datasetEpoch, indexesPreserved: true, evidence: result })}\n`, { mode: 0o400 });
+    chmodSync(handoffFile, 0o400);
   }
   process.stdout.write(`${JSON.stringify(result)}\n`);
 } finally {
