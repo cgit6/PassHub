@@ -3457,3 +3457,10 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - 缺口：目前沒有 nominal G05c `WRITABLE` bridge、綁定 epoch/run/ticketId 的 opaque bootstrap receipt、single-use `authorizeReady`、動態 local-ready gate，也沒有 production `production-main.ts` 對 G10a runtime owner/private socket 與 G11b bootstrap 的正式接線；`/internal/ready` 仍為 G11a shell 的固定回應。
 - 裁決：先補 G11b b4（private bridge／receipt／authorizeReady）與 b5（production process/container evidence），再進 G11c。不得把 b4/b5 偷併進 G11c；不得以現有 G10a unit、G11a SIGTERM smoke 或 b1–b3 fault evidence 推論完整 production lifecycle 已成立。
 - G11c 預備邊界維持：正常順序是 `marker → private drain ≤30s → API disappearance → Mongo disappearance → Mongo recovery PRIMARY → no-late-work`；G11c 不清 claim、不 reset/seed、不簽發 ticket、不移除 marker、不開 public route。
+
+### D192｜G11b b5 前置 seam：process identity 與既有 schema activation
+
+- 日期：2026-10-03；狀態：root 依 PM／架構／測試 audit 採用的工程決定，先補 b5 前置 seam，不改變 G11e 的 ticket controller 責任。
+- `processRunId` 固定由 API runtime directory 的 direct-child private file 提供：`/run/passhub/api/process-run-id`。檔案必須 real directory 下的 regular non-symlink、API euid 擁有、mode `0400`、UTF-8 單一 LF、canonical lowercase UUIDv4；不接受 env、argv、HTTP、Mongo 或任意可由部署者改寫的 path。G11e 之後負責在同一 private runtime mount 中簽發對應檔案與 ticket。
+- G04b production activation 必須新增 verification-only 的既有 schema seam：只在同一 Mongo `Db`、同一 `VerifiedDatasetVerifier`、同一 `VerifiedDataset` provenance 成立後取得七個既有 collection handles；不得呼叫 `ensureSchema`、建 collection/index、`collMod`、repair、seed 或寫入。structural／foreign／未驗證輸入一律拒絕。
+- 兩個 seam 完成前不接 `production-main`、不產 `ProductionCompositionProof`，G11b 仍未通過；避免用 always-503 或 test-only fake 冒充 b5。
