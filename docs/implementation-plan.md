@@ -295,7 +295,7 @@ API/Mongo SIGTERM grace30s，API無自動restart；stoprequest/graceexpiry不是
 | G11d | PASS：精確 reset／seed | clean `f879d8f`；6 unit tests、clean Mongo runtime 8/8 cases；七 collection transaction、保 indexes、stable seed、新 epoch／null claim、其他資料不變；證據見 `docs/evidence/g11d/report.md` |
 | G11e | PASS：外部排程與唯一 controller | `docs/evidence/g11e/report.md`；2 suites／3 tests、static 5 cases、runtime 5 cases；local nonblocking flock、reset-result→epoch→ticket handoff、同一手動／timer command、Asia/Taipei 03:00、Persistent=false |
 | G11f | PASS：fail-closed 與受控重跑 | `docs/evidence/g11f/report.md`；clean source `53c05aa`、1 suite／14 tests、同一 Mongo partial handoff 真 publisher rejection、G11f decision 授權後新 epoch rerun、真實 G11e ticket／flock；其餘 marker／API／Mongo／writer fault 為明示的 policy-only observation |
-| G11g | PASS：綜合 maintenance 證據 | `docs/evidence/g11g/report.md`；`npm run test:maintenance`、10份前置 evidence、468檔秘密掃描、Docker cleanup、source fingerprint、G11e static與G11f unit；G11f policy-only限制保留 |
+| G11g | PASS：綜合 maintenance 證據 | `docs/evidence/g11g/report.md`；`npm run test:maintenance`、10份前置 evidence、470檔秘密掃描、Docker cleanup、source/config/image fingerprints、G11e static與G11f unit；G11f policy-only限制保留 |
 | G12 | 完整交付證據audit | 全必需套件、OpenAPI／boundary／requirements／cleaninstall、CI／Demo／publicHTTPS及136證據 |
 
 各gate對136IDs見矩陣§10.1；子情境細化見§10，**名字存在不代表覆蓋或通過**。G11不增加業務，只驗部署/reset；G12綜合既有責任，不寫新平臺。不同suite選擇器是將來script傳給Node runner的測試pattern，實作後確認選中數>0及情境符合，不能零測試exit0當gate成功。

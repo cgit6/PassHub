@@ -3508,6 +3508,6 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 ### D198｜G11g maintenance 綜合證據通過
 
 - 日期：2026-10-04；狀態：PM、架構師與測試員對 G11g manifest／掃描／cleanup／指紋及 scope 限制覆核後 PASS；G11g STOP 解除，目前停止於 G11g，下一合法 gate 為 G12。正式證據為 `docs/evidence/g11g/report.md` 與 `runtime.json`。
-- `npm run test:maintenance` 在 clean detached worktree 通過；確認 G11a–G11f 共10份 tracked evidence、G11e static contract、G11f 14 unit tests、468檔秘密掃描（0 hits）、Docker containers／networks／volumes清理為空、sourceDirty=false及source fingerprint。
+- `npm run test:maintenance` 在 HEAD `516cabd` 的 clean detached worktree 通過；確認 G11a–G11f 共10份 tracked evidence、G11e static contract、G11f 14 unit tests、470檔秘密掃描（0 hits）、Docker containers／networks／volumes／images清理為空、sourceDirty=false，以及 source/config/image fingerprints；三角色 reviewer 均 PASS。
 - 綜合器不重新解釋前置 gate，也不把 G11f policy-only fault observations 改寫為完整 process／Mongo fault injection；G11f 同 Mongo partial handoff／受控 rerun與真實 G11e lock contention仍以其自身 report為準。
 - 邊界：G11g不宣稱OpenAPI、CI、公開HTTPS、完整v1、SLA或production個資生命週期；上述交付與136要求的最終audit留在G12。
