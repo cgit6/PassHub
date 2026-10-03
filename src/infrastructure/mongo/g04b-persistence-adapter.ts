@@ -61,6 +61,7 @@ import {
   type G10bScopedPersistenceExecutionFacade,
 } from './internal/g10b-scoped-persistence-sidecar.js';
 import { createG10bPrecommitMongoTerminator } from './internal/g10b-precommit-mongo-terminator.js';
+import { registerG11bExistingSchemaAdapter } from './internal/g11b-existing-schema-activation-engine.js';
 import {
   createG10cManagementExpectedImageCapture,
   createG10cRecognitionExpectedImageCapture,
@@ -245,6 +246,10 @@ export class G04bMongoPersistenceAdapter
   ) {
     if (databaseName.length === 0) throw new TypeError('G04b database name must not be empty');
     this.database = client.db(databaseName);
+    registerG11bExistingSchemaAdapter(this, this.database, (collections) => {
+      if (this.collections !== null) throw new G04bTechnicalError('G04b collections are already attached');
+      this.collections = collections;
+    });
     registerG10bConcreteG04bMongoPersistenceAdapter(this);
     registerG10cConcreteG04bMongoPersistenceAdapter(this);
     this.g10cRecognitionExpectedImageCapture = createG10cRecognitionExpectedImageCapture(this);
