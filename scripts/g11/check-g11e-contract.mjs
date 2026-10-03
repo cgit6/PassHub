@@ -16,6 +16,8 @@ assert(service.includes('RuntimeDirectoryMode=0700') && service.includes('Condit
 assert(service.includes('StateDirectory=passhub/maintenance') && service.includes('PASSHUB_RESET_RESULT_FILE=/var/lib/passhub/maintenance/reset-result.json'), 'persistent reset handoff missing');
 assert(!service.includes('ConditionPathExists=/run/passhub/maintenance/dataset-epoch'), 'epoch condition must not block first handoff');
 assert(controller.includes("resolve(process.env.PASSHUB_RUNTIME_DIRECTORY ?? '/run/passhub/api')"), 'controller canonical runtime path missing');
+assert(controller.includes("/var/lib/passhub/maintenance/dataset-epoch"), 'manual/controller epoch default mismatch');
+assert(shell.includes('/var/lib/passhub/maintenance/reset-result.json'), 'manual/reset-result default mismatch');
 assert(controller.includes("join(runtimeDirectory, 'process-run-id')"), 'controller does not read process identity file');
 assert(controller.includes("PASSHUB_DATASET_EPOCH_FILE"), 'controller does not read protected epoch file');
 assert(!controller.includes('ticketPath, ticketId, datasetEpoch, processRunId'), 'controller prints ticket material');

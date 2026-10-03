@@ -5,7 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 // Production service fixes this to /run/passhub/api; the explicit override is
 // only for isolated tests that cannot write the host /run tree.
 const runtimeDirectory = resolve(process.env.PASSHUB_RUNTIME_DIRECTORY ?? '/run/passhub/api');
-const datasetEpochFile = resolve(process.env.PASSHUB_DATASET_EPOCH_FILE ?? '/run/passhub/maintenance/dataset-epoch');
+const datasetEpochFile = resolve(process.env.PASSHUB_DATASET_EPOCH_FILE ?? '/var/lib/passhub/maintenance/dataset-epoch');
 const processIdentityFile = join(runtimeDirectory, 'process-run-id');
 const ticketId = randomUUID();
 const ticketPath = join(runtimeDirectory, 'bootstrap-ticket.json');

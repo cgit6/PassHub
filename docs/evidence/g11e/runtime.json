@@ -1,0 +1,27 @@
+{
+  "gate": "G11e",
+  "sourceCommit": "6cf1fe4",
+  "unitSuites": 2,
+  "unitTests": 3,
+  "staticCases": 5,
+  "runtimeCases": [
+    "EPOCH_HANDOFF_FROM_G11D_RESULT",
+    "ONE_CONTROLLER_WINS",
+    "SECOND_CONTROLLER_NONBLOCKING_BUSY",
+    "TICKET_WIRE_AND_MODE",
+    "SHARED_ENTRY_REUSE"
+  ],
+  "timer": {
+    "onCalendar": "*-*-* 03:00:00 Asia/Taipei",
+    "accuracySec": "1s",
+    "randomizedDelaySec": "0",
+    "persistent": false
+  },
+  "authority": {
+    "processIdentity": "/run/passhub/api/process-run-id",
+    "resetResult": "/var/lib/passhub/maintenance/reset-result.json",
+    "datasetEpoch": "/var/lib/passhub/maintenance/dataset-epoch",
+    "ticket": "/run/passhub/api/bootstrap-ticket.json",
+    "numericUid": 1000
+  }
+}

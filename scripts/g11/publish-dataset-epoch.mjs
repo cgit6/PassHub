@@ -4,8 +4,8 @@ import { dirname, resolve } from 'node:path';
 // This is the hand-off from the already completed G11d reset to G11e.  The
 // reset caller supplies a private result JSON; the controller never accepts a
 // raw epoch from an environment variable or command argument.
-const resultFile = resolve(process.env.PASSHUB_RESET_RESULT_FILE ?? '/run/passhub/maintenance/reset-result.json');
-const epochFile = resolve(process.env.PASSHUB_DATASET_EPOCH_FILE ?? '/run/passhub/maintenance/dataset-epoch');
+const resultFile = resolve(process.env.PASSHUB_RESET_RESULT_FILE ?? '/var/lib/passhub/maintenance/reset-result.json');
+const epochFile = resolve(process.env.PASSHUB_DATASET_EPOCH_FILE ?? '/var/lib/passhub/maintenance/dataset-epoch');
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 function fail(code) { process.stderr.write(`${code}\n`); process.exitCode = 1; }
 try {
