@@ -26,6 +26,7 @@ import { RuntimeLogSink } from '../../src/runtime/internal/runtime-log-sink.js';
 import { createLegacyQueryAdmissionCapability } from '../../src/composition/internal/query-admission-binding.js';
 import { createOperationRegistry, createOperationRegistryCapabilityIssuer } from '../../src/access/application/internal/operation-registry.js';
 import type { NarrowHttpResponse } from '../../src/composition/internal/http-response-owner.js';
+import { G04bMongoPersistenceAdapter } from '../../src/infrastructure/mongo/g04b-persistence-adapter.js';
 
 const EPOCH = '11111111-1111-4111-8111-111111111111';
 const RUN = '22222222-2222-4222-8222-222222222222';
@@ -204,6 +205,25 @@ async function statusSnapshot(control: ReturnType<typeof createG10aAdmissionRunt
 }
 
 describe('G10a A4 admission runtime composition', () => {
+  test('opts into the concrete G10b/G10c bridge and scheduler only when an adapter is supplied', () => {
+    const fixture = makeComposition(undefined, undefined, undefined, 10, false);
+    const client = {
+      db: jest.fn(() => ({})),
+      on: jest.fn(),
+    } as never;
+    const adapter = new G04bMongoPersistenceAdapter(client, 'g10a_composition_g10c_wiring');
+    const composed = createG10aAdmissionRuntimeComposition({
+      epoch: EPOCH,
+      run: RUN,
+      monotonicClock: { nowMs: () => 0 },
+      awaitObservation: () => undefined,
+      admission: fixture.admission,
+      g10cMongoAdapter: adapter,
+    });
+    expect(composed.recoveryScheduler?.snapshot()).toEqual({ state: 'IDLE', timerArmed: false });
+    expect(makeComposition().composition.recoveryScheduler).toBeUndefined();
+  });
+
   test('STATUS observes UNKNOWN_EFFECT produced by the real HTTP writer lifecycle', async () => {
     const fixture = makeComposition({ management: () => Promise.reject(new Error('writer unknown')) as never });
     invoke(fixture.composition.handler);

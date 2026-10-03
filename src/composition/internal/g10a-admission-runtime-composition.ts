@@ -28,6 +28,15 @@ import {
   assertG10aRuntimeCapabilities,
   type G10aRuntimeCapabilities,
 } from './g10a-runtime-owner.js';
+import type { G04bMongoPersistenceAdapter } from '../../infrastructure/mongo/g04b-persistence-adapter.js';
+import { attachG10bG04bPersistenceSidecar } from './g10b-g04b-persistence-wire.js';
+import { createG10bOperationBudgetBindingFactory } from './g10b-operation-bridge.js';
+import { createG10cPostCommitUnknownHandoffBundle } from '../../infrastructure/mongo/internal/g10c-post-commit-unknown-handoff.js';
+import { createG10cG07RecoveryBridge, type G10cG07RecoveryBridge } from './g10c-g07-recovery-bridge.js';
+import {
+  createG10cRecoveryScheduler,
+  type G10cRecoveryScheduler,
+} from './g10c-recovery-scheduler.js';
 
 /**
  * Private composition seam for the G10a runtime and the existing G07b writer
@@ -45,12 +54,20 @@ export interface G10aAdmissionRuntimeCompositionOptions {
   readonly runtimeLogSink?: RuntimeLogSink;
   /** A started, nominal runtime owner may inject its single process capabilities. */
   readonly runtime?: G10aRuntimeCapabilities;
+  /**
+   * Concrete Mongo composition opt-in.  Without this value the historical
+   * G10a/G07 composition is retained byte-for-byte; with it, G10b and G10c
+   * are wired around this one adapter before any writer can start.
+   */
+  readonly g10cMongoAdapter?: G04bMongoPersistenceAdapter;
 }
 
 export interface G10aAdmissionRuntimeComposition {
   readonly handler: AcceptedIngressHandler;
   /** Internal control handle retained by the future private control transport. */
   readonly control: RuntimeControl;
+  /** Private inspection seam for composition tests and runtime shutdown. */
+  readonly recoveryScheduler?: G10cRecoveryScheduler;
 }
 
 const ADMISSION_REQUIRED = Object.freeze([
@@ -106,6 +123,36 @@ export function createG10aAdmissionRuntimeComposition(
   const driverLogBinding = runtime === undefined ? undefined : createG10aDriverLogBinding(runtime);
   const writerPermission = createG10aWriterPermissionBinding(control);
   const queryPermission = createG10aQueryPermissionBinding(control);
+  let recoveryScheduler: G10cRecoveryScheduler | undefined;
+  let recoveryBridge: G10cG07RecoveryBridge | undefined;
+  let g10bBindingFactory = options.admission.operationBudgetBindingFactory;
+  if (options.g10cMongoAdapter !== undefined) {
+    attachG10bG04bPersistenceSidecar(options.g10cMongoAdapter);
+    if (g10bBindingFactory === undefined) {
+      g10bBindingFactory = createG10bOperationBudgetBindingFactory({
+        clock: options.monotonicClock,
+        // Continuation evidence is verified by the private coordinator/owner
+        // boundary in this composition; the ledger receives no caller data.
+        assertContinuationEvidence: () => undefined,
+      });
+    }
+    let wakeScheduler: (() => void) | undefined;
+    const handoffs = createG10cPostCommitUnknownHandoffBundle();
+    recoveryBridge = createG10cG07RecoveryBridge({
+      adapter: options.g10cMongoAdapter,
+      handoffs,
+      onPausedTicket: () => wakeScheduler?.(),
+    });
+    recoveryScheduler = createG10cRecoveryScheduler({
+      clock: options.monotonicClock,
+      timer: Object.freeze({
+        setTimeout: (callback: () => void, delayMs: number): unknown => globalThis.setTimeout(callback, delayMs),
+        clearTimeout: (handle: unknown): void => { globalThis.clearTimeout(handle as ReturnType<typeof setTimeout>); },
+      }),
+      pausedTickets: recoveryBridge.pausedTickets,
+    });
+    wakeScheduler = recoveryScheduler.wake;
+  }
   let refreshCounters: (() => void) | undefined;
   const counterSource = createRuntimeLiveCounterSnapshotSource(Object.freeze({
     writers: Object.freeze({ provisional: 0, queued: 0, running: 0, blocked: 0, unknown: 0 }), registryUnknown: 0,
@@ -113,6 +160,8 @@ export function createG10aAdmissionRuntimeComposition(
   const counterBridge = createRuntimeLiveCounterBridge(() => refreshCounters?.());
   const admissionHandler = createG07bAdmissionHandler({
     ...options.admission,
+    ...(g10bBindingFactory === undefined ? {} : { operationBudgetBindingFactory: g10bBindingFactory }),
+    ...(recoveryBridge === undefined ? {} : { postCommitUnknownRecoveryBridge: recoveryBridge }),
     writerPermission,
     queryPermission,
     ...(runtime === undefined ? {} : {
@@ -139,7 +188,11 @@ export function createG10aAdmissionRuntimeComposition(
       runtime,
       ...(driverLogBinding === undefined ? {} : { driverLogBinding }),
     });
-  return Object.freeze({ handler, control });
+  return Object.freeze({
+    handler,
+    control,
+    ...(recoveryScheduler === undefined ? {} : { recoveryScheduler }),
+  });
 }
 
 function captureFactoryOptions(input: unknown): Readonly<{
@@ -151,11 +204,12 @@ function captureFactoryOptions(input: unknown): Readonly<{
   readonly controlIdFactory: (() => string) | undefined;
   readonly runtimeLogSink: RuntimeLogSink | undefined;
   readonly runtime: G10aRuntimeCapabilities | undefined;
+  readonly g10cMongoAdapter: G04bMongoPersistenceAdapter | undefined;
 }> {
   const record = capturePlainRecord(
     input,
     ['epoch', 'run', 'monotonicClock', 'awaitObservation', 'admission'],
-    ['controlIdFactory', 'runtimeLogSink', 'runtime'],
+    ['controlIdFactory', 'runtimeLogSink', 'runtime', 'g10cMongoAdapter'],
     'G10a admission runtime options',
   );
   return Object.freeze({
@@ -167,7 +221,14 @@ function captureFactoryOptions(input: unknown): Readonly<{
     controlIdFactory: record.controlIdFactory as (() => string) | undefined,
     runtimeLogSink: captureRuntimeLogSink(record.runtimeLogSink),
     runtime: captureRuntime(record.runtime),
+    g10cMongoAdapter: captureG10cMongoAdapter(record.g10cMongoAdapter),
   });
+}
+
+function captureG10cMongoAdapter(value: unknown): G04bMongoPersistenceAdapter | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'object' || value === null) throw new TypeError('G10c Mongo adapter is invalid');
+  return value as G04bMongoPersistenceAdapter;
 }
 
 function captureRuntime(value: unknown): G10aRuntimeCapabilities | undefined {

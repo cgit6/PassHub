@@ -4,6 +4,7 @@ import type {
   WriteOperationSettlement,
 } from '../../access/application/internal/write-operation-coordinator.js';
 import type { AdmissionWorkContext, AdmissionWriterOutcome } from './g07b-admission-handler.js';
+import type { RedactedAccessEventProjection } from '../../access/ports/index.js';
 import { readG10bScopedPersistenceForAdmission } from './g10b-operation-bridge.js';
 import type { IssuedPersistenceLease } from '../../runtime/internal/runtime-control.js';
 import type { G04bMongoPersistenceAdapter } from '../../infrastructure/mongo/g04b-persistence-adapter.js';
@@ -13,6 +14,7 @@ import {
   createG10cPostCommitUnknownTerminalCleaner,
   createG10cPostCommitUnknownForwardingSink,
   createG10cRetainedOriginalCommitTerminator,
+  readG10cPostCommitUnknownCanonicalRecognitionEvent,
   type G10cPostCommitUnknownHandoff,
   type G10cPostCommitUnknownHandoffBundle,
   type G10cRetainedOriginalCommitTerminator,
@@ -37,6 +39,7 @@ export interface G10cG07RecoveryBridge {
     context: AdmissionWorkContext,
     lease: IssuedPersistenceLease,
     kind: G10cG07RecoveryWorkKind,
+    recognitionSettlement?: G10cRecognitionRecoverySettlement,
   ): void;
   finishIssuedPersistence(context: AdmissionWorkContext): void;
   /** Returns true only for the exact G10c handoff retained during this work. */
@@ -92,15 +95,23 @@ export interface G10cG07PausedTicketTerminal {
 
 export type G10cG07RecoveryWorkKind = 'MANAGEMENT' | 'RECOGNITION';
 
+/** Paired G07 settlement invoked only after canonical recognition proof. */
+export interface G10cRecognitionRecoverySettlement {
+  canonicalMatched(event: RedactedAccessEventProjection): void;
+}
+
 export interface G10cG07RecoveryBridgeOptions {
   readonly adapter: G04bMongoPersistenceAdapter;
   readonly handoffs: G10cPostCommitUnknownHandoffBundle;
+  /** Composition-owned wake-up; it never carries a ticket or business data. */
+  readonly onPausedTicket?: () => void;
 }
 
 interface ActiveInvocation {
   readonly context: AdmissionWorkContext;
   readonly lease: IssuedPersistenceLease;
   readonly kind: G10cG07RecoveryWorkKind;
+  readonly recognitionSettlement: G10cRecognitionRecoverySettlement | null;
   handoff: G10cPostCommitUnknownHandoff | null;
   ticket: G10cG07PausedTicket | null;
   finished: boolean;
@@ -156,6 +167,7 @@ export function createG10cG07RecoveryBridge(
     observeRetained,
   );
   attachG10cPostCommitUnknownHandoffSink(options.adapter, forwarding);
+  const wakeScheduler = options.onPausedTicket;
 
   const releaseInvocationLease = (current: ActiveInvocation): void => {
     if (current.leaseReleased) return;
@@ -223,6 +235,16 @@ export function createG10cG07RecoveryBridge(
         async confirmedPersisted(this: unknown): Promise<void> {
           if (this !== terminal) throw new TypeError('G10c G07 paused recovery terminal is foreign');
           assertCurrent();
+          // Canonical MATCHED must first close the G07 operation registry and
+          // install its replay plan.  Session cleanup is deliberately later;
+          // if this paired settlement fails, the ticket remains fail-closed.
+          if (state.invocation.kind === 'RECOGNITION') {
+            const settle = state.invocation.recognitionSettlement;
+            if (settle === null) throw new Error('G10c recognition settlement port is unavailable');
+            settle.canonicalMatched(
+              readG10cPostCommitUnknownCanonicalRecognitionEvent(options.handoffs.owner, state.handoff),
+            );
+          }
           let cleaner;
           try {
             // This succeeds only after the retained original sender or a
@@ -280,6 +302,7 @@ export function createG10cG07RecoveryBridge(
       context: AdmissionWorkContext,
       lease: IssuedPersistenceLease,
       kind: G10cG07RecoveryWorkKind,
+      recognitionSettlement?: G10cRecognitionRecoverySettlement,
     ): void {
       if (active !== null) throw new TypeError('G10c G07 recovery bridge already has an active writer');
       if (!isObject(context) || !Object.isFrozen(context) || !isObject(lease)
@@ -289,11 +312,16 @@ export function createG10cG07RecoveryBridge(
       if (kind !== 'MANAGEMENT' && kind !== 'RECOGNITION') {
         throw new TypeError('G10c G07 recovery bridge work kind is invalid');
       }
+      if (recognitionSettlement !== undefined
+        && (!isObject(recognitionSettlement) || typeof recognitionSettlement.canonicalMatched !== 'function')) {
+        throw new TypeError('G10c recognition settlement port is invalid');
+      }
       if (recoveryOwner === null) throw new TypeError('G10c G07 recovery owner is not bound');
       active = {
         context,
         lease,
         kind,
+        recognitionSettlement: recognitionSettlement ?? null,
         handoff: null,
         ticket: null,
         finished: false,
@@ -357,6 +385,11 @@ export function createG10cG07RecoveryBridge(
       queuedTickets.push(ticket);
       current.ticket = ticket;
       current.paused = true;
+      // The ticket is now visible through the opaque owner.  Wake only the
+      // composition-owned scheduler; no request or business payload crosses
+      // this callback.  A wake failure must not turn a genuine unknown commit
+      // into a known writer result.
+      try { wakeScheduler?.(); } catch { /* scheduler failure is fail-closed */ }
       return true;
     },
     assertNoRetainedHandoff(context: AdmissionWorkContext): void {
