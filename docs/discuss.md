@@ -31,16 +31,16 @@ updated: "2026-10-04"
 ## 快速檢索卡
 
 - 核心問題：在小型訪客資格／模擬辨識決策業務上，形成合理、模組化、可驗證的Node.js/TypeScript架構與逐關方案；不以兩天時限取代品質論證。
-- 當前結論：D160完成規劃封口；G02–G11c各自限定 evidence 已保存，目前停止於 G11c。D187 同步七個 reset target、canonical writeRunClaim 語意及 G11a–G11g STOP；下一合法 gate 為 G11d，完整 v1 未完成。
+- 當前結論：D160完成規劃封口；G02–G11d各自限定 evidence 已保存，目前停止於 G11d。D187 同步七個 reset target、canonical writeRunClaim 語意及 G11a–G11g STOP；下一合法 gate 為 G11e，完整 v1 未完成。
 - 關鍵爭點：D129原生中止兩送有界組預扣不退、跨窗口局部例外；D130較早確認起點／D131七格；D143 Face反向unique同txn替換必须G04a先真測。D149同epoch普通restart關寫是明示可用性代價，不能依memory空接管。
 - 適用於：D01–D187有效採用／修正、獨立角色公開論點、官方查證及剩餘gate風險。採Nest預設Express/strictTS/官方driver/單API/單Mongo member replica set，非無框架或HA；D157原25STOP經D187拆分G11後現為31STOP，見實作方案。
 - 不適用於：把歷史候選／官方語法／manifest／獨立唯讀實驗當PassHub已完成成果。D117 JSON v2已取代binary v1，D130永久終局候選未採，D89安全條件續辦仍有效；D161只有A01為V。
-- 待驗證：G11d及其後gate。G09a已證安全查詢，G09b已完成固定fixture、4,000 raw及40 executionStats限定實驗；G10a–G10c與G11a–G11c限定證據已保存，仍未驗G11d reset／seed、G11e排程、G11f fault matrix、G11g綜合release及完整G12。
+- 待驗證：G11e及其後gate。G09a已證安全查詢，G09b已完成固定fixture、4,000 raw及40 executionStats限定實驗；G10a–G10c與G11a–G11d限定證據已保存，仍未驗G11e排程、G11f fault matrix、G11g綜合release及完整G12。
 - 實作者入口：[實作方案](implementation-plan.md)，再讀[136要求矩陣](requirements-traceability.md)及[業務規格](business-scope.md)，並回查對應D原文。未來每子關報實際證據後STOP，D114不授權未來不停實作。
 
 ## 閱讀狀態與階段界線
 
-- 最新狀態：G10a、G10b、G10c、G11a、G11b、G11c 限定 gate 已通過；G11d–G11g maintenance 與完整 v1 尚未完成。下一合法 gate 為 G11d。
+- 最新狀態：G10a、G10b、G10c、G11a、G11b、G11c、G11d 限定 gate 已通過；G11e–G11g maintenance 與完整 v1 尚未完成。下一合法 gate 為 G11e。
 - D01–D35 及所有較早摘要／交接保留歷史；其中「K1尚未同步」「尚未開始第二階段」「API/schema未定」不代表當前狀態。最新有效版本由D117/119/122/125/129–139/140–157及後續明確覆核修正判定，歷史block不回寫。下方回溯狀態描述只對當時有效，不能用來覆蓋新版。
 - 文件整體settled代表有效規劃已採用；D161留下舊碼處理證據，D163–D179留下G02–G08b各自限定證據，D180／D181留下G09a契約及證據，D182／D183留下G09b契約及證據，D184留下G10a開發前契約。partially-sourced仍含專案取捨、官方查證與未實測組合；上述限定gates不代表G10工程、G11部署或其餘107要求通過。
 - 「使用者已接受」與「辯論暫定」逐 block 區分。授權保存辯論不等於確認候選架構，也不等於授權重寫程式。
@@ -3480,3 +3480,11 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - 最新驗收：G11c unit 4 suites／27 tests PASS；full unit 77 suites／1267 tests PASS；detached clean worktree runtime `sourceDirty=false`，實際呼叫四個G11c adapters，七個nominal cases全PASS。API與Mongo stopped state以identity hash、原PID、`Running=false`、`Pid=0`及exit code保存；Mongo復原以`hello`確認`rs0`、writable PRIMARY及單host。
 - no-late-work不是單一snapshot：API停止後、Mongo復原後，以Mongo`currentOp`連續三次觀察固定API network identity均為零，並對比maintenance前後metadata及collection snapshot；marker仍存在、API未重啟、Mongo仍可寫。
 - 邊界：runner的fixture preparation在marker建立前，僅作隔離環境前置資料，不屬G11c lifecycle；G11c不reset/seed、不清claim、不簽ticket、不移除marker、不開public maintenance route。七collection reset／stable seed／新epoch留G11d；host flock／systemd留G11e；完整fault／rerun matrix留G11f；綜合manifest及release audit留G11g。
+
+### D195｜G11d 精確 reset／stable seed 限定工程證據通過
+
+- 日期：2026-10-04；狀態：PM、架構師與測試員對修正版各自覆核後 PASS；G11d STOP 解除，目前停止於 G11d，下一合法 gate 為 G11e。正式報告為 `docs/evidence/g11d/report.md`，clean runtime 摘要為 `docs/evidence/g11d/runtime-clean.json`。
+- 實作邊界：`resetAndSeedG11d` 只接受 `passhub_demo` 的 `Db` 與新 `datasetEpoch`，canonical seed 在 private module 內建立；七個 target（`qualifications`、`faceSlots`、`events`、`users`、`sources`、`metadata`、`managementReceipts`）以同一 `ClientSession` transaction 逐一 delete／insert。任一寫入失敗會 rollback；不接受外部 seed 注入、不 drop database／collection／volume、不建立 public reset route。
+- 驗收：G11d unit 1 suite／6 tests PASS；clean Mongo runtime 8/8 cases PASS，包含 exact allowlist、transaction rollback、sequential reset、固定 seed、新 epoch／`writeRunClaim=null`、index preservation、其他 collection／database baseline 不變及第二次受控重跑。正式 runtime `sourceDirty=false`，source commit `f879d8f7fc900019da79e4fe9e853ce7fa39a17e`，source SHA-256 與 generated compose fingerprint 均保存於 JSON。
+- runner 另驗證 dirty source 預設拒絕、執行中 source fingerprint 不變、第二次資料 snapshot 與 canonical seed 一致；測試 teardown 的 `compose down --volumes` 僅清理隔離測試資源，不屬 G11d reset 行為。
+- 邊界：G11d 不實作 G11e 的 flock／systemd／03:00 controller，不實作 G11f 的 fault injection、extra writer 或 partial-reset recovery controller；G11e–G11g 仍未完成，完整 v1／G12 仍未解鎖。

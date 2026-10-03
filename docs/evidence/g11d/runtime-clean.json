@@ -1,0 +1,35 @@
+{
+  "gate": "G11d",
+  "sourceCommit": "f879d8f7fc900019da79e4fe9e853ce7fa39a17e",
+  "sourceDirty": false,
+  "sourceSha256": "fb7cecf2c4422a41a3e279afedb898809ad8f876ed56eae931b66247bb1f9700",
+  "runtimeComposeSha256": "87a5751bcfc63b6520a3a226385caef62fb9919615a4e89f51273195f39390be",
+  "cases": [
+    "G11D_EXACT_COLLECTION_ALLOWLIST",
+    "G11D_TRANSACTIONAL_RESET",
+    "G11D_SEQUENTIAL_RESET",
+    "G11D_STABLE_SEED",
+    "G11D_NEW_EPOCH_NULL_CLAIM",
+    "G11D_INDEXES_PRESERVED",
+    "G11D_OTHER_DATA_UNTOUCHED",
+    "G11D_REPEAT_RESET"
+  ],
+  "first": {
+    "previousDatasetEpoch": "a055e971-22c0-415a-957f-b9def78d4fbd",
+    "datasetEpoch": "65572c09-9495-469e-9a85-bc669220907f",
+    "deleted": {"qualifications": 1, "faceSlots": 2, "events": 0, "users": 1, "sources": 2, "metadata": 1, "managementReceipts": 0},
+    "inserted": {"qualifications": 1, "faceSlots": 2, "events": 0, "users": 1, "sources": 2, "metadata": 1, "managementReceipts": 0},
+    "indexesPreserved": true,
+    "untouchedCollectionNames": ["unrelated"],
+    "seedFingerprint": "8880e674e3020f42536e0ffe8ac3b5a1af896453c478f5a44b1cdffa5f7a8b48"
+  },
+  "second": {
+    "previousDatasetEpoch": "65572c09-9495-469e-9a85-bc669220907f",
+    "datasetEpoch": "93455905-0bf4-4076-ac9c-6c34699e5989",
+    "deleted": {"qualifications": 1, "faceSlots": 2, "events": 0, "users": 1, "sources": 2, "metadata": 1, "managementReceipts": 0},
+    "inserted": {"qualifications": 1, "faceSlots": 2, "events": 0, "users": 1, "sources": 2, "metadata": 1, "managementReceipts": 0},
+    "indexesPreserved": true,
+    "untouchedCollectionNames": ["unrelated"],
+    "seedFingerprint": "0d99ce96edc9916b4f272d6b56a1dda908e556e500b62a31e0b9dce17d463778"
+  }
+}
