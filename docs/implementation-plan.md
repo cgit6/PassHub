@@ -27,11 +27,11 @@ updated: "2026-10-04"
 ## 快速檢索卡
 
 - 核心問題：把已採用的業務與架構討論交給實作者，避免自行補架構、丟要求或用測試數量取代證據。
-- 當前結論：P01–P15規劃已收斂；G02–G11d已有各自限定證據並通過 gate，目前停止於 G11d。G11 依 D187 拆成 G11a–G11g 七個 STOP，下一合法 gate 為 G11e；矩陣仍須由各 gate 的直接證據逐項更新，完整 v1 尚未完成。
+- 當前結論：P01–P15規劃已收斂；G02–G11e已有各自限定證據並通過 gate，目前停止於 G11e。G11 依 D187 拆成 G11a–G11g 七個 STOP，下一合法 gate 為 G11f；矩陣仍須由各 gate 的直接證據逐項更新，完整 v1 尚未完成。
 - 關鍵爭點：G04a 真 Mongo 8.0.32 已證明窄 face reverse-unique release/reuse 交易情境；G02只證工具鏈可用，不證API、模組接線或完整交易 adapter。
 - 適用於：單API／單logicalplace／單次Qualification／QR或模擬Face的公開共享sandbox；Nest預設Express、strictTS、官方Mongo driver。
 - 不適用於：真實人臉辨識／硬體門禁、多據點／多租戶、多API、跨崩潰／reset續辦、正式SLA或業務復原。
-- 待驗證：G10 fault／control／logs、G11e–G11g維護部署，以及完整G05b確認整合、clean install、Docker、CI、OpenAPI、public HTTPS。G09b限定效能證據不等於SLA、容量規劃或完整v1工程通過。
+- 待驗證：G10 fault／control／logs、G11f–G11g維護部署，以及完整G05b確認整合、clean install、Docker、CI、OpenAPI、public HTTPS。G09b限定效能證據不等於SLA、容量規劃或完整v1工程通過。
 
 ## 核心問題
 
@@ -293,7 +293,7 @@ API/Mongo SIGTERM grace30s，API無自動restart；stoprequest/graceexpiry不是
 | G11b | PASS：持久寫入權與兩階段啟動 | b1–b3、b4 nominal bridge／bootstrap／single-use ready、b5 production process/container 均已通過；33 個 exact unit tests、12 個 clean process cases、去敏與 cleanup 證據見 `docs/evidence/g11b/report.md`；解鎖 G11c |
 | G11c | PASS：維護入口與停機隔離 | `docs/evidence/g11c/report.md`；4 suites／27 unit tests、clean runtime composition runner；persistent marker、private drain≤30s、API／Mongo原process disappearance、同volume writable PRIMARY、三次no-late observation及cleanup均有證據 |
 | G11d | PASS：精確 reset／seed | clean `f879d8f`；6 unit tests、clean Mongo runtime 8/8 cases；七 collection transaction、保 indexes、stable seed、新 epoch／null claim、其他資料不變；證據見 `docs/evidence/g11d/report.md` |
-| G11e | 外部排程與唯一 controller | local nonblocking flock、同一手動／timer command、Asia/Taipei 03:00、Persistent=false |
+| G11e | PASS：外部排程與唯一 controller | `docs/evidence/g11e/report.md`；2 suites／3 tests、static 5 cases、runtime 5 cases；local nonblocking flock、reset-result→epoch→ticket handoff、同一手動／timer command、Asia/Taipei 03:00、Persistent=false |
 | G11f | fail-closed 與受控重跑 | 各階段 fault、marker／API off、extra writer拒絕、ordinary restart、partial reset 後重跑收斂 |
 | G11g | 綜合 maintenance 證據 | `npm run test:maintenance`、exact case manifest、秘密掃描、cleanup、來源與設定指紋、PM／架構／測試覆核 |
 | G12 | 完整交付證據audit | 全必需套件、OpenAPI／boundary／requirements／cleaninstall、CI／Demo／publicHTTPS及136證據 |
@@ -384,6 +384,6 @@ Q1–Q13各實際細分見discuss原查證block（D105/111/116–125/127/133/135
 
 G05c evidence supplemental: exact Node image、G05c 51 tests、全 unit 189、G05a 21、G05b 80、boundary／negative compile／coverage及registry fail-closed boundary均已由 `docs/evidence/g05c/report.md` 保存；G06a evidence 另由 `docs/evidence/g06a/report.md` 保存，含 unit 88、true Mongo integration 5、full unit 277；G06b evidence 由 `docs/evidence/g06b/report.md` 保存，含 unit 78、true Mongo integration 4、full unit 355；G07a evidence由 `docs/evidence/g07a/report.md` 保存，含strict JSON unit 32、true HTTP e2e 41、combined 73、full unit 387；G07b evidence由 `docs/evidence/g07b/report.md` 保存，含unit 40、true HTTP e2e 5、combined 45、full unit 427；G08a evidence由 `docs/evidence/g08a/report.md` 保存，含unit 52、true HTTP e2e 12、true Mongo 8.0.32 integration 10、coverage combined 74及full unit 479；G08b evidence由 `docs/evidence/g08b/report.md` 保存，含unit 42、true HTTP e2e 6、true Mongo 8.0.32 integration 3、combined 51及full unit 521；G09a evidence由 `docs/evidence/g09a/report.md` 保存，含unit 92、true HTTP e2e 13、true Mongo 8.0.32 integration 16、combined 121及full unit 613；G09b evidence由 `docs/evidence/g09b/report.md`保存，含4,000 raw、40 cells、40 executionStats及完整correctness／inventory／hash核對。本段不把限定query benchmark推論為G10真故障／控制／logs、G11部署、SLA或完整API完成。
 
-當前停止點為 **G11d 已完成限定 exact reset／stable seed；下一合法動作為進入 G11e**。G11e–G11g maintenance 與完整 release 仍未解鎖；矩陣狀態只可依直接證據逐項更新。
+當前停止點為 **G11e 已完成限定 controller／排程；下一合法動作為進入 G11f**。G11f–G11g maintenance 與完整 release 仍未解鎖；矩陣狀態只可依直接證據逐項更新。
 
-安全採用P01–P15契約、31STOP與136矩陣，另受D166正式Jest runner決策約束。G02–G11d各自限定evidence已保存；G04a/G04b另記錄真Mongo 8.0.32、9／57 integration。`ManageQualifications` 已於G08a收斂為公開discriminated result；G08b辨識回覆只由已保存Event映射；G09a查詢維持exact去敏投影；G09b只量測同一Mongo adapter。不得由此推論G11e–G11g maintenance、公開runtime或SLA成立。各gate的clean source commit只證該gate provenance，不冒稱G12完整release evidence。
+安全採用P01–P15契約、31STOP與136矩陣，另受D166正式Jest runner決策約束。G02–G11e各自限定evidence已保存；G04a/G04b另記錄真Mongo 8.0.32、9／57 integration。`ManageQualifications` 已於G08a收斂為公開discriminated result；G08b辨識回覆只由已保存Event映射；G09a查詢維持exact去敏投影；G09b只量測同一Mongo adapter。不得由此推論G11f–G11g maintenance、公開runtime或SLA成立。各gate的clean source commit只證該gate provenance，不冒稱G12完整release evidence。

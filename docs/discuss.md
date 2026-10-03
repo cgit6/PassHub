@@ -31,16 +31,16 @@ updated: "2026-10-04"
 ## 快速檢索卡
 
 - 核心問題：在小型訪客資格／模擬辨識決策業務上，形成合理、模組化、可驗證的Node.js/TypeScript架構與逐關方案；不以兩天時限取代品質論證。
-- 當前結論：D160完成規劃封口；G02–G11d各自限定 evidence 已保存，目前停止於 G11d。D187 同步七個 reset target、canonical writeRunClaim 語意及 G11a–G11g STOP；下一合法 gate 為 G11e，完整 v1 未完成。
+- 當前結論：D160完成規劃封口；G02–G11e各自限定 evidence 已保存，目前停止於 G11e。D187 同步七個 reset target、canonical writeRunClaim 語意及 G11a–G11g STOP；下一合法 gate 為 G11f，完整 v1 未完成。
 - 關鍵爭點：D129原生中止兩送有界組預扣不退、跨窗口局部例外；D130較早確認起點／D131七格；D143 Face反向unique同txn替換必须G04a先真測。D149同epoch普通restart關寫是明示可用性代價，不能依memory空接管。
 - 適用於：D01–D187有效採用／修正、獨立角色公開論點、官方查證及剩餘gate風險。採Nest預設Express/strictTS/官方driver/單API/單Mongo member replica set，非無框架或HA；D157原25STOP經D187拆分G11後現為31STOP，見實作方案。
 - 不適用於：把歷史候選／官方語法／manifest／獨立唯讀實驗當PassHub已完成成果。D117 JSON v2已取代binary v1，D130永久終局候選未採，D89安全條件續辦仍有效；D161只有A01為V。
-- 待驗證：G11e及其後gate。G09a已證安全查詢，G09b已完成固定fixture、4,000 raw及40 executionStats限定實驗；G10a–G10c與G11a–G11d限定證據已保存，仍未驗G11e排程、G11f fault matrix、G11g綜合release及完整G12。
+- 待驗證：G11f及其後gate。G09a已證安全查詢，G09b已完成固定fixture、4,000 raw及40 executionStats限定實驗；G10a–G10c與G11a–G11e限定證據已保存，仍未驗G11f fault matrix、G11g綜合release及完整G12。
 - 實作者入口：[實作方案](implementation-plan.md)，再讀[136要求矩陣](requirements-traceability.md)及[業務規格](business-scope.md)，並回查對應D原文。未來每子關報實際證據後STOP，D114不授權未來不停實作。
 
 ## 閱讀狀態與階段界線
 
-- 最新狀態：G10a、G10b、G10c、G11a、G11b、G11c、G11d 限定 gate 已通過；G11e–G11g maintenance 與完整 v1 尚未完成。下一合法 gate 為 G11e。
+- 最新狀態：G10a、G10b、G10c、G11a、G11b、G11c、G11d、G11e 限定 gate 已通過；G11f–G11g maintenance 與完整 v1 尚未完成。下一合法 gate 為 G11f。
 - D01–D35 及所有較早摘要／交接保留歷史；其中「K1尚未同步」「尚未開始第二階段」「API/schema未定」不代表當前狀態。最新有效版本由D117/119/122/125/129–139/140–157及後續明確覆核修正判定，歷史block不回寫。下方回溯狀態描述只對當時有效，不能用來覆蓋新版。
 - 文件整體settled代表有效規劃已採用；D161留下舊碼處理證據，D163–D179留下G02–G08b各自限定證據，D180／D181留下G09a契約及證據，D182／D183留下G09b契約及證據，D184留下G10a開發前契約。partially-sourced仍含專案取捨、官方查證與未實測組合；上述限定gates不代表G10工程、G11部署或其餘107要求通過。
 - 「使用者已接受」與「辯論暫定」逐 block 區分。授權保存辯論不等於確認候選架構，也不等於授權重寫程式。
@@ -3488,3 +3488,11 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - 驗收：G11d unit 1 suite／6 tests PASS；clean Mongo runtime 8/8 cases PASS，包含 exact allowlist、transaction rollback、sequential reset、固定 seed、新 epoch／`writeRunClaim=null`、index preservation、其他 collection／database baseline 不變及第二次受控重跑。正式 runtime `sourceDirty=false`，source commit `f879d8f7fc900019da79e4fe9e853ce7fa39a17e`，source SHA-256 與 generated compose fingerprint 均保存於 JSON。
 - runner 另驗證 dirty source 預設拒絕、執行中 source fingerprint 不變、第二次資料 snapshot 與 canonical seed 一致；測試 teardown 的 `compose down --volumes` 僅清理隔離測試資源，不屬 G11d reset 行為。
 - 邊界：G11d 不實作 G11e 的 flock／systemd／03:00 controller，不實作 G11f 的 fault injection、extra writer 或 partial-reset recovery controller；G11e–G11g 仍未完成，完整 v1／G12 仍未解鎖。
+
+### D196｜G11e 外部排程與唯一 controller 限定工程證據通過
+
+- 日期：2026-10-04；狀態：PM、架構師與測試員對修正版各自覆核後 PASS；G11e STOP 解除，目前停止於 G11e，下一合法 gate 為 G11f。正式報告為 `docs/evidence/g11e/report.md`，結果摘要為 `docs/evidence/g11e/runtime.json`。
+- 實作：手動與 systemd timer 共用 `run-maintenance.sh`；FD 9 持有 local nonblocking `flock -n` 至 controller 結束，第二執行者回 busy code 75。timer 固定 `*-*-* 03:00:00 Asia/Taipei`、`AccuracySec=1s`、`RandomizedDelaySec=0`、`Persistent=false`。
+- authority handoff：G11d reset result 由 private publisher 驗證 `passhub_demo`／`indexesPreserved` 後，以 temporary＋fsync＋same-directory atomic rename 更新持久 `StateDirectory` epoch file；controller 只讀 0400 process identity／epoch files，使用 numeric UID 1000 契約，將 ticket 寫入 G11b canonical API runtime path並對 stdout 去敏。首次 handoff 與重複更新均有 runtime evidence。
+- 驗收：2 suites／3 tests、static 5 cases、runtime 5 cases、syntax／diff checks 全部通過。未建立 public maintenance route，也未把 G11d reset 或 G11f fault/recovery 責任偷併進本關。
+- 邊界：G11e 只解除 host lock、reset-result handoff、ticket signing 與 timer；G11f fault matrix、extra writer、partial reset recovery、ordinary restart及G11g綜合 release仍未完成。
