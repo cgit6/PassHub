@@ -1,0 +1,16 @@
+[Unit]
+Description=PassHub private maintenance controller
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=passhub
+WorkingDirectory=/opt/passhub
+Environment=PASSHUB_MAINTENANCE_RUNTIME_DIR=/run/passhub/maintenance
+Environment=PASSHUB_MAINTENANCE_LOCK_PATH=/run/passhub/maintenance/controller.lock
+ExecStart=/opt/passhub/scripts/g11/run-maintenance.sh
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+
