@@ -113,7 +113,7 @@
 | A15 | 同 Face 鍵的綁定／釋放／辨識須有真實共用寫入競爭；釋放清綁定引用但保留空協調位，首次缺鍵的綁定與未映射決策也受保護。 | D66–D67 | 空鍵競爭 | T-A15：首次綁定與 MATCHED 但未映射的辨識競爭；僅負查／no-op 不算保護；釋放後協調位仍可用。 | V：G04b 57-case 真Mongo驗首次 bind／unmapped recognition race、release保留空slot、mapping／qualification共同保存與分類；G05協調仍U。 |
 | A16 | 區分各種 duplicate key／已中止交易；不能全部當可重跑或吞錯續用。 | D66–D67 | 保存錯誤分類 | T-A16：映射、事件、其他唯一鍵衝突；只有確認可安全重跑才重跑。 | V：G04b 57-case 分辨 duplicate、112 write conflict、251 abort、schema validation、unknown commit；不以 retry loop 偽造確定性。 |
 | A17 | 逾期映射採相關操作惰性整理；唯讀不整理，無 TTL／背景終結業務；query只依單一lease `observedAt`投影。 | D68–D69、D72、D76、D164、D180 | 映射整理 | T-A17：有效 faceBound、過期釋放、在場保留、準時排隊保護分開測；query不寫DB、不cleanup。 | U：G09a已驗唯讀單一觀察、不cleanup與投影；完整相關寫入惰性整理、準時競爭及全部DB生命期仍未閉合。 |
-| A18 | v1 只一個 API 實例；相關完整業務寫入單執行，登入／唯讀不全排入 FIFO；query只在writer quiescent取得短read-observation lease。 | D73–D74、D76、D180 | 執行協調 | T-A18：部署及程式無第二 writer；writer五種非靜止狀態均立即busy；lease期間writer可登記但不開始，query結束必釋放；不以唯讀可用宣稱故障下必定可查。 | U：G09a已驗五種busy、lease擋後到writer並按FIFO釋放；單API部署與完整故障生命期仍未驗。 |
+| A18 | v1 只一個 API 實例；相關完整業務寫入單執行，登入／唯讀不全排入 FIFO；query只在writer quiescent取得短read-observation lease。 | D73–D74、D76、D180 | 執行協調 | T-A18：部署及程式無第二 writer；writer五種非靜止狀態均立即busy；lease期間writer可登記但不開始，query結束必釋放；不以唯讀可用宣稱故障下必定可查。 | U：G09a已驗五種busy、lease擋後到writer並按FIFO釋放；G11a已驗Compose只有單一API replica。完整維護故障生命期仍未驗。 |
 
 ### 2.6 接收、等待、故障與續辦
 
@@ -172,8 +172,8 @@
 |---|---|---|---|---|---|
 | M01 | 公開 API runtime 供體驗，GitHub 提供碼／文件；共用資料及帳號，不做個人隔離。 | D25、D30 | 展示部署／文件 | T-M01：外部可呼叫 API；明示共享互相影響，不宣稱 GitHub Pages 執行後端。 | U |
 | M02 | 警告只填假資料、Demo 可清除、不保證正式營運／隱私／可用性；不自動辨識真實個資。 | D25–D27、D34 | Demo 警語 | T-M02：入口文件與操作說明可見，沒有正式 SLA／個資治理承諾。 | U |
-| M03 | 預置公開體驗憑證不能混用部署、DB 或維護者秘密。 | D25 | 環境隔離 | T-M03：公開 seed credentials 是刻意值；其他秘密無 tracked／輸出洩漏。 | U |
-| M04 | D148固定分鐘rate／IP表256、request body16KiB、response 256KiB及D152頁量最大100；D155只信固定proxyIP/32；超限無Event且不回partial。 | D27、D148、D152、D155、D180 | 防濫用 | T-M04：各rate、IP表滿、slowbody／深度／重複headers、response序列化超限、proxy偽造、專用重送也計rate但不取消原項；不加風控後臺。 | U：G07a/G07b已驗本地入口／rate；G09a已驗page 100與256KiB fail-closed無partial。trusted proxy、正式全入口/Event及公開部署仍未驗。 |
+| M03 | 預置公開體驗憑證不能混用部署、DB 或維護者秘密。 | D25 | 環境隔離 | T-M03：公開 seed credentials 是刻意值；其他秘密無 tracked／輸出洩漏。 | U：G11a已驗DB／JWT／comparison秘密只由外部secret檔掛載且evidence不輸出值；公開seed憑證與完整secret scan仍屬G11d/G11g。 |
+| M04 | D148固定分鐘rate／IP表256、request body16KiB、response 256KiB及D152頁量最大100；D155只信固定proxyIP/32；超限無Event且不回partial。 | D27、D148、D152、D155、D180 | 防濫用 | T-M04：各rate、IP表滿、slowbody／深度／重複headers、response序列化超限、proxy偽造、專用重送也計rate但不取消原項；不加風控後臺。 | U：G07a/G07b已驗本地入口／rate；G09a已驗page 100與256KiB fail-closed無partial；G11a已驗固定proxy peer才採單一合法XFF，並拒絕偽造／串列／陣列／無效值。正式全入口接線與公開部署仍未驗。 |
 | M05 | 維護命令獨立於 API、可重用必要模型設定；任何公開角色無 reset API。 | D47、D52 | 維護入口 | T-M05：停止 API 後外部命令仍可維護 DB；Operator／Viewer／Source 無重置權。 | U |
 | M06 | 每日 Asia/Taipei 凌晨 03:00 由 API 外排程自動執行，不依賴人工或 API 自己計時。 | D26、D52 | 外部排程 | T-M06：排程時區／觸發驗證；API 不健康仍能啟動維護。 | U |
 | M07 | 先拒新業務、有限等待既有操作，再停止 API；API 已停且確保舊 DB 工作不能干擾重置後資料才清除。 | D48–D52、D83 | 停機／隔離 | T-M07：清除前確認 API 已停；未知／未完成 DB 指令不能因停程序就假定消失；隔離須有證據。 | U |
@@ -190,8 +190,8 @@
 | E03 | 真實並行 HTTP 測試，驗證跨媒介及管理競爭、Event／Presence／Mapping 完整。 | D19–D20、D35、D76、業務 §12 | HTTP 整合驗證 | T-E03：不同事件均保存且最多一個轉移；同事件只一個 Event。 | U |
 | E04 | D152／D182固定10k Qualification／40k Event與Qualification、INSIDE及八種Event filter cases的索引前後實驗；正確性及完整證據為門檻，不要求改善百分比。 | 業務 §12、D152、D182 | 查詢／測量 | T-E04：SHA-256 deterministic fixture及hash；10 cases各first／oracle fixed-next、tie≥64；每格10 warmup／100 serial measured，BEFORE／AFTER共4,000 raw ns，nearest-rank p50／p95 index 49／94；只切四個query non-unique indexes，兩state輸出相同；40份真adapter aggregate executionStats、主cursor／lookup分開、環境／index inventory／完整與公開去敏證據。 | V：clean `dd0bc14`正式run完成4,000 raw／40 cells／40 executionStats，fixture／readback hash、oracle、tie、無gap／duplicate、BEFORE／AFTER輸出及index inventory全綠；manifest 50 artifacts重算一致，見`docs/evidence/g09b/report.md`。 |
 | E05 | 結構化日誌與 request ID 可追蹤請求、原項及故障，不洩漏秘密。 | D21、業務 §12 | 可觀測性 | T-E05：跨層關聯可查；斷線、重送、未知、維護紀錄有安全上下文。 | U |
-| E06 | 自動化測試涵蓋規則、權限、秘密、冪等、並行、故障、預算及維護。 | D35、D65–D99、業務 §12 | 測試套件 | T-E06：逐列對應，不把單元測試數量等同需求覆蓋。 | U：至G09a full unit為19 suites／613，G09b另完成固定perf correctness／measurement／explain；G10真fault／budget、G11維護及逐136 release audit仍未完成，數量不等同完整覆蓋。 |
-| E07 | 乾淨 Docker 環境啟動 API／真 Mongo，seed 與一鍵 Demo 可重跑且有斷言。 | D30、D35、業務 §12 | 交付／展示 | T-E07：無本機殘留安裝；交易環境、初始化及主流程成功。 | U |
+| E06 | 自動化測試涵蓋規則、權限、秘密、冪等、並行、故障、預算及維護。 | D35、D65–D99、業務 §12 | 測試套件 | T-E06：逐列對應，不把單元測試數量等同需求覆蓋。 | U：G11a新增18 unit／11 static／8真runtime cases，full unit為59 suites／1009 tests；此前各gate另有直接報告。G11b–G11g及逐136 release audit仍未完成，數量不等同完整覆蓋。 |
+| E07 | 乾淨 Docker 環境啟動 API／真 Mongo，seed 與一鍵 Demo 可重跑且有斷言。 | D30、D35、業務 §12 | 交付／展示 | T-E07：無本機殘留安裝；交易環境、初始化及主流程成功。 | U：G11a已由Dockerfile建置並啟動production shell、認證Mongo單成員PRIMARY與Nginx HTTPS，且驗project cleanup；seed、完整業務主流程與公開Demo仍屬後續gate。 |
 | E08 | CI 靜態檢查、測試與建置有實際成功證據，保存 commit／環境／命令。 | 業務 §12 | CI | T-E08：乾淨 runner 通過；失敗阻止宣稱完成。 | U |
 | E09 | README／設計文件交代信任邊界、狀態、資料流、原子性、模擬、共享及每日重置限制。 | D01、D25–D26、D30、D34、業務 §12 | 操作／設計文件 | T-E09：陌生讀者能重跑及解釋限制；不提公司現行系統或複製其資料／畫面。 | U |
 

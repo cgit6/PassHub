@@ -145,9 +145,9 @@ function cleanup() {
   }
   if (buildAttempted) {
     try {
-      let imageExists = true;
-      try { docker(['image', 'inspect', apiTag], { timeout: 15_000 }); } catch { imageExists = false; }
-      if (imageExists) docker(['image', 'rm', '--force', apiTag], { timeout: 60_000 });
+      try { docker(['image', 'rm', '--force', apiTag], { timeout: 60_000 }); } catch {
+        // Absence is decided by the independent exact-tag query below, not by rm stderr.
+      }
       if (docker(['image', 'ls', '--quiet', '--filter', `reference=${apiTag}`], { timeout: 15_000 }).length > 0) {
         throw new Error('G11a cleanup left the project-scoped API image tag');
       }

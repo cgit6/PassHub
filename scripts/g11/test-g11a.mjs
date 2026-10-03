@@ -17,6 +17,17 @@ const RUNTIME_CASES = [
 ];
 const temporary = mkdtempSync(join(tmpdir(), 'passhub-g11a-evidence-'));
 const repository = resolve(import.meta.dirname, '../..');
+const DEPLOYMENT_FINGERPRINT_PATHS = Object.freeze({
+  dockerfileSha256: 'infra/g11/api.Dockerfile',
+  composeSha256: 'infra/g11/compose.yml',
+  smokeComposeSha256: 'infra/g11/compose.smoke.yml',
+  nginxSha256: 'infra/g11/nginx/nginx.conf',
+  mongoEntrypointSha256: 'infra/g11/mongo/entrypoint.sh',
+});
+
+function fileSha256(path) {
+  return createHash('sha256').update(readFileSync(join(repository, path))).digest('hex');
+}
 
 function sourceFingerprint() {
   const paths = [
@@ -79,9 +90,18 @@ try {
   if (runtimeResult.gate !== 'G11a' || runtimeResult.status !== 'PASS') throw new Error('G11a runtime checker did not pass');
   exactCases(runtimeResult.cases, RUNTIME_CASES, 'G11a runtime');
   const runtimeFingerprints = runtimeResult.fingerprints;
-  if (typeof runtimeFingerprints !== 'object' || runtimeFingerprints === null
-    || !Object.values(runtimeFingerprints).every((value) => typeof value === 'string' && /^(?:sha256:)?[0-9a-f]{64}$/u.test(value))) {
+  const expectedFingerprintKeys = ['apiImageId', ...Object.keys(DEPLOYMENT_FINGERPRINT_PATHS)].sort();
+  const actualFingerprintKeys = typeof runtimeFingerprints === 'object' && runtimeFingerprints !== null
+    ? Object.keys(runtimeFingerprints).sort()
+    : [];
+  if (actualFingerprintKeys.length !== expectedFingerprintKeys.length
+    || actualFingerprintKeys.some((value, index) => value !== expectedFingerprintKeys[index])
+    || typeof runtimeFingerprints.apiImageId !== 'string'
+    || !/^sha256:[0-9a-f]{64}$/u.test(runtimeFingerprints.apiImageId)) {
     throw new Error('G11a runtime fingerprints are missing or malformed');
+  }
+  for (const [key, path] of Object.entries(DEPLOYMENT_FINGERPRINT_PATHS)) {
+    if (runtimeFingerprints[key] !== fileSha256(path)) throw new Error(`G11a runtime fingerprint mismatch: ${key}`);
   }
 
   result = {
