@@ -3504,3 +3504,10 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - 驗收：clean detached runtime `sourceDirty=false`、source commit `53c05aa`、1 suite／14 unit tests、同一 Mongo 新 epoch／stable seed／indexes／未管理資料／`writeRunClaim=null` 收斂、真實 G11e 0400 ticket、雙 controller flock contention（第二者 `75/G11E_CONTROLLER_BUSY`）及 cleanup 全部通過。
 - scope：marker off、API running、Mongo 非 PRIMARY、extra writer、ordinary restart、lock／ticket invalid 的 canonical matrix 是 policy-only observations，不宣稱每一項都已獨立 Docker／Mongo fault injection；G11c／G11e 的相鄰 lifecycle evidence 保留。G11f 不宣稱 G11g 綜合 maintenance release、公開 HTTPS 或完整 production fault coverage。
 - 交接：G11g 只可整合 G11a–G11f tracked evidence、秘密掃描、cleanup、source/config/image fingerprints 與三角色最終 audit；不得把 G11f policy-only cases 改寫成真實 fault coverage。
+
+### D198｜G11g maintenance 綜合證據通過
+
+- 日期：2026-10-04；狀態：PM、架構師與測試員對 G11g manifest／掃描／cleanup／指紋及 scope 限制覆核後 PASS；G11g STOP 解除，目前停止於 G11g，下一合法 gate 為 G12。正式證據為 `docs/evidence/g11g/report.md` 與 `runtime.json`。
+- `npm run test:maintenance` 在 clean detached worktree 通過；確認 G11a–G11f 共10份 tracked evidence、G11e static contract、G11f 14 unit tests、468檔秘密掃描（0 hits）、Docker containers／networks／volumes清理為空、sourceDirty=false及source fingerprint。
+- 綜合器不重新解釋前置 gate，也不把 G11f policy-only fault observations 改寫為完整 process／Mongo fault injection；G11f 同 Mongo partial handoff／受控 rerun與真實 G11e lock contention仍以其自身 report為準。
+- 邊界：G11g不宣稱OpenAPI、CI、公開HTTPS、完整v1、SLA或production個資生命週期；上述交付與136要求的最終audit留在G12。

@@ -1,0 +1,12 @@
+{
+  "gate": "G11g",
+  "status": "PASS",
+  "sourceCommit": "774d2d4595a77484fa4f9a31f3904775680f5300",
+  "sourceDirty": false,
+  "sourceSha256": "8bcaa8532374dd9e10406fa8dae6ad6c83372ab0f69b023fd6f88cf884405a0f",
+  "evidenceFiles": 10,
+  "secretScan": { "status": "PASS", "files": 468, "hits": 0 },
+  "dockerCleanup": { "available": true, "containers": [], "networks": [], "volumes": [] },
+  "checks": ["g11e-static-contract", "g11f-unit"],
+  "limitations": ["G11f policy-only fault observations remain policy scope", "no public HTTPS release claim"]
+}
