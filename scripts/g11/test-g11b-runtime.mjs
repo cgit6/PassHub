@@ -56,6 +56,7 @@ let runId = randomUUID();
 const forbiddenSecrets = [rootPassword, password, sourceSecret, jwtKey, comparisonKey];
 const httpEvidence = [];
 const mongoEvidence = [];
+const allowedHttpSecrets = new Set();
 
 function command(binary, args, options = {}) {
   try {
@@ -148,9 +149,11 @@ function assertNoSecretEvidence(extraEvidence = []) {
   const runtimeLogs = existsSync(logDirectory) ? readdirSync(logDirectory)
     .filter((name) => /^runtime\.log(?:\.[1-4])?$/u.test(name))
     .map((name) => readFileSync(join(logDirectory, name), 'utf8')) : [];
-  const evidence = JSON.stringify({ inspections, logs, runtimeLogs, httpEvidence, mongoEvidence, extraEvidence });
+  const nonHttpEvidence = JSON.stringify({ inspections, logs, runtimeLogs, mongoEvidence, extraEvidence });
+  const httpOnlyEvidence = JSON.stringify(httpEvidence);
   for (const secret of [...forbiddenSecrets, ticketPath, ticketWire].filter(Boolean)) {
-    assert(!evidence.includes(secret), 'secret or ticket material leaked into runtime surfaces');
+    assert(!nonHttpEvidence.includes(secret), 'secret or ticket material leaked into runtime surfaces');
+    if (!allowedHttpSecrets.has(secret)) assert(!httpOnlyEvidence.includes(secret), 'unexpected secret or ticket material leaked in HTTP response');
   }
 }
 function safeRuntimeStages() {
@@ -266,6 +269,7 @@ try {
   const createCode = typeof created.body?.code === 'string' && /^[A-Z_]{1,64}$/u.test(created.body.code) ? created.body.code : 'NO_TECHNICAL_CODE';
   assert(created.status === 201 && typeof created.body?.qrToken === 'string', `real production create failed (status=${Number(created.status)},code=${createCode},stages=${safeRuntimeStages().join(',')})`);
   forbiddenSecrets.push(created.body.qrToken, login.body.accessToken);
+  allowedHttpSecrets.add(created.body.qrToken); allowedHttpSecrets.add(login.body.accessToken);
   await waitFor('fixture validFrom', () => Date.now() >= validFrom, 10_000);
   const entry = await https('/recognition/attempts', 'POST', { externalEventId: 'runtime-entry', kind: 'QR_SCANNED', token: created.body.qrToken }, {
     Authorization: `Source entry.${sourceSecret}`, 'PassHub-Dataset-Epoch': epoch,
