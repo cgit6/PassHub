@@ -1,6 +1,8 @@
 # G11d — exact reset／stable seed evidence
 
-狀態：**待三角色最終覆核**（本報告只記錄工程證據，不先升格 gate）。
+狀態：**PASS（限定 G11d reset／seed 責任）**。
+
+PM、架構師與測試員已依 D195 完成獨立覆核；本報告只宣稱 G11d 的 reset／seed 責任，不升格為完整 maintenance release。
 
 ## 驗證範圍
 

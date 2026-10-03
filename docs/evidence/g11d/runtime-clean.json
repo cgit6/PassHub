@@ -1,5 +1,7 @@
 {
   "gate": "G11d",
+  "status": "PASS",
+  "reviewers": { "pm": "PASS", "architecture": "PASS", "tester": "PASS" },
   "sourceCommit": "f879d8f7fc900019da79e4fe9e853ce7fa39a17e",
   "sourceDirty": false,
   "sourceSha256": "fb7cecf2c4422a41a3e279afedb898809ad8f876ed56eae931b66247bb1f9700",
