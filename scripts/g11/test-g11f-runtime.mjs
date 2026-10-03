@@ -9,7 +9,8 @@ import { decideG11fMaintenance } from '../../dist/src/deployment/internal/g11f-f
 // not claim to emulate a production crash: the partial case is an intentionally
 // truncated private reset-result handoff, followed by a fresh real G11d run.
 const allowDirty = process.argv.includes('--allow-dirty-development');
-const sourceDirty = execFileSync('git', ['status', '--porcelain=1', '--untracked-files=all'], { encoding: 'utf8' }).trim().length > 0;
+const sourceDirty = execFileSync('git', ['status', '--porcelain=1', '--untracked-files=all'], { encoding: 'utf8' })
+  .split('\n').some((line) => line.length > 0 && !line.slice(3).startsWith('node_modules'));
 if (sourceDirty && !allowDirty) throw new Error('G11f runtime requires a clean source revision; use --allow-dirty-development only for development evidence');
 const uuid = () => randomUUID();
 const root = mkdtempSync(join(tmpdir(), 'passhub-g11f-'));

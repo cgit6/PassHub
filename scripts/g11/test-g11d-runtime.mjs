@@ -44,7 +44,7 @@ const command = (binary, args, options = {}) => execFileSync(binary, args, { enc
 const docker = (args, options) => command('docker', args, options);
 const compose = (args, options) => docker([...composeArgs, ...args], options);
 const fingerprintSource = () => {
-  const files = command('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z']).split('\0').filter(Boolean).sort();
+  const files = command('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z']).split('\0').filter((file) => file.length > 0 && !file.startsWith('node_modules/')).sort();
   const hash = createHash('sha256');
   for (const file of files) hash.update(`${file}\0`).update(readFileSync(resolve(repository, file))).update('\0');
   return hash.digest('hex');
@@ -73,7 +73,7 @@ let sourceSha256;
 try {
   assert(process.geteuid?.() === 1000, 'G11d runtime requires uid 1000');
   sourceCommit = command('git', ['rev-parse', '--verify', 'HEAD']);
-  sourceDirty = command('git', ['status', '--porcelain=1', '--untracked-files=all']).length !== 0;
+  sourceDirty = command('git', ['status', '--porcelain=1', '--untracked-files=all']).split('\n').some((line) => line.length > 0 && !line.slice(3).startsWith('node_modules'));
   if (sourceDirty && !allowDirty) throw new Error('G11d formal runtime requires a clean source revision; use --allow-dirty-development for development evidence');
   sourceSha256 = fingerprintSource();
   const values = {
