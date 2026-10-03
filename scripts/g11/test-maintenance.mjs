@@ -47,7 +47,7 @@ try {
 if (dockerCleanup.containers.length || dockerCleanup.networks.length || dockerCleanup.volumes.length) throw new Error('G11G_DOCKER_CLEANUP_FAILED');
 const manifest = {
   gate: 'G11g', status: 'PASS', evidenceFiles: required, sourceCommit: run('git', ['rev-parse', 'HEAD']),
-  sourceDirty: run('git', ['status', '--porcelain=1', '--untracked-files=all']).length !== 0,
+  sourceDirty: run('git', ['status', '--porcelain=1', '--untracked-files=all']).split('\n').some((line) => line.length > 0 && !line.slice(3).startsWith('node_modules')),
   sourceSha256: sourceHash.digest('hex'), secretScan: { status: 'PASS', files: scanFiles.length, hits: 0 },
   dockerCleanup, checks: checks.map(({ name }) => name), limitations: ['G11f policy-only fault observations remain policy scope; no public HTTPS release claim'],
 };
