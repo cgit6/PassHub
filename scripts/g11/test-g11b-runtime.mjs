@@ -56,7 +56,7 @@ let runId = randomUUID();
 const forbiddenSecrets = [rootPassword, password, sourceSecret, jwtKey, comparisonKey];
 const httpEvidence = [];
 const mongoEvidence = [];
-const allowedHttpSecrets = new Set();
+const canonicalTicketPath = '/run/passhub/api/bootstrap-ticket.json';
 
 function command(binary, args, options = {}) {
   try {
@@ -150,10 +150,17 @@ function assertNoSecretEvidence(extraEvidence = []) {
     .filter((name) => /^runtime\.log(?:\.[1-4])?$/u.test(name))
     .map((name) => readFileSync(join(logDirectory, name), 'utf8')) : [];
   const nonHttpEvidence = JSON.stringify({ inspections, logs, runtimeLogs, mongoEvidence, extraEvidence });
-  const httpOnlyEvidence = JSON.stringify(httpEvidence);
-  for (const secret of [...forbiddenSecrets, ticketPath, ticketWire].filter(Boolean)) {
+  const forbiddenArtifacts = [...forbiddenSecrets, canonicalTicketPath, ticketPath, ticketWire].filter(Boolean);
+  for (const secret of forbiddenArtifacts) {
     assert(!nonHttpEvidence.includes(secret), 'secret or ticket material leaked into runtime surfaces');
-    if (!allowedHttpSecrets.has(secret)) assert(!httpOnlyEvidence.includes(secret), 'unexpected secret or ticket material leaked in HTTP response');
+    for (const response of httpEvidence) {
+      if (!response.allowed.includes(secret)) assert(!`${response.raw}${response.headers}`.includes(secret), 'unexpected secret or ticket material leaked in HTTP response');
+    }
+  }
+}
+function assertNoSecretValues(evidence) {
+  for (const secret of [...forbiddenSecrets, canonicalTicketPath, ticketPath, ticketWire].filter(Boolean)) {
+    assert(!evidence.includes(secret), 'secret or ticket material leaked into final evidence');
   }
 }
 function safeRuntimeStages() {
@@ -174,7 +181,7 @@ function fingerprintSource() {
   for (const path of paths) hash.update(`${path}\0`).update(readFileSync(join(repository, path))).update('\0');
   return hash.digest('hex');
 }
-function https(path, method = 'GET', body, headers = {}) {
+function https(path, method = 'GET', body, headers = {}, allowedBodyFields = []) {
   return new Promise((resolveRequest, reject) => {
     const wire = body === undefined ? undefined : JSON.stringify(body);
     const req = request({ host: '127.0.0.1', port, path, method, rejectUnauthorized: false,
@@ -186,7 +193,8 @@ function https(path, method = 'GET', body, headers = {}) {
         const raw = Buffer.concat(chunks).toString('utf8');
         let parsed;
         try { parsed = JSON.parse(raw); } catch { parsed = null; }
-        httpEvidence.push(raw, JSON.stringify(response.headers), String(response.statusCode));
+        const allowed = allowedBodyFields.map((field) => parsed && typeof parsed[field] === 'string' ? parsed[field] : null).filter(Boolean);
+        httpEvidence.push({ raw, headers: JSON.stringify(response.headers), allowed });
         resolveRequest({ status: response.statusCode, body: parsed });
       });
     });
@@ -259,13 +267,13 @@ try {
   cases.push(expected[3]);
   assert(localStatus() === 200 && (await https('/internal/ready')).status === 404, 'readiness was not private and open');
   cases.push(expected[4]);
-  const login = await https('/auth/login', 'POST', { username: 'operator', password });
+  const login = await https('/auth/login', 'POST', { username: 'operator', password }, {}, ['accessToken']);
   assert(login.status === 200 && typeof login.body?.accessToken === 'string', 'real production login failed');
   const humanHeaders = { Authorization: `Bearer ${login.body.accessToken}`, 'PassHub-Dataset-Epoch': epoch };
   const validFrom = Date.now() + 1000;
   const created = await https('/qualifications', 'POST', {
     displayName: 'Runtime fixture', validFrom: new Date(validFrom).toISOString(), validUntil: new Date(Date.now() + 60_000).toISOString(), face: null,
-  }, humanHeaders);
+  }, humanHeaders, ['qrToken']);
   const createCode = typeof created.body?.code === 'string' && /^[A-Z_]{1,64}$/u.test(created.body.code) ? created.body.code : 'NO_TECHNICAL_CODE';
   assert(created.status === 201 && typeof created.body?.qrToken === 'string', `real production create failed (status=${Number(created.status)},code=${createCode},stages=${safeRuntimeStages().join(',')})`);
   forbiddenSecrets.push(created.body.qrToken, login.body.accessToken);
@@ -335,7 +343,9 @@ if (failure !== undefined) throw failure;
 assert(cases.length === expected.length && cases.every((value, index) => value === expected[index]), 'G11b runtime exact manifest incomplete');
 assert(new Set(cases).size === expected.length && expected.length >= 9, 'G11b runtime manifest has duplicate or zero scenarios');
 assert(fingerprintSource() === sourceSha256, 'G11b runtime source changed during execution');
-process.stdout.write(`${JSON.stringify({
+const finalEvidence = JSON.stringify({
   gate: 'G11b', slice: 'b5', status: 'PASS', evidenceScope: sourceDirty ? 'development-process-slice' : 'clean-process-slice', cases,
   fingerprints: { sourceCommit, sourceDirty, sourceSha256, apiImageId: imageId, composeSha256: createHash('sha256').update(readFileSync(composeFile)).digest('hex'), dockerfileSha256: createHash('sha256').update(readFileSync(resolve(repository, 'infra/g11/api.Dockerfile'))).digest('hex') },
-})}\n`);
+});
+assertNoSecretValues(finalEvidence);
+process.stdout.write(`${finalEvidence}\n`);
