@@ -3450,3 +3450,10 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - b3c-a證明16個獨立MongoClient／Db／verifier／ticket／claimer同時競爭時恰有1個`CLAIMED`、15個`CLAIM_HELD`，只發生一次CAS；b3c-b在downstream response被阻斷且canonical claim已由direct majority observer證實落庫時，app仍回`CLAIM_UNKNOWN`，不classification、不retry、不clear、不late mutation，同ticket replay在Mongo I/O前拒絕。
 - 首輪架構覆核發現fault測試可能漏掉UNKNOWN後的late CRUD／clear；修正版擴大target DB及transaction command監控、closed exact wire assertions，並在UNKNOWN與replay後做第二次majority snapshot deep-equal。修正後fault、回歸、cleanup及去敏檢查再跑且PASS。
 - 邊界：本證據只解除G11b；persistent marker／drain／API及Mongo確停仍屬G11c，七collection reset／seed屬G11d，host flock／systemd屬G11e，完整故障矩陣屬G11f，綜合manifest及最終audit屬G11g。G11b不宣稱G12或公開HTTPS release。
+-
+### D191｜G11b gate audit 修正：b1–b3 通過，b4/b5 尚缺
+
+- 日期：2026-10-03；狀態：重新依 D189 完整責任做 PM／架構／測試 audit 後，撤回 D190 對「整體 G11b PASS」的結論。D190 所列 b1–b3 直接證據保留有效，但不能代表 G11b 完整通過。
+- 缺口：目前沒有 nominal G05c `WRITABLE` bridge、綁定 epoch/run/ticketId 的 opaque bootstrap receipt、single-use `authorizeReady`、動態 local-ready gate，也沒有 production `production-main.ts` 對 G10a runtime owner/private socket 與 G11b bootstrap 的正式接線；`/internal/ready` 仍為 G11a shell 的固定回應。
+- 裁決：先補 G11b b4（private bridge／receipt／authorizeReady）與 b5（production process/container evidence），再進 G11c。不得把 b4/b5 偷併進 G11c；不得以現有 G10a unit、G11a SIGTERM smoke 或 b1–b3 fault evidence 推論完整 production lifecycle 已成立。
+- G11c 預備邊界維持：正常順序是 `marker → private drain ≤30s → API disappearance → Mongo disappearance → Mongo recovery PRIMARY → no-late-work`；G11c 不清 claim、不 reset/seed、不簽發 ticket、不移除 marker、不開 public route。

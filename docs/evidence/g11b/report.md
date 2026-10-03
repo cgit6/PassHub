@@ -2,15 +2,16 @@
 
 ## 結論狀態
 
-- 工程驗收：PASS。
-- G11b STOP：已解除；下一合法 gate 為 G11c。
-- PM、架構師與測試員：修正版只讀覆核均 PASS。
+- b1–b3 工程切片：PASS。
+- G11b 整體 gate：**未通過，暫停在 b4/b5 前置缺口**。
+- PM、架構師與測試員確認 b1–b3 證據有效，但指出 D189 要求的 nominal WRITABLE bridge、bootstrap receipt、single-use `authorizeReady` 及 production process/container 接線尚未存在。
+- 下一個工程動作仍是補完 G11b b4/b5；在此之前不得進入 G11c。
 - 證據來源 commit：`342f5efd3f23b25e563a02b4fbe332e7d973397e`。
 - 本報告沒有納入主工作區既有的使用者修改 `src/access/domain/access-decision.ts`；該檔案未被本 gate 修改、staged 或提交。
 
 ## 本關範圍
 
-G11b 建立維護流程可使用的 private one-use run ticket、read-only dataset verification、Mongo-backed persistent write claim，以及 response-loss 時的 fail-closed 語意。它不建立 marker／drain／API 或 Mongo 停機 controller、reset／seed、排程或公開 maintenance route；那些責任分別屬於 G11c–G11f。
+G11b 建立維護流程可使用的 private one-use run ticket、read-only dataset verification、Mongo-backed persistent write claim，以及 response-loss 時的 fail-closed 語意；完整 G11b 另外必須接上 nominal WRITABLE bridge、opaque bootstrap receipt、single-use `authorizeReady` 與 production process/container。它不建立 marker／drain／API 或 Mongo 停機 controller、reset／seed、排程或公開 maintenance route；那些責任分別屬於 G11c–G11f。
 
 ## 契約驗收
 
@@ -64,6 +65,8 @@ npm=11.6.2
 
 ## 覆核與未解鎖範圍
 
-首輪架構覆核指出 fault 測試只觀察 `findAndModify`／`find`，可能漏掉 UNKNOWN 後的 late CRUD 或清 claim；修正版已擴大整段 command window、加入 exact wire assertions，並在 replay 後增加第二次 majority snapshot 檢查。PM、架構師與測試員重新覆核及回歸測試均 PASS。
+首輪架構覆核指出 fault 測試只觀察 `findAndModify`／`find`，可能漏掉 UNKNOWN 後的 late CRUD 或清 claim；修正版已擴大整段 command window、加入 exact wire assertions，並在 replay 後增加第二次 majority snapshot 檢查。PM、架構師與測試員重新覆核 b1–b3 及回歸測試均 PASS。
+
+但正式 gate audit 另發現 b4/b5 未交付：全文尚無 `authorizeReady`、bootstrap receipt、WRITABLE bridge，`production-main.ts` 仍是 G11a probe shell，`/internal/ready` 仍固定回 200，且沒有掛載 G10a runtime owner/private socket。這些不是 G11c 可偷偷吸收的責任；本報告因此保留為 b1–b3 evidence，G11b 整體維持未通過。
 
 G11b 不代表 G11c–G11g 或 G12 完成。尚未建立 persistent marker／drain／確停 controller、七 collection reset／stable seed、新 epoch、host flock／systemd 03:00 排程、完整 fault／rerun matrix、綜合 maintenance manifest 或公開 HTTPS release。
