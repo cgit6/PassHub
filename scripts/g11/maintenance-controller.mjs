@@ -1,19 +1,32 @@
-import { closeSync, existsSync, mkdirSync, openSync, writeFileSync, chmodSync, lstatSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readFileSync, writeFileSync, chmodSync, lstatSync, statSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 
-const runtimeDirectory = resolve(process.env.PASSHUB_MAINTENANCE_RUNTIME_DIR ?? '/run/passhub/maintenance');
-const datasetEpoch = process.env.PASSHUB_DATASET_EPOCH;
-const processRunId = process.env.PASSHUB_PROCESS_RUN_ID;
+// Production service fixes this to /run/passhub/api; the explicit override is
+// only for isolated tests that cannot write the host /run tree.
+const runtimeDirectory = resolve(process.env.PASSHUB_RUNTIME_DIRECTORY ?? '/run/passhub/api');
+const datasetEpochFile = resolve(process.env.PASSHUB_DATASET_EPOCH_FILE ?? '/run/passhub/maintenance/dataset-epoch');
+const processIdentityFile = join(runtimeDirectory, 'process-run-id');
 const ticketId = randomUUID();
 const ticketPath = join(runtimeDirectory, 'bootstrap-ticket.json');
 const uuidV4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 function fail(code) { process.stderr.write(`${code}\n`); process.exitCode = 1; }
 function validDirectory(path) {
-  try { const stat = lstatSync(path); return stat.isDirectory() && !stat.isSymbolicLink(); } catch { return false; }
+  try { const stat = lstatSync(path); return stat.isDirectory() && !stat.isSymbolicLink() && stat.uid === process.geteuid?.() && (stat.mode & 0o777) === 0o700; } catch { return false; }
 }
-if (typeof datasetEpoch !== 'string' || !uuidV4.test(datasetEpoch) || typeof processRunId !== 'string' || !uuidV4.test(processRunId)) {
-  fail('G11E_INVALID_IDENTITY');
+function readProtectedUuid(path, code) {
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.geteuid?.() || (stat.mode & 0o777) !== 0o400) { fail(code); return null; }
+    const value = readFileSync(path, 'utf8');
+    if (!/^([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\n$/u.test(value)) { fail(code); return null; }
+    return value.trim();
+  } catch { fail(code); return null; }
+}
+const datasetEpoch = readProtectedUuid(datasetEpochFile, 'G11E_INVALID_EPOCH');
+const processRunId = readProtectedUuid(processIdentityFile, 'G11E_INVALID_PROCESS_ID');
+if (datasetEpoch === null || processRunId === null) {
+  // readProtectedUuid already emitted a safe reason code
 } else if (!validDirectory(runtimeDirectory)) {
   fail('G11E_RUNTIME_DIRECTORY');
 } else if (existsSync(ticketPath)) {
@@ -24,10 +37,8 @@ if (typeof datasetEpoch !== 'string' || !uuidV4.test(datasetEpoch) || typeof pro
     const fd = openSync(ticketPath, 'wx', 0o400);
     try { writeFileSync(fd, wire, { encoding: 'utf8' }); } finally { closeSync(fd); }
     chmodSync(ticketPath, 0o400);
-    process.stdout.write(JSON.stringify({ ok: true, ticketPath, ticketId, datasetEpoch, processRunId }) + '\n');
+    process.stdout.write(JSON.stringify({ ok: true }) + '\n');
     const holdMs = Number.parseInt(process.env.PASSHUB_MAINTENANCE_HOLD_MS ?? '0', 10);
-    if (Number.isSafeInteger(holdMs) && holdMs > 0) {
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, holdMs);
-    }
+    if (Number.isSafeInteger(holdMs) && holdMs > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, holdMs);
   } catch { fail('G11E_TICKET_WRITE_FAILED'); }
 }
