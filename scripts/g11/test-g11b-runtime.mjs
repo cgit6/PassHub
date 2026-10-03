@@ -154,7 +154,7 @@ function assertNoSecretEvidence(extraEvidence = []) {
   for (const secret of forbiddenArtifacts) {
     assert(!nonHttpEvidence.includes(secret), 'secret or ticket material leaked into runtime surfaces');
     for (const response of httpEvidence) {
-      if (!response.allowed.includes(secret)) assert(!`${response.raw}${response.headers}`.includes(secret), 'unexpected secret or ticket material leaked in HTTP response');
+      assert(!`${response.raw}${response.headers}`.includes(secret), 'unexpected secret or ticket material leaked in HTTP response');
     }
   }
 }
@@ -194,7 +194,10 @@ function https(path, method = 'GET', body, headers = {}, allowedBodyFields = [])
         let parsed;
         try { parsed = JSON.parse(raw); } catch { parsed = null; }
         const allowed = allowedBodyFields.map((field) => parsed && typeof parsed[field] === 'string' ? parsed[field] : null).filter(Boolean);
-        httpEvidence.push({ raw, headers: JSON.stringify(response.headers), allowed });
+        const scrubbedBody = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+          ? JSON.stringify(Object.fromEntries(Object.entries(parsed).filter(([field]) => !allowedBodyFields.includes(field))))
+          : raw;
+        httpEvidence.push({ raw: scrubbedBody, headers: JSON.stringify(response.headers), allowed });
         resolveRequest({ status: response.statusCode, body: parsed });
       });
     });
