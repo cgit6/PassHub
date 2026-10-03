@@ -3,6 +3,10 @@ import { createG11dStableSeed, G11D_RESET_COLLECTIONS, G11dResetSeedError, reset
 const epoch = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
 describe('G11d exact reset and stable seed', () => {
+  test('reset API constructs its canonical seed internally', () => {
+    expect(resetAndSeedG11d).toHaveLength(2);
+  });
+
   test('stable seed is deterministic and starts a new unclaimed epoch', () => {
     const first = createG11dStableSeed(epoch);
     const second = createG11dStableSeed(epoch);
@@ -18,6 +22,7 @@ describe('G11d exact reset and stable seed', () => {
 
   test('resets only the exact seven collections sequentially and preserves indexes/unknown collections', async () => {
     const calls: string[] = [];
+    let transactionCount = 0;
     const indexes = [{ key: { _id: 1 }, name: '_id_' }];
     const documents = new Map<string, unknown[]>(G11D_RESET_COLLECTIONS.map((name) => [name, [{ _id: `${name}-old` }]]));
     documents.set('unrelated', [{ _id: 'untouched' }]);
@@ -31,6 +36,7 @@ describe('G11d exact reset and stable seed', () => {
       databaseName: 'passhub_demo',
       listCollections: () => ({ toArray: async () => [...documents.keys()].map((name) => ({ name })) }),
       collection,
+      client: { startSession: () => ({ withTransaction: async (work: () => Promise<void>) => { transactionCount += 1; await work(); }, endSession: async () => undefined }) },
     } as never;
     const oldMetadata = { _id: 'system', datasetEpoch: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', writeRunClaim: null };
     documents.set('metadata', [oldMetadata]);
@@ -40,9 +46,39 @@ describe('G11d exact reset and stable seed', () => {
     expect(result.indexesPreserved).toBe(true);
     expect(result.untouchedCollectionNames).toEqual(['unrelated']);
     expect(calls.slice(0, 7)).toEqual(G11D_RESET_COLLECTIONS.map((name) => `delete:${name}`));
+    expect(transactionCount).toBe(1);
     expect(documents.get('unrelated')).toEqual([{ _id: 'untouched' }]);
     expect(documents.get('metadata')).toEqual([expect.objectContaining({ datasetEpoch: epoch, writeRunClaim: null })]);
     expect(result.seedFingerprint).toMatch(/^[0-9a-f]{64}$/u);
+  });
+
+  test('rolls back every collection when an insert fails inside the transaction', async () => {
+    const original = new Map<string, unknown[]>(G11D_RESET_COLLECTIONS.map((name) => [name, [{ _id: `${name}-old` }]]));
+    const before = new Map([...original].map(([name, docs]) => [name, structuredClone(docs)]));
+    let failed = false;
+    const collection = (name: string) => ({
+      deleteMany: async () => { original.set(name, []); return { deletedCount: 1 }; },
+      insertMany: async (values: readonly unknown[]) => {
+        if (name === 'sources' && !failed) { failed = true; throw new Error('simulated insert failure'); }
+        original.set(name, [...values]); return { insertedCount: values.length };
+      },
+      findOne: async () => original.get(name)?.[0] ?? null,
+      listIndexes: () => ({ toArray: async () => [{ key: { _id: 1 }, name: '_id_' }] }),
+    });
+    const database = {
+      databaseName: 'passhub_demo',
+      listCollections: () => ({ toArray: async () => [...original.keys()].map((name) => ({ name })) }),
+      collection,
+      client: { startSession: () => ({
+        withTransaction: async (work: () => Promise<void>) => {
+          const snapshot = new Map([...original].map(([name, docs]) => [name, structuredClone(docs)]));
+          try { await work(); } catch (error) { original.clear(); for (const [name, docs] of snapshot) original.set(name, docs); throw error; }
+        },
+        endSession: async () => undefined,
+      }) },
+    } as never;
+    await expect(resetAndSeedG11d(database, epoch)).rejects.toThrow('simulated insert failure');
+    expect(original).toEqual(before);
   });
 
   test.each([

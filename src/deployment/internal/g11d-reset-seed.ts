@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import type { Db, Document, IndexDescription } from 'mongodb';
+import type { ClientSession, Db, Document, IndexDescription } from 'mongodb';
 
 import { createG04bFixture } from '../../infrastructure/mongo/g04b-fixture.js';
 import {
@@ -96,9 +96,12 @@ export function createG11dStableSeed(datasetEpoch: string): G11dStableSeed {
  * already-created compatible database; schema creation, collection drops,
  * volume operations, claims and run-ticket handling belong to other gates.
  */
-export async function resetAndSeedG11d(database: Db, datasetEpoch: string, seed = createG11dStableSeed(datasetEpoch)): Promise<G11dResetSeedResult> {
+export async function resetAndSeedG11d(database: Db, datasetEpoch: string): Promise<G11dResetSeedResult> {
   if (database.databaseName !== 'passhub_demo') throw new G11dResetSeedError('DATABASE_SCOPE');
   assertUuid(datasetEpoch, 'dataset epoch');
+  // The reset operation deliberately has no seed parameter.  A caller cannot
+  // smuggle arbitrary documents into a destructive maintenance operation.
+  const seed = createG11dStableSeed(datasetEpoch);
   if (seed.metadata.datasetEpoch !== datasetEpoch || seed.metadata.writeRunClaim !== null) throw new G11dResetSeedError('SEED_EPOCH_OR_CLAIM');
   const names = (await database.listCollections({}, { nameOnly: true }).toArray()).map((item) => item.name).sort();
   for (const name of G11D_RESET_COLLECTIONS) if (!names.includes(name)) throw new G11dResetSeedError('REQUIRED_COLLECTION_MISSING');
@@ -108,20 +111,34 @@ export async function resetAndSeedG11d(database: Db, datasetEpoch: string, seed 
   if (previous.datasetEpoch === datasetEpoch) throw new G11dResetSeedError('EPOCH_NOT_NEW');
   const indexes = await captureIndexes(database);
   const deleted = emptyCounts();
-  for (const name of G11D_RESET_COLLECTIONS) deleted[name] = await database.collection(name).deleteMany({}).then((result) => result.deletedCount);
   const inserted = emptyCounts();
-  inserted[G04B_QUALIFICATIONS_COLLECTION] = await insertMany(database, G04B_QUALIFICATIONS_COLLECTION, seed.qualifications);
-  inserted[G04A_FACE_SLOTS_COLLECTION] = await insertMany(database, G04A_FACE_SLOTS_COLLECTION, seed.faceSlots);
-  inserted[G04B_EVENTS_COLLECTION] = await insertMany(database, G04B_EVENTS_COLLECTION, seed.events);
-  inserted[G04B_USERS_COLLECTION] = await insertMany(database, G04B_USERS_COLLECTION, seed.users);
-  inserted[G04B_SOURCES_COLLECTION] = await insertMany(database, G04B_SOURCES_COLLECTION, seed.sources);
-  inserted[G04B_METADATA_COLLECTION] = await insertMany(database, G04B_METADATA_COLLECTION, [seed.metadata]);
-  inserted[G04B_MANAGEMENT_RECEIPTS_COLLECTION] = await insertMany(database, G04B_MANAGEMENT_RECEIPTS_COLLECTION, seed.managementReceipts);
+  const session = database.client.startSession();
+  try {
+    await session.withTransaction(async () => {
+      // Re-check the epoch inside the transaction.  This prevents a stale
+      // preflight read from deleting a reset committed by another runner.
+      const current = await database.collection<G04bMetadataDocument>(G04B_METADATA_COLLECTION).findOne({ _id: 'system' }, { session });
+      if (current === null) throw new G11dResetSeedError('METADATA_MISSING');
+      if (current.datasetEpoch !== previous.datasetEpoch || current.datasetEpoch === datasetEpoch) throw new G11dResetSeedError('EPOCH_NOT_NEW');
+      for (const name of G11D_RESET_COLLECTIONS) {
+        deleted[name] = (await database.collection(name).deleteMany({}, { session })).deletedCount;
+      }
+      inserted[G04B_QUALIFICATIONS_COLLECTION] = await insertMany(database, G04B_QUALIFICATIONS_COLLECTION, seed.qualifications, session);
+      inserted[G04A_FACE_SLOTS_COLLECTION] = await insertMany(database, G04A_FACE_SLOTS_COLLECTION, seed.faceSlots, session);
+      inserted[G04B_EVENTS_COLLECTION] = await insertMany(database, G04B_EVENTS_COLLECTION, seed.events, session);
+      inserted[G04B_USERS_COLLECTION] = await insertMany(database, G04B_USERS_COLLECTION, seed.users, session);
+      inserted[G04B_SOURCES_COLLECTION] = await insertMany(database, G04B_SOURCES_COLLECTION, seed.sources, session);
+      inserted[G04B_METADATA_COLLECTION] = await insertMany(database, G04B_METADATA_COLLECTION, [seed.metadata], session);
+      inserted[G04B_MANAGEMENT_RECEIPTS_COLLECTION] = await insertMany(database, G04B_MANAGEMENT_RECEIPTS_COLLECTION, seed.managementReceipts, session);
+    });
+  } finally {
+    await session.endSession();
+  }
   const afterIndexes = await captureIndexes(database);
   if (JSON.stringify(indexes) !== JSON.stringify(afterIndexes)) throw new G11dResetSeedError('INDEXES_CHANGED');
   const afterNames = (await database.listCollections({}, { nameOnly: true }).toArray()).map((item) => item.name).sort();
   if (JSON.stringify(untouched) !== JSON.stringify(afterNames.filter((name) => !(G11D_RESET_COLLECTIONS as readonly string[]).includes(name)))) throw new G11dResetSeedError('UNTOUCHED_COLLECTION_CHANGED');
-  return Object.freeze({ database: 'passhub_demo', previousDatasetEpoch: previous.datasetEpoch, datasetEpoch, deleted, inserted, indexesPreserved: true, untouchedCollectionNames: Object.freeze(untouched), seedFingerprint: fingerprint(seed) });
+  return Object.freeze({ database: 'passhub_demo', previousDatasetEpoch: previous.datasetEpoch, datasetEpoch, deleted, inserted, indexesPreserved: true, untouchedCollectionNames: Object.freeze(untouched), seedFingerprint: fingerprintG11dStableSeed(seed) });
 }
 
 export class G11dResetSeedError extends Error {
@@ -140,16 +157,16 @@ function emptyCounts(): Record<(typeof G11D_RESET_COLLECTIONS)[number], number> 
   return Object.fromEntries(G11D_RESET_COLLECTIONS.map((name) => [name, 0])) as Record<(typeof G11D_RESET_COLLECTIONS)[number], number>;
 }
 
-async function insertMany(database: Db, name: string, documents: readonly Document[]): Promise<number> {
+async function insertMany(database: Db, name: string, documents: readonly Document[], session: ClientSession): Promise<number> {
   if (documents.length === 0) return 0;
-  return (await database.collection(name).insertMany([...documents])).insertedCount;
+  return (await database.collection(name).insertMany([...documents], { session })).insertedCount;
 }
 
 function assertUuid(value: string, _label: string): void { if (!UUID_V4.test(value)) throw new G11dResetSeedError('INVALID_EPOCH'); }
 
 function requireOne<T>(values: readonly T[], index = 0): T { const value = values[index]; if (value === undefined) throw new Error('stable fixture shape is invalid'); return value; }
 
-function fingerprint(seed: G11dStableSeed): string {
+export function fingerprintG11dStableSeed(seed: G11dStableSeed): string {
   const canonical = JSON.stringify(seed, (_key, value: unknown) => value instanceof Date ? value.toISOString() : value);
   return createHash('sha256').update(canonical).digest('hex');
 }
