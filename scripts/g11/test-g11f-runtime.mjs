@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -27,19 +27,25 @@ writeFileSync(epochFile, `${currentEpoch}\n`, { mode: 0o400 });
 const g11dArgs = ['scripts/g11/test-g11d-runtime.mjs'];
 if (allowDirty) g11dArgs.push('--allow-dirty-development');
 let g11dRuns = 0;
-function runG11d({ injectPartial = false } = {}) {
+function startG11d({ injectPartial = false, authorizationFile } = {}) {
   g11dRuns += 1;
-  const output = execFileSync('node', g11dArgs, {
-    cwd: process.cwd(), encoding: 'utf8', timeout: 900_000,
-    env: { ...process.env, PASSHUB_G11D_HANDOFF_FILE: handoffFile,
-      ...(injectPartial ? { PASSHUB_G11D_PARTIAL_HANDOFF_FILE: handoffFile, PASSHUB_G11D_PARTIAL_EPOCH_FILE: epochFile } : {}) },
+  const child = spawn('node', g11dArgs, { cwd: process.cwd(), env: { ...process.env, PASSHUB_G11D_HANDOFF_FILE: handoffFile,
+    ...(injectPartial ? { PASSHUB_G11D_PARTIAL_HANDOFF_FILE: handoffFile, PASSHUB_G11D_PARTIAL_EPOCH_FILE: epochFile, PASSHUB_G11D_RERUN_AUTHORIZATION_FILE: authorizationFile } : {}) },
+  stdio: ['ignore', 'pipe', 'pipe'] });
+  return new Promise((resolve, reject) => {
+    let stdout = ''; let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; }); child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code !== 0) { reject(new Error(`G11d failed: ${stderr}`)); return; }
+      try {
+        const result = JSON.parse(stdout.trim().split('\n').at(-1));
+        if (!Array.isArray(result.cases) || result.cases.length !== 8 || result.first?.indexesPreserved !== true
+          || result.second?.indexesPreserved !== true || result.first?.datasetEpoch === result.second?.datasetEpoch) throw new Error('G11d evidence shape invalid');
+        resolve(result);
+      } catch (error) { reject(error); }
+    });
   });
-  const result = JSON.parse(output.trim().split('\n').at(-1));
-  if (!Array.isArray(result.cases) || result.cases.length !== 8 || result.first?.indexesPreserved !== true
-    || result.second?.indexesPreserved !== true || result.first?.datasetEpoch === result.second?.datasetEpoch) {
-    throw new Error('G11d did not produce valid sequential reset evidence');
-  }
-  return result;
 }
 
 function runController(extra = {}) {
@@ -56,9 +62,14 @@ function runController(extra = {}) {
 }
 
 try {
-  const firstMongo = runG11d({ injectPartial: true });
-  if (firstMongo.partialHandoffRejected !== true) throw new Error('same-dataset partial handoff evidence missing');
-  let targetEpoch = firstMongo.second.datasetEpoch;
+  const authorizationFile = join(root, 'rerun-authorized');
+  const firstMongoPromise = startG11d({ injectPartial: true, authorizationFile });
+  const partialDeadline = Date.now() + 120_000;
+  while (!existsSync(handoffFile)) {
+    if (Date.now() >= partialDeadline) throw new Error('same-dataset partial handoff was not observed');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  let targetEpoch = uuid();
   const base = Object.freeze({ operation: 'RESET', marker: 'ACTIVE', api: 'STOPPED', mongo: 'PRIMARY', writers: 0,
     lock: 'ACQUIRED', ticket: 'VALID', currentEpoch, targetEpoch, writeRunClaim: 'NULL', resetState: 'NONE', controlledRerun: false });
   const cases = [
@@ -81,6 +92,9 @@ try {
   catch (error) { if (error?.code !== 'PARTIAL_RESET_REQUIRES_CONTROL' || g11dRuns !== 1) throw error; }
   const rerunDecision = decideG11fMaintenance({ ...partial, controlledRerun: true });
   if (rerunDecision.action !== 'REPAIR_RERUN') throw new Error('controlled rerun was not admitted');
+  writeFileSync(authorizationFile, 'G11F_REPAIR_RERUN\n', { mode: 0o400 });
+  const firstMongo = await firstMongoPromise;
+  if (firstMongo.partialHandoffRejected !== true) throw new Error('same-dataset partial handoff evidence missing');
   const handoff = JSON.parse(readFileSync(handoffFile, 'utf8'));
   targetEpoch = firstMongo.second.datasetEpoch;
   if (handoff.datasetEpoch !== targetEpoch || g11dRuns !== 1) throw new Error(`controlled rerun handoff mismatch: handoff=${handoff.datasetEpoch} target=${targetEpoch} runs=${g11dRuns}`);

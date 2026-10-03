@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -129,6 +129,14 @@ try {
     }
     assert(partialHandoffRejected, 'G11e did not reject the partial handoff inside the same Mongo run');
     assert(readFileSync(partialEpochFile, 'utf8') === beforePublishedEpoch, 'partial handoff changed the published epoch');
+    const rerunAuthorizationFile = process.env.PASSHUB_G11D_RERUN_AUTHORIZATION_FILE;
+    if (rerunAuthorizationFile !== undefined) {
+      const deadline = Date.now() + 120_000;
+      while (!existsSync(rerunAuthorizationFile)) {
+        if (Date.now() >= deadline) throw new Error('G11F_RERUN_AUTHORIZATION_TIMEOUT');
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+      }
+    }
   }
   const secondEpoch = randomUUID();
   const second = JSON.parse(oneOff(mongoScript(`const{resetAndSeedG11d}=require('./dist/src/deployment/internal/g11d-reset-seed.js');const r=await resetAndSeedG11d(db,${JSON.stringify(secondEpoch)});process.stdout.write(JSON.stringify(r));`)));
