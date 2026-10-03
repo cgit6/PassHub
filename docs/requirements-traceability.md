@@ -88,7 +88,7 @@
 | B47 | 三類list keyset，limit預設20／1–100且不綁cursor；INSIDE enteredAt及ID降序；cursor綁route／filters／epoch，lastTime為UTC毫秒ISO、canonical unpadded base64url。 | D23、D27–D29、D152、D180 | 查詢契約 | T-B47：canonical cursor≤512ASCII、格式／route／ANDfilters錯誤、舊epoch409；limit可改；空／末頁null；無跨頁snapshot承諾。 | V：G09a unit／true HTTP／true Mongo驗三種keyset、同時刻tie-break、limit 1–100且不綁cursor、canonical roundtrip、scope／epoch分類及末頁null。 |
 | B48 | 資格摘要exact keys為qualificationId、displayName、validFrom、validUntil、presence、expired、revokedAt、revocationReason、expiredTerminalAt、faceBound、createdAt、updatedAt；日期UTC毫秒ISO，不顯示完整 subject 或 QR。 | D24、D69、D72、D76、D180 | 資格讀取投影 | T-B48：兩角色／list／detail exact欄位；單一lease `observedAt`形成expired／faceBound；INSIDE逾期仍綁定；唯讀不cleanup；準時前序ENTRY未決時writer非quiescent直接busy。 | V：G09a unit、true HTTP及真Mongo驗exact keys／UTC日期、同一`observedAt`、INSIDE逾期綁定、incarnation一致映射與秘密欄位排除；writer非靜止時DB0。 |
 | B49 | Event投影含eventId、sourceId、direction、kind、outcome、reasonCode、receivedAt、recordedAt、可空qualificationId、presenceTransition。 | D21、D24、D145、D150 | 事件投影 | T-B49：list／detail／辨識同投影；DBreason映為reasonCode；recordedAt非commit時間；無秘密／比較資料。 | V：G08b已驗辨識200 exact投影；G09a再以unit／true HTTP／true Mongo驗list／detail、nullable qualificationId、Event invariants及不回external ID／HMAC／comparison資料。 |
-| B50 | 成功／錯誤回覆、查詢、Event、安全／技術日誌都不洩漏 token、機器憑證或完整 subject。 | D05、D21、D24、D165 | 全介面秘密處理 | T-B50：逐個表面掃描已知秘密；建立成功的一次 QR 是唯一業務例外。 | U：G08a管理、G08b辨識及G09a查詢HTTP／Event回覆已驗不洩漏token、credential、subject或artifact；G10安全／技術日誌及全部部署輸出表面仍未驗。 |
+| B50 | 成功／錯誤回覆、查詢、Event、安全／技術日誌都不洩漏 token、機器憑證或完整 subject。 | D05、D21、D24、D165、D189 | 全介面秘密處理 | T-B50：逐個表面掃描已知秘密；建立成功的一次 QR 是唯一業務例外；runTicket亦不得進argv／env／HTTP／log／Mongo／evidence。 | U：G08a管理、G08b辨識及G09a查詢HTTP／Event回覆已驗不洩漏token、credential、subject或artifact；G10安全日誌與G11a secret掛載已有直接切片，G11b ticket輸出面及G11g完整部署掃描仍未驗。 |
 | B51 | 固定 Demo：建立 → QR ENTRY → INSIDE → Face EXIT → 兩筆 Event 與 EXITED；裝置傳輸以獨立 ENTRY／EXIT client 模組展示。 | D30、D35、D162 | 可重跑展示 | T-B51：兩個 client 各自固定 Source 身分／方向且有結果斷言；可共用純傳輸工具但不複製後端裁決；反向跨媒介、拒絕、重送、競爭另有範例／測試。 | U |
 | B52 | 辨識不能直接以內部 Qualification ID 作通行／映射捷徑，只接受 QR token 或模擬 Face 結果。 | 業務 §5.2、D34 | 輸入能力限制 | T-B52：知道 qualificationId 也不能跳過憑證／映射提交成功通行。 | V：G08b入口只接受三個exact DTO；qualificationId、direction及任何額外欄位均400且不呼叫持久化，負面compile確認無公開捷徑。 |
 
@@ -113,7 +113,7 @@
 | A15 | 同 Face 鍵的綁定／釋放／辨識須有真實共用寫入競爭；釋放清綁定引用但保留空協調位，首次缺鍵的綁定與未映射決策也受保護。 | D66–D67 | 空鍵競爭 | T-A15：首次綁定與 MATCHED 但未映射的辨識競爭；僅負查／no-op 不算保護；釋放後協調位仍可用。 | V：G04b 57-case 真Mongo驗首次 bind／unmapped recognition race、release保留空slot、mapping／qualification共同保存與分類；G05協調仍U。 |
 | A16 | 區分各種 duplicate key／已中止交易；不能全部當可重跑或吞錯續用。 | D66–D67 | 保存錯誤分類 | T-A16：映射、事件、其他唯一鍵衝突；只有確認可安全重跑才重跑。 | V：G04b 57-case 分辨 duplicate、112 write conflict、251 abort、schema validation、unknown commit；不以 retry loop 偽造確定性。 |
 | A17 | 逾期映射採相關操作惰性整理；唯讀不整理，無 TTL／背景終結業務；query只依單一lease `observedAt`投影。 | D68–D69、D72、D76、D164、D180 | 映射整理 | T-A17：有效 faceBound、過期釋放、在場保留、準時排隊保護分開測；query不寫DB、不cleanup。 | U：G09a已驗唯讀單一觀察、不cleanup與投影；完整相關寫入惰性整理、準時競爭及全部DB生命期仍未閉合。 |
-| A18 | v1 只一個 API 實例；相關完整業務寫入單執行，登入／唯讀不全排入 FIFO；query只在writer quiescent取得短read-observation lease。 | D73–D74、D76、D180 | 執行協調 | T-A18：部署及程式無第二 writer；writer五種非靜止狀態均立即busy；lease期間writer可登記但不開始，query結束必釋放；不以唯讀可用宣稱故障下必定可查。 | U：G09a已驗五種busy、lease擋後到writer並按FIFO釋放；G11a已驗Compose只有單一API replica。完整維護故障生命期仍未驗。 |
+| A18 | v1 只一個 API 實例；相關完整業務寫入單執行，登入／唯讀不全排入 FIFO；query只在writer quiescent取得短read-observation lease。 | D73–D74、D76、D180、D187、D189 | 執行協調 | T-A18：部署及程式無第二 writer；Mongo persistent claim並行exact one；writer五種非靜止狀態均立即busy；lease期間writer可登記但不開始，query結束必釋放；不以唯讀可用宣稱故障下必定可查。 | U：G09a已驗五種busy、lease擋後到writer並按FIFO釋放；G11a已驗Compose只有單一API replica。G11b persistent claim與完整維護故障生命期仍未驗。 |
 
 ### 2.6 接收、等待、故障與續辦
 
@@ -131,7 +131,7 @@
 | L10 | 已完整保存的結果是權威，晚到仍保留及回放；不是重新執行原項的許可。 | D83、D87、D89、D91 | canonical 結果 | T-L10：HTTP／確認／執行額度已過仍收到完整結果，回放且不重做。 | U |
 | L11 | 原項舊 callback 只處理自身權利，不能放開下一項鎖或抹掉維護／人工管控。 | D82–D83、D89 | 控制權 | T-L11：延遲成功／失敗與新 owner、維護、人工接管並行。 | U |
 | L12 | 自動確認先行；告警非接管；host-only socket／CLI實際hold、release、drain有獨立否決。 | D84–D85、D88–D89、D153 | 自動／人工界線 | T-L12：充分晚證據依D89續辦；hold先設屏障才ACK，release不越未知／維護，current/last控制重送有界。 | U |
-| L13 | 無跨崩潰／重置延續保證，不新增持久 pending、分散式恢復平臺。 | D74、D78、D83 | 能力限制／文件 | T-L13：文件明示原程序消失／Demo 清除後不承諾續辦。 | U |
+| L13 | 無跨崩潰／重置延續保證，不新增持久 pending、分散式恢復平臺。 | D74、D78、D83、D149、D189 | 能力限制／文件 | T-L13：文件明示原程序消失／Demo 清除後不承諾續辦；ordinary restart不得依既有claim或相同runId接管。 | U：G05c已證process-local registry primitive；G11b持久claim與ordinary restart證據仍未完成。 |
 
 ### 2.7 執行、確認與 HTTP 預算
 
@@ -163,7 +163,7 @@
 | L32 | 原項滿仍保留有限驗證／HTTP 通道識別重送；同鍵同內容不增第二原項。 | D97、D99 | 滿載重送 | T-L32：原項 32 時可信重送可關聯；不同內容 conflict；通道非無限豁免。 | U：G07b已驗retry專池、existing-only不升新、same-content replay與different-content conflict；正式可信Source與origin滿真HTTP情境未完整覆蓋。 |
 | L33 | 未驗證入口滿只能說本次無法驗證、不能確認原項狀態；不可說原項不存在或失敗。 | D97 | 滿載回覆 | T-L33：偽造 ID／合法重送同樣不洩漏原項；不誤取消既有簽到。 | U |
 | L34 | 可信新項遇原項滿，明說未接收、不留本次準時權、不建 Event；後續新嘗試用新時間。 | D97、D99 | 新項拒收 | T-L34：不假稱排隊或業務拒絕；既有準時項不被淘汰騰槽。 | U |
-| L35 | 原三上限不涵蓋全部資源；D148–D149另定connection/raw／scrypt／query／canonical及registry有界初值。 | D99、D148–D149 | 資源／記憶邊界 | T-L35：工作真收束前持額；registry4096含終局無日間evict、普通重啟不得重開寫；不作全面抗流量保證。 | U |
+| L35 | 原三上限不涵蓋全部資源；D148–D149另定connection/raw／scrypt／query／canonical及registry有界初值。 | D99、D148–D149、D189 | 資源／記憶邊界 | T-L35：工作真收束前持額；registry4096含終局無日間evict、ordinary same-epoch restart無ticket且不得重開寫；不作全面抗流量保證。 | U：G11b須直接驗正常停止claim保留、無ticket ordinary restart維持write-closed；完整fault／maintenance仍屬後續gate。 |
 | L36 | 可信進度須區分故障暫停、等待處理、正在處理及完整結果；確認耗盡但未接管時，明示停止新確認、等待在途證據或人工介入，仍可能條件式自動續辦。 | D83、D89、D95 | 進度／交接語意 | T-L36：各階段不誤稱失敗／持續新確認／已接管；充分晚證據可自動續辦；實際接管另受控。 | U |
 
 ### 2.9 公開 sandbox 與獨立維護
@@ -172,7 +172,7 @@
 |---|---|---|---|---|---|
 | M01 | 公開 API runtime 供體驗，GitHub 提供碼／文件；共用資料及帳號，不做個人隔離。 | D25、D30 | 展示部署／文件 | T-M01：外部可呼叫 API；明示共享互相影響，不宣稱 GitHub Pages 執行後端。 | U |
 | M02 | 警告只填假資料、Demo 可清除、不保證正式營運／隱私／可用性；不自動辨識真實個資。 | D25–D27、D34 | Demo 警語 | T-M02：入口文件與操作說明可見，沒有正式 SLA／個資治理承諾。 | U |
-| M03 | 預置公開體驗憑證不能混用部署、DB 或維護者秘密。 | D25 | 環境隔離 | T-M03：公開 seed credentials 是刻意值；其他秘密無 tracked／輸出洩漏。 | U：G11a已驗DB／JWT／comparison秘密只由外部secret檔掛載且evidence不輸出值；公開seed憑證與完整secret scan仍屬G11d/G11g。 |
+| M03 | 預置公開體驗憑證不能混用部署、DB 或維護者秘密。 | D25、D189 | 環境隔離 | T-M03：公開 seed credentials 是刻意值；其他秘密及runTicket無tracked／argv／env／HTTP／log／Mongo／evidence洩漏。 | U：G11a已驗DB／JWT／comparison秘密只由外部secret檔掛載且evidence不輸出值；G11b ticket private-file切片、公開seed憑證與G11g完整scan仍未完成。 |
 | M04 | D148固定分鐘rate／IP表256、request body16KiB、response 256KiB及D152頁量最大100；D155只信固定proxyIP/32；超限無Event且不回partial。 | D27、D148、D152、D155、D180 | 防濫用 | T-M04：各rate、IP表滿、slowbody／深度／重複headers、response序列化超限、proxy偽造、專用重送也計rate但不取消原項；不加風控後臺。 | U：G07a/G07b已驗本地入口／rate；G09a已驗page 100與256KiB fail-closed無partial；G11a已驗固定proxy peer才採單一合法XFF，並拒絕偽造／串列／陣列／無效值。正式全入口接線與公開部署仍未驗。 |
 | M05 | 維護命令獨立於 API、可重用必要模型設定；任何公開角色無 reset API。 | D47、D52 | 維護入口 | T-M05：停止 API 後外部命令仍可維護 DB；Operator／Viewer／Source 無重置權。 | U |
 | M06 | 每日 Asia/Taipei 凌晨 03:00 由 API 外排程自動執行，不依賴人工或 API 自己計時。 | D26、D52 | 外部排程 | T-M06：排程時區／觸發驗證；API 不健康仍能啟動維護。 | U |
@@ -191,7 +191,7 @@
 | E04 | D152／D182固定10k Qualification／40k Event與Qualification、INSIDE及八種Event filter cases的索引前後實驗；正確性及完整證據為門檻，不要求改善百分比。 | 業務 §12、D152、D182 | 查詢／測量 | T-E04：SHA-256 deterministic fixture及hash；10 cases各first／oracle fixed-next、tie≥64；每格10 warmup／100 serial measured，BEFORE／AFTER共4,000 raw ns，nearest-rank p50／p95 index 49／94；只切四個query non-unique indexes，兩state輸出相同；40份真adapter aggregate executionStats、主cursor／lookup分開、環境／index inventory／完整與公開去敏證據。 | V：clean `dd0bc14`正式run完成4,000 raw／40 cells／40 executionStats，fixture／readback hash、oracle、tie、無gap／duplicate、BEFORE／AFTER輸出及index inventory全綠；manifest 50 artifacts重算一致，見`docs/evidence/g09b/report.md`。 |
 | E05 | 結構化日誌與 request ID 可追蹤請求、原項及故障，不洩漏秘密。 | D21、業務 §12 | 可觀測性 | T-E05：跨層關聯可查；斷線、重送、未知、維護紀錄有安全上下文。 | U |
 | E06 | 自動化測試涵蓋規則、權限、秘密、冪等、並行、故障、預算及維護。 | D35、D65–D99、業務 §12 | 測試套件 | T-E06：逐列對應，不把單元測試數量等同需求覆蓋。 | U：G11a新增18 unit／11 static／8真runtime cases，full unit為59 suites／1009 tests；此前各gate另有直接報告。G11b–G11g及逐136 release audit仍未完成，數量不等同完整覆蓋。 |
-| E07 | 乾淨 Docker 環境啟動 API／真 Mongo，seed 與一鍵 Demo 可重跑且有斷言。 | D30、D35、業務 §12 | 交付／展示 | T-E07：無本機殘留安裝；交易環境、初始化及主流程成功。 | U：G11a已由Dockerfile建置並啟動production shell、認證Mongo單成員PRIMARY與Nginx HTTPS，且驗project cleanup；seed、完整業務主流程與公開Demo仍屬後續gate。 |
+| E07 | 乾淨 Docker 環境啟動 API／真 Mongo，seed 與一鍵 Demo 可重跑且有斷言。 | D30、D35、D189、業務 §12 | 交付／展示 | T-E07：無本機殘留安裝；交易環境、verification-only bootstrap、persistent claim、初始化及主流程成功。 | U：G11a已由Dockerfile建置並啟動production shell、認證Mongo單成員PRIMARY與Nginx HTTPS，且驗project cleanup；G11b真Mongo／process bootstrap、seed、完整業務主流程與公開Demo仍屬後續gate。 |
 | E08 | CI 靜態檢查、測試與建置有實際成功證據，保存 commit／環境／命令。 | 業務 §12 | CI | T-E08：乾淨 runner 通過；失敗阻止宣稱完成。 | U |
 | E09 | README／設計文件交代信任邊界、狀態、資料流、原子性、模擬、共享及每日重置限制。 | D01、D25–D26、D30、D34、業務 §12 | 操作／設計文件 | T-E09：陌生讀者能重跑及解釋限制；不提公司現行系統或複製其資料／畫面。 | U |
 
@@ -441,7 +441,7 @@ wire `v="c1"`且UUID全canonical lowercase；frame合法後的JSON／DTO錯誤�
 | B47 | G09a |
 | B48 | G09a |
 | B49 | G09a |
-| B50 | G07a、G09a、G10a、G11g、G12 |
+| B50 | G07a、G09a、G10a、G11b、G11g、G12 |
 | B51 | G12 |
 | B52 | G07a、G08b |
 | A01 | G01a、G01b（D161完成，V） |
@@ -461,7 +461,7 @@ wire `v="c1"`且UUID全canonical lowercase；frame合法後的JSON／DTO錯誤�
 | A15 | G04a、G04b、G10b、G10c |
 | A16 | G04a、G04b、G10b、G10c |
 | A17 | G03a、G04b、G08a、G08b、G09a |
-| A18 | G05a、G11a、G11c、G11g |
+| A18 | G05a、G11a、G11b、G11c、G11g |
 | L01 | G05a、G07b、G08b |
 | L02 | G05a、G07b、G08b |
 | L03 | G05a、G07b、G08b |
@@ -496,11 +496,11 @@ wire `v="c1"`且UUID全canonical lowercase；frame合法後的JSON／DTO錯誤�
 | L32 | G05c、G07a、G07b、G11c、G11f、G11g |
 | L33 | G05c、G07a、G07b、G11c、G11f、G11g |
 | L34 | G05c、G07a、G07b、G11c、G11f、G11g |
-| L35 | G05c、G07a、G07b、G11c、G11f、G11g |
+| L35 | G05c、G07a、G07b、G11b、G11c、G11f、G11g |
 | L36 | G07b、G08b、G10a、G10c |
 | M01 | G11a、G11g、G12 |
 | M02 | G11g、G12 |
-| M03 | G11a、G11d、G11g、G12 |
+| M03 | G11a、G11b、G11d、G11g、G12 |
 | M04 | G07a、G07b、G11a、G11g |
 | M05 | G10a、G11c、G11e、G11g |
 | M06 | G11e、G11g |
@@ -514,7 +514,7 @@ wire `v="c1"`且UUID全canonical lowercase；frame合法後的JSON／DTO錯誤�
 | E04 | G09a、G09b |
 | E05 | G10a、G11g |
 | E06 | G03a、G03b、G03c、G04a、G04b、G05a、G05b、G05c、G06a、G06b、G07a、G07b、G08a、G08b、G09a、G09b、G10a、G10b、G10c、G11a、G11b、G11c、G11d、G11e、G11f、G11g、G12 |
-| E07 | G02、G11a、G11d、G11g、G12 |
+| E07 | G02、G11a、G11b、G11d、G11g、G12 |
 | E08 | G12 |
 | E09 | G12 |
 | X01 | G03a、G03c、G07a、G08a、G08b、G09a、G11g、G12 |

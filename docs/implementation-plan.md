@@ -290,7 +290,7 @@ API/Mongo SIGTERM grace30s，API無自動restart；stoprequest/graceexpiry不是
 | G10b | PASS：precommit終止／abort完整清理 | clean `77e8c21`、private run `g10b-41a126f2424d49c6a89df8f9b7d200e6`；unit 8／65、topology PASS、真fault 2 suites／3 tests：112與11000均`NO_APP_PARTIAL_EFFECT`；exact Docker cleanup PASS。僅證precommit，G10c仍未完成。 |
 | G10c | PASS：真傳輸未知確認與 canonical 收束 | `4aa5f4f`；G10c unit 9／67、fault 2 suites／4 tests；實際 HTTP→G07→G08a→G04b 管理更新經 Mongo `hangBeforeCommitingTxn` 與 Toxiproxy downstream timeout，direct observer 確認完整提交，scheduler canonical confirmation、session/lease cleanup、no-late CRUD 全通過；另有獨立 wire probe。 |
 | G11a | PASS：部署拓撲基線 | 正式證據見 `docs/evidence/g11a/report.md`；exact clean source/toolchain 下18 unit／11 static／8 runtime、full unit 59 suites／1009 tests，三角色覆核PASS |
-| G11b | 持久寫入權與兩階段啟動 | Mongo atomic writeRunClaim、一次 runTicket、bootstrap 與 local ready 分離、ordinary restart 關寫 |
+| G11b | READY：持久寫入權與兩階段啟動 | D189固定private-file one-use runTicket、verification-only bootstrap、Mongo atomic writeRunClaim、nominal WRITABLE bridge、bootstrap receipt與local-ready分離、ordinary restart關寫；尚未實作 |
 | G11c | 維護入口與停機隔離 | persistent marker、private drain≤30s、API／Mongo process disappearance 與 no-late-work 證據 |
 | G11d | 精確 reset／seed | passhub_demo 七 collection sequential deleteMany、保 indexes、stable seed、新 epoch／null claim、其他資料不變 |
 | G11e | 外部排程與唯一 controller | local nonblocking flock、同一手動／timer command、Asia/Taipei 03:00、Persistent=false |
