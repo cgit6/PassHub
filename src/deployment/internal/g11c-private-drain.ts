@@ -37,11 +37,15 @@ export function createG11cPrivateDrainAdapter(input: G11cPrivateDrainOptions): G
         expectedRevision: status.revision, timeoutMs,
       });
       if (response === null) return 'INTERNAL_UNAVAILABLE';
-      if (response.ok === true && response.command === 'DRAIN') {
-        return response.outcome === 'DRAINED' || response.outcome === 'NOT_DRAINED'
-          ? response.outcome : 'INTERNAL_UNAVAILABLE';
-      }
-      return 'INTERNAL_UNAVAILABLE';
+      if (response.ok !== true || response.command !== 'DRAIN' || response.snapshot === null
+        || response.snapshot === undefined || response.snapshot.epoch !== options.epoch || response.snapshot.run !== options.run
+        || !/^(?:0|[1-9][0-9]*)$/u.test(response.revision ?? '')
+        || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(response.controlId ?? '')
+        || response.snapshot.maintenance?.active !== true
+        || response.snapshot.maintenance.controlId !== response.controlId
+        || response.snapshot.maintenance.outcome !== response.outcome) return 'INTERNAL_UNAVAILABLE';
+      return response.outcome === 'DRAINED' || response.outcome === 'NOT_DRAINED'
+        ? response.outcome : 'INTERNAL_UNAVAILABLE';
     },
   });
 }
@@ -51,7 +55,12 @@ interface ControlResponse {
   readonly command?: string;
   readonly outcome?: string;
   readonly revision?: string;
-  readonly snapshot?: { readonly epoch?: unknown; readonly run?: unknown } | null;
+  readonly controlId?: string | null;
+  readonly snapshot?: {
+    readonly epoch?: unknown;
+    readonly run?: unknown;
+    readonly maintenance?: { readonly active?: unknown; readonly controlId?: unknown; readonly outcome?: unknown } | null;
+  } | null;
 }
 
 async function request(socketPath: string, body: Readonly<Record<string, unknown>>): Promise<ControlResponse | null> {
