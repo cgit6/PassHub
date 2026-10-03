@@ -44,7 +44,7 @@ const command = (binary, args, options = {}) => execFileSync(binary, args, { enc
 const docker = (args, options) => command('docker', args, options);
 const compose = (args, options) => docker([...composeArgs, ...args], options);
 const fingerprintSource = () => {
-  const files = command('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z']).split('\0').filter((file) => file.length > 0 && !file.startsWith('node_modules/')).sort();
+  const files = command('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z']).split('\0').filter((file) => file.length > 0 && !file.startsWith('node_modules')).sort();
   const hash = createHash('sha256');
   for (const file of files) hash.update(`${file}\0`).update(readFileSync(resolve(repository, file))).update('\0');
   return hash.digest('hex');
