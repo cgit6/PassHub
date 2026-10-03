@@ -109,6 +109,8 @@
     "test:g11c:unit": "npm run clean && npm run build && timeout --foreground 60s env NODE_OPTIONS=--experimental-vm-modules jest --config jest.g11c.unit.config.cjs",
     "test:g11c:runtime": "npm run build && timeout --foreground 900s node scripts/g11/test-g11c-runtime.mjs",
     "test:g11c": "npm run test:g11c:unit && npm run test:g11c:runtime",
+    "test:g11d:runtime": "npm run build && timeout --foreground 900s node scripts/g11/test-g11d-runtime.mjs",
+    "test:g11d": "npm run test:g11d:unit && npm run test:g11d:runtime",
     "test:g11d:unit": "npm run clean && npm run build && timeout --foreground 60s env NODE_OPTIONS=--experimental-vm-modules jest --config jest.g11d.unit.config.cjs",
     "test:integration": "npm run build && NODE_OPTIONS=--experimental-vm-modules jest --config jest.integration.config.cjs",
     "test:g04a": "node scripts/test-g04a-integration.mjs",
