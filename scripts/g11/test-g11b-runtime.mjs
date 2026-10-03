@@ -50,8 +50,12 @@ let failure;
 let port;
 let epoch;
 let ticketId;
+let ticketWire;
+let ticketPath;
 let runId = randomUUID();
 const forbiddenSecrets = [rootPassword, password, sourceSecret, jwtKey, comparisonKey];
+const httpEvidence = [];
+const mongoEvidence = [];
 
 function command(binary, args, options = {}) {
   try {
@@ -93,7 +97,13 @@ function mongoExec(script) {
   return compose(['exec', '-T', 'mongo', 'mongosh', '--quiet', '--eval', `${auth}${script}`]);
 }
 function metadata() {
-  return JSON.parse(oneOff(mongoScript("const m=await db.collection('metadata').findOne({_id:'system'});process.stdout.write(JSON.stringify({epoch:m.datasetEpoch,claim:m.writeRunClaim,claimedAtType:m.writeRunClaim===null?null:Object.prototype.toString.call(m.writeRunClaim.claimedAt)}));")));
+  const output = oneOff(mongoScript("const m=await db.collection('metadata').findOne({_id:'system'});process.stdout.write(JSON.stringify({epoch:m.datasetEpoch,claim:m.writeRunClaim,claimedAtType:m.writeRunClaim===null?null:Object.prototype.toString.call(m.writeRunClaim.claimedAt)}));"));
+  mongoEvidence.push(output);
+  return JSON.parse(output);
+}
+function recordMongoSnapshot() {
+  const output = oneOff(mongoScript("const names=await db.listCollections({}, {nameOnly:true}).toArray();const out={};for(const item of names)out[item.name]=await db.collection(item.name).find({}).toArray();process.stdout.write(JSON.stringify(out));"));
+  mongoEvidence.push(output);
 }
 function seed() {
   const output = oneOff(mongoScript(`
@@ -119,13 +129,15 @@ function writeIdentity() {
 function issueTicket() {
   ticketId = randomUUID();
   forbiddenSecrets.push(ticketId);
-  rmSync(join(runtime, 'bootstrap-ticket.json'), { force: true });
-  writeFileSync(join(runtime, 'bootstrap-ticket.json'), `${JSON.stringify({
+  ticketPath = join(runtime, 'bootstrap-ticket.json');
+  ticketWire = `${JSON.stringify({
     v: 'g11b.run-ticket.v1', ticketId, datasetEpoch: epoch, processRunId: runId,
-  })}\n`, { mode: 0o400 });
-  chmodSync(join(runtime, 'bootstrap-ticket.json'), 0o400);
+  })}\n`;
+  rmSync(ticketPath, { force: true });
+  writeFileSync(ticketPath, ticketWire, { mode: 0o400 });
+  chmodSync(ticketPath, 0o400);
 }
-function assertNoSecretEvidence() {
+function assertNoSecretEvidence(extraEvidence = []) {
   const inspections = ['api', 'mongo', 'proxy'].map((service) => {
     const id = compose(['ps', '-aq', service]);
     const inspected = JSON.parse(docker(['inspect', id]))[0];
@@ -136,8 +148,10 @@ function assertNoSecretEvidence() {
   const runtimeLogs = existsSync(logDirectory) ? readdirSync(logDirectory)
     .filter((name) => /^runtime\.log(?:\.[1-4])?$/u.test(name))
     .map((name) => readFileSync(join(logDirectory, name), 'utf8')) : [];
-  const evidence = JSON.stringify({ inspections, logs, runtimeLogs });
-  for (const secret of forbiddenSecrets) assert(!evidence.includes(secret), 'secret leaked into API argv, environment or logs');
+  const evidence = JSON.stringify({ inspections, logs, runtimeLogs, httpEvidence, mongoEvidence, extraEvidence });
+  for (const secret of [...forbiddenSecrets, ticketPath, ticketWire].filter(Boolean)) {
+    assert(!evidence.includes(secret), 'secret or ticket material leaked into runtime surfaces');
+  }
 }
 function safeRuntimeStages() {
   const path = join(runtime, 'logs', 'runtime.log');
@@ -169,6 +183,7 @@ function https(path, method = 'GET', body, headers = {}) {
         const raw = Buffer.concat(chunks).toString('utf8');
         let parsed;
         try { parsed = JSON.parse(raw); } catch { parsed = null; }
+        httpEvidence.push(raw, JSON.stringify(response.headers), String(response.statusCode));
         resolveRequest({ status: response.statusCode, body: parsed });
       });
     });
@@ -257,18 +272,21 @@ try {
   });
   assert(entry.status === 200 && entry.body?.reasonCode === 'ENTRY_GRANTED', 'real production recognition failed');
   assert((await https('/qualifications', 'GET', undefined, humanHeaders)).status === 200, 'real production query failed');
+  recordMongoSnapshot();
   cases.push(expected[5]);
   assert(existsSync(join(runtime, 'control', 'runtime-control.sock')), 'G10a private runtime socket absent');
   cases.push(expected[6]);
   assertNoSecretEvidence();
   cases.push(expected[7]);
   stopApi();
+  assertNoSecretEvidence();
   cases.push(expected[8]);
   runId = randomUUID(); writeIdentity(); compose(['start', 'api']);
   await waitFor('ordinary same-epoch restart closed', () => localStatus() === 503);
   assert(metadata().claim?.runId === claimed.claim.runId && (await https('/qualifications')).status === 503, 'ordinary restart took over or became ready');
   assertNoSecretEvidence();
   stopApi();
+  assertNoSecretEvidence();
   cases.push(expected[9]);
   // A fresh test dataset and ticket exercise failure after a confirmed claim.
   seed(); runId = randomUUID(); writeIdentity(); issueTicket();
@@ -280,6 +298,7 @@ try {
   assert((await https('/qualifications')).status === 503, 'failed composition forwarded business traffic');
   assertNoSecretEvidence();
   stopApi();
+  assertNoSecretEvidence();
   cases.push(expected[10]);
 } catch (error) {
   failure = error;

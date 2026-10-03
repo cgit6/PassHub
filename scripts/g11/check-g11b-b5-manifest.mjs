@@ -19,7 +19,7 @@ try {
   const report = JSON.parse(readFileSync(outputFile, 'utf8'));
   const failures = [];
   if (report.numTotalTestSuites !== 6) failures.push(`suite-count:${report.numTotalTestSuites}`);
-  if (report.numTotalTests < 18) failures.push(`test-count:${report.numTotalTests}`);
+  if (report.numTotalTests !== 33) failures.push(`test-count:${report.numTotalTests}`);
   if (report.numFailedTestSuites !== 0 || report.numFailedTests !== 0) failures.push('failed');
   if (report.numPendingTests !== 0 || report.numTodoTests !== 0) failures.push('pending-or-todo');
   if (report.wasInterrupted === true) failures.push('interrupted');
