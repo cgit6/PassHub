@@ -23,7 +23,7 @@ aliases:
   - "PassHub 求職作品範圍決策"
   - "PassHub 架構辯論"
 created: "2026-09-15"
-updated: "2026-09-28"
+updated: "2026-10-03"
 ---
 
 # PassHub v1 業務邊界與架構討論紀錄
@@ -31,16 +31,16 @@ updated: "2026-09-28"
 ## 快速檢索卡
 
 - 核心問題：在小型訪客資格／模擬辨識決策業務上，形成合理、模組化、可驗證的Node.js/TypeScript架構與逐關方案；不以兩天時限取代品質論證。
-- 當前結論：D160完成規劃封口；D161完成舊碼清除；D163–D179保存G02–G08b各自限定證據；D180／D181分別封閉並驗收G09a；D182／D183分別封閉並驗收G09b；D184已封閉G10a開發前契約。正式工程停止於G09b，下一合法gate G10a為READY但尚未開始；矩陣維持29V／107U，完整v1未完成。
+- 當前結論：D160完成規劃封口；G02–G10c各自限定 evidence 已保存，目前停止於 G10c。D187 同步七個 reset target、canonical writeRunClaim 語意及 G11a–G11g STOP；下一合法 gate 為 G11a，完整 v1 未完成。
 - 關鍵爭點：D129原生中止兩送有界組預扣不退、跨窗口局部例外；D130較早確認起點／D131七格；D143 Face反向unique同txn替換必须G04a先真測。D149同epoch普通restart關寫是明示可用性代價，不能依memory空接管。
-- 適用於：D01–D165有效採用／修正、獨立角色公開論點、官方查證及剩餘gate風險。採Nest預設Express/strictTS/官方driver/單API/單Mongo member replica set，非無框架或HA；25STOP見D157及實作方案。
+- 適用於：D01–D187有效採用／修正、獨立角色公開論點、官方查證及剩餘gate風險。採Nest預設Express/strictTS/官方driver/單API/單Mongo member replica set，非無框架或HA；D157原25STOP經D187拆分G11後現為31STOP，見實作方案。
 - 不適用於：把歷史候選／官方語法／manifest／獨立唯讀實驗當PassHub已完成成果。D117 JSON v2已取代binary v1，D130永久終局候選未採，D89安全條件續辦仍有效；D161只有A01為V。
 - 待驗證：G10及其後gate。G09a已證安全查詢，G09b已完成固定fixture、4,000 raw及40 executionStats限定實驗；D184只使G10a logger／private control契約READY，仍未驗其程式，以及G10b driver wire／native清理、G10c真回程loss、G11部署及完整release。
 - 實作者入口：[實作方案](implementation-plan.md)，再讀[136要求矩陣](requirements-traceability.md)及[業務規格](business-scope.md)，並回查對應D原文。未來每子關報實際證據後STOP，D114不授權未來不停實作。
 
 ## 閱讀狀態與階段界線
 
-- 最新狀態：D183記錄G09b限定gate已通過並停止於G09b；D184使下一合法gate G10a達到READY但尚未開始。G10工程、G11 deployment及完整v1仍未完成。矩陣為29V／107U。
+- 最新狀態：G10a、G10b、G10c 限定 gate 已通過；G11 deployment／maintenance 與完整 v1 尚未完成。D187 使下一合法 gate G11a READY。
 - D01–D35 及所有較早摘要／交接保留歷史；其中「K1尚未同步」「尚未開始第二階段」「API/schema未定」不代表當前狀態。最新有效版本由D117/119/122/125/129–139/140–157及後續明確覆核修正判定，歷史block不回寫。下方回溯狀態描述只對當時有效，不能用來覆蓋新版。
 - 文件整體settled代表有效規劃已採用；D161留下舊碼處理證據，D163–D179留下G02–G08b各自限定證據，D180／D181留下G09a契約及證據，D182／D183留下G09b契約及證據，D184留下G10a開發前契約。partially-sourced仍含專案取捨、官方查證與未實測組合；上述限定gates不代表G10工程、G11部署或其餘107要求通過。
 - 「使用者已接受」與「辯論暫定」逐 block 區分。授權保存辯論不等於確認候選架構，也不等於授權重寫程式。
@@ -2918,7 +2918,7 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - 同process／dataset registry待測初值4096格，白天無TTL、淘汰或按HTTP期限遺忘，完整reset後才清。可信鍵SourceID＋externalEventID；保留inputHmac／comparisonReferenceId、原receivedAt／順位及去敏狀態。在途／unknown持原owner和全部共同預算；canonical完成保存原結果或Event定位；安全技術終局保存充分無效果／無晚寫證據及技術結果，同ID不得新做。
 - 普通新辨識候選整組同步准入新增registry預留，與origin／validation／HTTP同时取得；可信join既有項則返自己的預留。滿格停止新原項、不淘汰舊ID，專用retry仍可驗證關聯或有限canonical回放。在途重送不發新DB確認。技術終局記憶不是AccessEvent；沒有持久pending或新恢復服務。
 - UX命中：文字說不跨reset不足，旧ID可能被悄当新項。採technical header `PassHub-Dataset-Epoch`，目前epoch由現有login／query及准入錯誤回覆提供，不增metadata管理API；相關寫入與重送必帶所處dataset原epoch。缺失／不符回技術前置條件錯誤、無Event／新項；epoch非認證。明確取新epoch提交是新dataset操作，不是旧项續辦，Demo腳本不得自動刷新epoch重送舊內容。
-- 重啟取捨：metadata新增writeRunClaim:{datasetEpoch,processRunId}；完整reset成功後null，啟動須原子claim且確認成功才開寫。claim使用後正常停止亦不清，新process看到既有claim或claim結果未知則寫入關閉；不能依registry空／程序停／DB看空接管。read-only及DB canonical回放仍須原認證、相容檢查及有限資源；找不到不證舊項失敗。
+- 重啟取捨：metadata 頂層 `datasetEpoch` 識別資料世代，`writeRunClaim` canonical shape 為 `{runId, claimedAt}`；兩者共同識別寫入擁有者。完整 reset 成功後 claim 為 null，啟動須原子 claim 且確認成功才開寫。claim 使用後正常停止亦不清，新 process 看到既有 claim 或 claim 結果未知則寫入關閉；不能依 registry 空／程序停／DB 看空接管。read-only 及 DB canonical 回放仍須原認證、相容檢查及有限資源；找不到不證舊項失敗。（D187同步）
 - 同dataset普通restart不恢復寫入，明確犧牲保留資料重啟可用性；重新開寫只能private維護隔離旧DB工作→完整reset新epoch，不是自動清庫，不稱重啟已證no-late。比較／部署秘密普通重啟保持不變，D109相容核對仍必要；本決策增加啟動寫入門檻而不覆寫舊摘要。
 - 仲裁：有限記憶及可辨認reset界線可採；驗收4096邊界、同步返額、同ID终局重送、完整結果／异內容回放、旧epoch拒絕、claim並行/未知/普通restart不得寫及受控reset後新epoch。全部U。下一P04具體API／DTO／進度／status，不拓展新业务。
 - 基礎：K2D91／D99／D109／D122／D146–D148、K3P10、使用者跨reset能力邊界與本輪推論；獨立UX、捍衛、仲裁只交換公開主張，未外查／改code／DB／部署。
@@ -2995,7 +2995,7 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - 日期：2026-09-19；捍衛開場→工程異端→捍衛修正→仲裁，依D114採P14接線方向；精確生命期前提待Q13，沒有部署或clear。
 - 自管Linux／DockerCompose，單API及單成員Mongo replica set、D125pins，非HA。host／domain／TLS憑證為交付前置，不購買或假設已有。選Nginx官方映像作HTTPS反代，版本digest待唯一Q13；API／Mongo無hostports、不mountDockerSocket，proxy覆寫轉送標頭、API只信固定proxy私網IP/32，不全信bridge或任意Forwarded。
 - 待測起點host2vCPU／4GiBRAM／20GiB空閒盤；API768MiB／Mongo1536MiB／proxy128MiB，proxy／Docker日志另有限輪替。這不是人數／吞吐承諾；resource及TLS真gate驗收。
-- external03:00AsiaTaipei流程：exclusivehostlock＋persistentmaintenance marker／host公網屏障→drain最多30秒→停API確認舊API程序停止（不證DBworkgone）→停Mongo確認舊DB程序停止→啟Mongo待恢復完成PRIMARY→只passhub_demo六collection清理／seed稳定公開憑證、新epoch及nullclaim（JWT/HMACkey不換）→受控bootstrap／ready／handoff才開公網。任何停止未知／恢復／clear／seed／startup失敗都failclosed，不能skip隔離或broad dropDB。
+- external03:00AsiaTaipei流程：exclusivehostlock＋persistentmaintenance marker／host公網屏障→drain最多30秒→停API確認舊API程序停止（不證DBworkgone）→停Mongo確認舊DB程序停止→啟Mongo待恢復完成PRIMARY→只清 passhub_demo 的七個已知 collection／seed稳定公開憑證、新epoch及nullclaim（JWT/HMACkey不換）→受控bootstrap／ready／handoff才開公網。任何停止未知／恢復／clear／seed／startup失敗都failclosed，不能skip隔離或broad dropDB。（D187同步）
 - 工程命中許可循環：若localgate就是ready，而marker阻许可，互依卡死。承認拆bootstrap-verification（配置、PRIMARY、schema/index/向量/epoch及受控claim，不執行業務、不要求service-ready）及service-ready（許可成立後）。host在exclusive lock提供私密單次runTicket限定新epoch/processRunId，普通啟動不能自造或越marker；非lease／逐項pending平台。
 - bootstrap成功後私密控制授權該run撤serviceveto，再本機ready；host公網屏障仍封、marker仍標未完成handoff，不把marker有無當唯一許可。ready失敗重維持veto／停API，不解marker／外層封閉；ready成功交接完成才移除marker開公網。ordinaryrestart沿D149不能接管claim；live只process，ready不是bootstrap等價物。
 - 仲裁：方向可採，停止請求／drain／processgone與DB舊工作隔離須分清，不能未查就假證no-late。Q13依D114root核准唯一窄官方查：systemd時區排程／util-linux互斥鎖、Docker停止程序生命期、Mongo停止恢復及精確清理、所選Nginx官方映像版本digest；不展軟體比較，domain/cert仍外部前置。
@@ -3013,8 +3013,8 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - K17新增實讀官方library/nginx表：stable1.30.5-trixie、源碼commit a16f1329e13e7273c4103f75d863ca625b75109e。匿名registry唯讀manifest鎖`nginx:1.30.5-trixie@sha256:f91bdb7aee4cba26f89b1c5c3aa12742ec3c91c6d70fd7007c6dc797e9676c45`，列amd64/arm64，實作targetlinuxamd64；沒pull／運行。K45實讀proxyrequestbuffer預設on、chunked須明配HTTP1.1、nextupstream預設error/timeout、ignoreclientabort預設off、setheader與SSLcertificatekey及rewrite-file/return章。不採示例舊cipher、不自動代管TLS。
 - 捍衛正式主張／基礎：K17、K42–K46、D149／D153／D154及本輪推論。timer `OnCalendar=*-*-* 03:00:00 Asia/Taipei`、AccuracySec=1s、RandomizedDelaySec=0、Persistent=false；漏排不白天補破壞性reset，host需時間同步/tzdata、實際calendar與觸發gate，不保精確點。host固定local exclusive nonblockingflock及persistentmarker，不unlink鎖檔；非APIcron。
 - 反代：鎖上述NGINX映像，TLSdomain/key/certificate由使用者環境提供；API/DB不發布hostports，無DockerSocket。proxy_request_buffering off、顯式HTTP1.1、proxy_next_upstream off、body16KiB、upstreamread/send初15s（非wholedeadline）、覆寫XFF為remoteAddr，API只信固定proxyIP/32。marker檔存在則公網503；clientabort不取消原項，應用owner自負生命期。
-- 主runbook：exclusivehostlock／marker封入口→privatedrain最多30s→stopAPI確認既定唯一舊程序停止→stopMongo確認舊DB程序停止→startMongo確認journal恢復完成PRIMARY→指定passhub_demo六collection逐一deleteMany({})保留indexes→seed新epoch/nullwriteRunClaim及metadata向量、假帳號/Source穩定、部署keys不換→privateoneuserunTicketbootstrap-verification→授權本機service-ready→成功handoff才撤marker開公網。API/Mongo明配stop_signalSIGTERM及30sgrace，API無自動restart；grace到／stopresponse本身不證隔離。若有額外writer/API/container或停止狀態不明，拒跳步、外層封閉，先解精確環境問題。
-- 精確清理僅qualifications/faceSlots/events/users/sources/metadata，僅passhub_demo；不dropDB、不清admin/system/local或volume。若停止／恢復／clear/seed/claim/startup/ready不確定，APIoff/marker保留，不稱seed原子整庫完成，可維護者按同受控流程安全重跑。初部署同explicitinitializer，不因空庫自動heal。ordinaryrestart同dataset寫入沿D149關閉，安全相容canonicalreadonly回放仍有限；marker不是新process接管許可。
+- 主runbook：exclusivehostlock／marker封入口→privatedrain最多30s→stopAPI確認既定唯一舊程序停止→stopMongo確認舊DB程序停止→startMongo確認journal恢復完成PRIMARY→指定passhub_demo的 qualifications、faceSlots、events、users、sources、metadata、managementReceipts 七個 collection逐一deleteMany({})保留indexes→seed新epoch/nullwriteRunClaim及metadata向量、假帳號/Source穩定、部署keys不換→private one-use runTicket bootstrap-verification→授權本機service-ready→成功handoff才撤marker開公網。API/Mongo明配stop_signalSIGTERM及30sgrace，API無自動restart；grace到／stopresponse本身不證隔離。若有額外writer/API/container或停止狀態不明，拒跳步、外層封閉，先解精確環境問題。（D187同步）
+- 精確清理僅 qualifications／faceSlots／events／users／sources／metadata／managementReceipts，僅 passhub_demo；不 drop DB／collection，不清 admin／system／local、未知 collection 或 volume。若停止／恢復／clear／seed／claim／startup／ready 不確定，API off／marker 保留，不稱 seed 原子整庫完成，可由維護者按同受控流程安全重跑。初部署同 explicit initializer，不因空庫自動 heal。ordinary restart 同 dataset 寫入沿 D149 關閉，安全相容 canonical read-only 回放仍有限；marker 不是新 process 接管許可。（D187同步）
 - 防許可循環保留：bootstrap只配置/PRIMARY/schema/index/shape/vector/epoch/受控claim，不業務、不等同ready；私密runTicket限定新epoch/run，由持lockcontroller提供，普通啟動不可自造。bootstrap成功才授權該run撤serviceveto作localready，host公網marker仍封；失敗重veto/stopAPI，成功才handoff。privatehandoff只此維護能力，不解原項unknown／補預算，不新增lease/pending。
 - 全表面去敏：Nginx access_log off/error_log /dev/null；Mongo原始query/command/profiling日志不開/不採集，Demo候選logpath /dev/null；controller只固定去敏phase，不echo原工具錯誤或secret配置。應用D153allowlist日志、容器輸出皆進knownsecret掃描阻擋publicgate。取捨是不提供原始DB/代理診斷證據；掃描有限案例非永不洩漏證明，須結合輸出限制。
 - 仲裁：已足採可驗收的規劃，不再擴平台；P14真proc終止／recover/precisetarget／oneAPI／ticket/permission／失敗各階段／排程與公網代理語義皆待工程。next唯一P07測試工具定稿＋P15有限gates。獨立角色只交换正式來源/主張，本機code/install/Docker/DB/部署未動。
@@ -3409,3 +3409,13 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - 日期：2026-09-29；狀態：使用者確認採用。`STATUS`、`HOLD`、`RELEASE` 是 private `RuntimeControl` 的不可等待同步臨界區：不得做 I/O、不得等待 Promise、不得呼叫可阻塞的外部 callback；其工作僅限可信記憶體狀態、固定 closed DTO 與已捕捉的 immutable logging snapshot。它們不適用 event-loop 2 秒 processing watchdog。
 - `DRAIN` 是唯一會等待既有 writer／query observation 的 control command，保留可取消的 `timeoutMs + 1000ms` watchdog。`LOGS_READ` 完成接線後仍是可等待 read-only command，保留 2 秒 watchdog。若同步臨界區將來需要 I/O 或可等待工作，必須先改為可取消非同步邊界，再重新納入 watchdog；不得悄悄擴張本裁決。
 - 工程須以 types／private API 與測試證明上述三命令不接受 async callback 或外部 I/O capability；DRAIN timeout 的 post-mutation terminal、maintenance 保留、last cache 及 late completion 無效規則不變。本裁決解除 A11.4a watchdog 對同步命令的阻塞，不代表 G10a 已完成。
+
+### D187｜G11 前置契約同步、七個 STOP 與 reset target 裁決
+
+- 日期：2026-10-03；狀態：使用者要求以獨立 PM、架構師、測試員覆核流程，自 G11a 逐關實作至 G11g。三個角色分別直接檢查 business／plan／trace、production、infra、tests 後一致指出：既有文件只定義單一 G11，而且 G10c 新增 `managementReceipts` 後，舊「精確六 collection」文字已與 production schema 衝突。本決策先同步契約，不把文件修改當工程證據。
+- reset target 裁決：`passhub_demo` 保留六個業務 collection（qualifications、faceSlots、events、users、sources、metadata）以及一個 G10c 內部 canonical confirmation collection `managementReceipts`。完整 reset 必須對這七個 exact collection 逐一 `deleteMany({})` 並保留 indexes；不得 drop database／collection／volume，不得觸碰其他 DB 或未知 collection。若未清 `managementReceipts`，舊 operation receipt 可跨新 dataset epoch 殘留，因此不接受沿用舊六項 allowlist。
+- claim canonical 裁決：沿用現行 schema；metadata 頂層 `datasetEpoch` 識別資料世代，`writeRunClaim={runId,claimedAt}` 識別該世代唯一已 claim 的 process。兩者共同形成寫入擁有權。正常 shutdown 不清 claim；ordinary same-epoch restart 不得接管；只有完整 reset 產生新 epoch／null claim，加上 host controller 簽發的一次 runTicket，才可原子 claim。claim 結果不明一律 fail closed。
+- G11a–G11g 正式順序與單一責任：G11a 建立部署拓撲基線，包含 NGINX marker 可封閉公開入口的獨立能力 smoke，但不包含維護 controller 生命期；G11b 建立 Mongo-backed persistent claim、one-use runTicket 與 bootstrap/local-ready 分離；G11c 將 marker 與 private drain、API及Mongo確停、舊工作隔離串成維護流程；G11d 建立七 collection exact reset／stable seed／新 epoch-null claim；G11e 建立 host nonblocking flock、共用手動入口及 systemd 臺北 03:00、Persistent=false；G11f 注入各生命期故障並驗 fail-off、extra writer 拒絕、ordinary restart及受控重跑；G11g 以 `npm run test:maintenance` 做完整 manifest、秘密掃描、cleanup、source/config/image fingerprints 與三角色終審。
+- STOP 規則：每一子關都必須先有 targeted validation、真實環境證據（若該責任涉及 Docker／Mongo／process）、PM 需求覆核、架構 review 與 tester 邏輯覆核；缺證、零測試、環境 skip、cleanup 無法證實或角色要求修改時不得進下一關。timeout 只代表失敗，不證 rollback／程序消失／DB 工作收束。
+- G11 邊界：不增加業務 API、public reset／claim／runTicket route、第二 API writer、HA、分散式 queue、跨 reset 原操作延續、備份或資料救援。G11 本機 TLS／Compose 證據不冒充 public HTTPS 已上線；host/domain/certificate 與完整 release audit 保留 G12。
+- 前置工程狀態同步：G10a、G10b、G10c 已各自產生 tracked evidence；目前停止於 G10c，下一合法 gate 為 G11a。舊摘要仍稱停止於 G09b 的文字是歷史狀態，不得再作當前 gate 判斷。矩陣 requirement 是否升 V 仍須在各 G11 子關由直接證據逐項裁定，不能因 D187 或檔名存在自動升格。

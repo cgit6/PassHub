@@ -1,6 +1,6 @@
 # PassHub 有效要求與實作追蹤矩陣
 
-規劃狀態：**D160封口；D161完成舊碼清除；D166改定正式Jest runner；G02–G09b已發行各自限定evidence，目前停止於G09b；D184已使下一合法gate G10a達到READY但尚未開始**。工程狀態：**29條為V、107條仍U；D184只有開發前契約，沒有新增工程證據或升格**。整理日期：2026-09-28。
+規劃狀態：**D160封口；D161完成舊碼清除；D166改定正式Jest runner；G02–G10c已發行各自限定 evidence，目前停止於 G10c；D187 將下一階段拆為 G11a–G11g，下一合法 gate 為 G11a**。工程矩陣仍須逐項以直接證據更新，任何限定 gate 不自動代表完整 v1。整理日期：2026-10-03。
 
 這份文件回答：「討論過的要求，實作時如何避免漏掉？」它不是已完成成果，也不授權開始重寫程式。
 
@@ -8,13 +8,13 @@
 
 ## 1. 來源、用法與完成定義
 
-- 來源：[業務範圍](business-scope.md)、[討論紀錄](discuss.md) D01–D184 及實作方案。衝突依明確採用的新版；D114預設接受是本輪授權，不捏造逐題答覆。候選／背景不當採用，官方來源不當工程證據。
+- 來源：[業務範圍](business-scope.md)、[討論紀錄](discuss.md) D01–D187 及實作方案。衝突依明確採用的新版；D114預設接受是本輪授權，不捏造逐題答覆。候選／背景不當採用，官方來源不當工程證據。
 - 本稿同步時的來源 SHA-256：`discuss.md = db4e46746d7175b4297bf0cbf1be99985d10710875668957e29322c5827a84ed`；`business-scope.md = e02ea25637a20e6cf5e2095b801b0950533bf5647ab9413b58c9205ce88f50bb`。後續更新須記錄基線變動，不以舊摘要覆蓋新決策。
 - 以下「責任」是行為邊界，實際接線／目錄規劃見D140–D141；G02–G08b只具各gate限定程式／測試符號與局部 evidence，其餘不能由規劃欄推定已建立。
 - 每列的 `T-要求ID` 是**預定驗收情境編號**，不是已存在的測試。欄內分號分開的情境都要覆蓋；必要時拆成多個實際測試。
 - 每列 `U` 代表「尚未由完整直接證據閉合」；可記錄已驗的局部切片，但不能因相似功能、測試名稱或部分情境直接標為完成。
 - 實作時逐列補上程式符號／路徑、真實測試名稱、重跑命令、結果與 commit。未決細節先討論，不由實作者暗自選定為既成事實。
-- 未來依D157固定25個STOP點，完成一子關即交差異／命令／exit／指紋／證據後停止，不能跨關。D114只授權這輪持續討論，不授權不停實作。
+- D157原定25個STOP；D187把原單一G11拆為G11a–G11g後，現為固定31個STOP。完成一子關即交差異／命令／exit／指紋／證據後停止，不能跨關。D114只授權這輪持續討論，不授權不停實作。
 
 完成狀態依序為：`U 未核對 → I 已實作但未驗證 → V 已有可重跑證據 → R 已獨立覆核`。只有有證據的項目才能對外宣稱完成；文件採用狀態與工程完成狀態分開。
 
@@ -178,7 +178,7 @@
 | M06 | 每日 Asia/Taipei 凌晨 03:00 由 API 外排程自動執行，不依賴人工或 API 自己計時。 | D26、D52 | 外部排程 | T-M06：排程時區／觸發驗證；API 不健康仍能啟動維護。 | U |
 | M07 | 先拒新業務、有限等待既有操作，再停止 API；API 已停且確保舊 DB 工作不能干擾重置後資料才清除。 | D48–D52、D83 | 停機／隔離 | T-M07：清除前確認 API 已停；未知／未完成 DB 指令不能因停程序就假定消失；隔離須有證據。 | U |
 | M08 | drain待測最多30秒，超時仍進安全重置、不取消；隔離未證明不能清庫。 | D50、D52、D155 | 重置超時 | T-M08：drain超限仍先確停API/Mongo、恢復PRIMARY再清；停止或隔離未知維持入口封閉。 | U |
-| M09 | 只passhub_demo六collection sequential deleteMany保indexes後seed；公開Operator/Viewer/ENTRY/EXIT憑證不變，新epoch/nullclaim。 | D26、D47、D52、D155 | reset／seed | T-M09：qualifications/faceSlots/events/users/sources/metadata精確清理；不dropDB/volume/其他DB；seed非全庫原子、部署keys外管不換，受控重跑。 | U |
+| M09 | 只 passhub_demo 七個已知 collection sequential deleteMany 保 indexes 後 seed；公開 Operator/Viewer/ENTRY/EXIT 憑證不變，新 epoch/null claim。 | D26、D47、D52、D155、D187 | reset／seed | T-M09：qualifications/faceSlots/events/users/sources/metadata/managementReceipts 精確清理；不 drop DB/collection/volume/其他 DB；seed 非全庫原子、部署 keys 外管不換，受控重跑。 | U |
 | M10 | 清除／seed 失敗不恢復 API，維護者修復重跑；成功後才重啟接受業務。 | D48、D52 | 維護失敗界線 | T-M10：各階段故障保持不可用；安全重跑恢復，無半初始化服務。 | U |
 
 ### 2.10 作品品質與可展示證據
@@ -292,14 +292,14 @@
 | P07 | D125精確Node/Nest/driver/Mongo與編譯pins；D129–D137 Core生命週期／兩送例外／七格；D166取代D156的正式Jest runner決策，D167完成Jest unit重驗，固定Toxiproxy及正式clean指紋證據規則仍有效；G02/G03a/G03b局部gate已發行，後續接線與真環境仍待驗。 | A02、A11–A16、L14–L23、E02–E08；G02/G03a/G03b/G05b/G10b/G10c |
 | P08 | D132–D139複合無效果＋無晚寫／canonical、真共同snapshot及受控回程loss；D153私密控制屏障。 | L07–L12、L16–L21；G10a/G10b/G10c |
 | P09 | D146–D147 bodyParser:false先接raw hook／同步準入及Auth provisional FIFO，D148分池與D151嚴格入口。 | L01–L02、L28–L34；G05a/G07a/G07b |
-| P10 | D149 registry4096無日間淘汰、epoch前置、writeRunClaim；ordinary restart同epoch關寫、只有限安全readonly回放，private fullreset重新開寫。 | L06、L13、L20–L21、L35；G05c/G11 |
+| P10 | D149 registry4096無日間淘汰、epoch前置、writeRunClaim；ordinary restart同epoch關寫、只有限安全readonly回放，private fullreset重新開寫。 | L06、L13、L20–L21、L35；G05c/G11b/G11d/G11f |
 | P11 | D152三list固定keyset／route-filter-epoch cursor；D182固定SHA-256 fixture分布、十case first／fixed-next、四query索引前後各2,000次量測、40份真adapter explain、正確性gate及私有／公開證據分層。 | B44–B47、E04；G09a/G09b |
 | P12 | D153／D184 exact uniform allowlist、有限best-effort FS logs及私密LOGS_READ／socket，logical-step permission、hold ACK前屏障、drain及bounded current-last replay。 | B40、B50、L07–L12、L36、E05–E06、M05、M07；G10a（本關僅直接切片，跨G10b／G10c／G11者仍U） |
-| P13 | D148連線／reader/body/upload/validation/scrypt/query/canonical限額及fixed-minute rate、IP表256；D155信固定proxyIP/32。 | L01、L35、M04；G07a/G07b/G11 |
-| P14 | D154–D155單API/單成員replset/NGINX；systemd03臺北Persistent=false、host lock/marker、API與Mongo確停及恢復、六collection精確清理／runTicket分bootstrap-ready／failclosed。 | A18、M01、M05–M10；G11 |
-| P15 | D156未被D166取代的命令／期限／clean sourceCommit規則；D166正式Jest runner與其證據失效／重驗範圍；D157固定25STOP及maintenance600/1800。文件封口G00，完整release136證據G12；本輪只討論。 | E01–E09；G00/G01a–G12 |
+| P13 | D148連線／reader/body/upload/validation/scrypt/query/canonical限額及fixed-minute rate、IP表256；D155信固定proxyIP/32。 | L01、L35、M04；G07a/G07b/G11a/G11g |
+| P14 | D154–D155、D187單API/單成員replset/NGINX；systemd03臺北Persistent=false、host lock/marker、API與Mongo確停及恢復、七collection精確清理／runTicket分bootstrap-ready／failclosed。 | A18、M01、M05–M10；G11a–G11g |
+| P15 | D156未被D166取代的命令／期限／clean sourceCommit規則；D166正式Jest runner與其證據失效／重驗範圍；D157原25STOP經D187拆分G11後固定為31STOP，maintenance600/1800不變。文件封口G00，完整release136證據G12。 | E01–E09；G00/G01a–G12 |
 
-實作方案記錄25個STOP、命令dictionary與證據位置。G01a/G01b已依D161完成，G02/G03a/G03b/G03c、窄 G04a、G04b、G05a、G05b、G05c、G06a、G06b、G07a、G07b、G08a、G08b、G09a及G09b已依D166及各自證據完成限定驗收並停止於G09b。後續G10 fault／control／logs、G11 deployment、完整G05b execution／confirmation ledger整合、Mongo writeRunClaim state machine、driver wire、transport-loss及完整v1仍未驗證。
+實作方案記錄逐關 STOP、命令 dictionary 與證據位置。G01a／G01b 及 G02–G10c 已各自完成限定驗收；目前停止於 G10c。後續 G11a–G11g deployment／maintenance、Mongo writeRunClaim state machine、完整 release 仍未驗證；既有 G10 限定證據不自動證明 G11 或完整 v1。
 
 ## 7. 實作時的證據帳本與反向覆核
 
@@ -317,7 +317,7 @@
 4. 獨立覆核者直接讀原始 D 段與測試，反查矩陣是否漏要求或誤採舊提案；不只閱讀實作者摘要。
 5. 交付差異與證據後停止。未達條件不進下一關，不因時間壓力靜默縮減要求；必要變更先與使用者確認。
 
-**當前停止點：G09b分case查詢效能 evidence 已通過；clean `dd0bc14`正式run使用固定10k／4k／40k fixture，完成10 cases×2 pages×2 states、4,000 raw及40 executionStats，correctness／hash／index inventory全綠。矩陣為29V／107U；本關只將E04升為V，E06維持U。20／20 p50及19／20 p95在本次AFTER較低，唯一`inside-all / first` p95約+3.6%；不是因果、SLA或容量宣稱。依25 STOP停止於G09b；D184已使下一合法gate G10a達到READY但尚未開始，沒有新增工程證據。**
+**當前停止點：G10c 限定 evidence 已通過；下一合法 gate 為 D187 定義的 G11a。G11a–G11g 尚未完成，矩陣 V／U 只可在直接證據與逐項覆核後更新。**
 
 ## 8. 追蹤矩陣建立時的文件覆核紀錄（歷史）
 
@@ -363,10 +363,12 @@
 | D183 | G09b clean `dd0bc14`正式run通過：manifest 50 artifact hashes一致；10k／4k／40k固定fixture、10 cases first／next、BEFORE／AFTER correctness及四索引切換全綠；4,000 raw與40 executionStats完整。單次固定順序觀察20／20 p50、19／20 p95較低，`inside-all / first` p95約+3.6%；不宣稱因果／SLA。只升E04，E06維持U；STOP移至G09b，下一G10a。 | E04、E06、E09 |
 | D153 | allowlist request/operation/epoch/run/fixedcode、有限log/drop非必要Event；socket私密權限；hold同步屏障ACK/不撤issued；manual與maintenance獨立；current-last control replay有界/stale拒絕；late callback歸屬不凍permission。 | B40、B50、L07–L12、E05–E06、M05、M07 |
 | D184 | G10a exact開發前契約：manual阻擋所有READY、不預判rate／registry／ORIGINAL，release後FIFO start才分類；rate／JOINED／REPLAY／invalid為G08 0次，eligible ORIGINAL exact1；existing-only memory join／replay不註冊READY且繞manual。maintenance封閉new／READY／validation，query另線性化；drain只等完整issuedPersistence＋activeQueryReads。closed logger／LOGS_READ FD snapshot、完整AF_UNIX framing／JSON錯誤分層／watchdog／CLI、wire／response／nested snapshot均自足定義。只使G10a READY，不做G10b/G10c/G11，且不升V。 | B40、B50、L07–L12、L36、E05–E06、M05、M07 |
-| D154–D155 | LinuxCompose單API/單member非HA、NGINXpins/HTTPS前提/固定proxy/禁止upstreamretry；systemd03TaipeiPersistentfalse/hostlockmarker/drain30/API+Mongo確認stop/恢復PRIMARY/僅passhub_demo六collection deleteMany保indexes；seed不整庫原子/任何fail off；受控ticketbootstrap與ready分開/普通boot不接claim；proxy/Mongo/容器全表面去敏及秘密scan。 | A18、L11–L13、M01–M10、B50、E05–E09 |
-| D156–D157、D166 | Jest runner先編TS/真HTTPMongo/固定fault工具digestgate；期限fail非rollback/cleanup不蓋錯；正式clean sourceCommit/指紋及報告revision區分/變更失效/普通CI非完整證據；25STOP／每關報驗證再停。D166取代D156的Node unit runner選擇，其他證據規則保留。 | E01–E09、A01–A02、L07–L23、M05–M10 |
+| D154–D155、D187 | LinuxCompose單API/單member非HA、NGINXpins/HTTPS前提/固定proxy/禁止upstreamretry；systemd03TaipeiPersistentfalse/hostlockmarker/drain30/API+Mongo確認stop/恢復PRIMARY/僅passhub_demo七個已知collection deleteMany保indexes；seed不整庫原子/任何fail off；受控ticketbootstrap與ready分開/普通boot不接claim；proxy/Mongo/容器全表面去敏及秘密scan。 | A18、L11–L13、M01–M10、B50、E05–E09 |
+| D156–D157、D166、D187 | Jest runner先編TS/真HTTPMongo/固定fault工具digestgate；期限fail非rollback/cleanup不蓋錯；正式clean sourceCommit/指紋及報告revision區分/變更失效/普通CI非完整證據；D157原25STOP經D187拆分G11後為31STOP，每關報驗證再停。D166取代D156的Node unit runner選擇，其他證據規則保留。 | E01–E09、A01–A02、L07–L23、M05–M10 |
 
 ### 10.1 136 要求逐列gate索引
+
+D187之後，`G11`只可作「G11a–G11g整段」的歷史umbrella稱呼，不能作可獨立通過的gate或證據狀態。本索引的現行列一律指向具體子關；只有該子關的直接證據能更新其切片，G11g也不會自動替前六關補證。
 
 下列gate是規劃責任／驗收落點，不是測試已存在或通過。每ID保留第2/3節全情境與第10節細化；G12再獨審全部要求與排除。實作時必填第7節帳本（code/test/command/result/commit/artifact/reviewer）。
 
@@ -439,7 +441,7 @@ wire `v="c1"`且UUID全canonical lowercase；frame合法後的JSON／DTO錯誤�
 | B47 | G09a |
 | B48 | G09a |
 | B49 | G09a |
-| B50 | G07a、G09a、G10a、G11、G12 |
+| B50 | G07a、G09a、G10a、G11g、G12 |
 | B51 | G12 |
 | B52 | G07a、G08b |
 | A01 | G01a、G01b（D161完成，V） |
@@ -459,7 +461,7 @@ wire `v="c1"`且UUID全canonical lowercase；frame合法後的JSON／DTO錯誤�
 | A15 | G04a、G04b、G10b、G10c |
 | A16 | G04a、G04b、G10b、G10c |
 | A17 | G03a、G04b、G08a、G08b、G09a |
-| A18 | G05a、G11 |
+| A18 | G05a、G11a、G11c、G11g |
 | L01 | G05a、G07b、G08b |
 | L02 | G05a、G07b、G08b |
 | L03 | G05a、G07b、G08b |
@@ -472,7 +474,7 @@ wire `v="c1"`且UUID全canonical lowercase；frame合法後的JSON／DTO錯誤�
 | L10 | G05b、G05c、G10a、G10b、G10c |
 | L11 | G05b、G05c、G10a、G10b、G10c |
 | L12 | G05b、G05c、G10a、G10b、G10c |
-| L13 | G05c、G11 |
+| L13 | G05c、G11b、G11f |
 | L14 | G05b、G10b、G10c |
 | L15 | G05b、G10b、G10c |
 | L16 | G05b、G10b、G10c |
@@ -487,48 +489,48 @@ wire `v="c1"`且UUID全canonical lowercase；frame合法後的JSON／DTO錯誤�
 | L25 | G07b、G08b |
 | L26 | G07b、G08b |
 | L27 | G07b、G08b |
-| L28 | G05c、G07a、G07b、G11 |
-| L29 | G05c、G07a、G07b、G11 |
-| L30 | G05c、G07a、G07b、G11 |
-| L31 | G05c、G07a、G07b、G11 |
-| L32 | G05c、G07a、G07b、G11 |
-| L33 | G05c、G07a、G07b、G11 |
-| L34 | G05c、G07a、G07b、G11 |
-| L35 | G05c、G07a、G07b、G11 |
+| L28 | G05c、G07a、G07b、G11c、G11f、G11g |
+| L29 | G05c、G07a、G07b、G11c、G11f、G11g |
+| L30 | G05c、G07a、G07b、G11c、G11f、G11g |
+| L31 | G05c、G07a、G07b、G11c、G11f、G11g |
+| L32 | G05c、G07a、G07b、G11c、G11f、G11g |
+| L33 | G05c、G07a、G07b、G11c、G11f、G11g |
+| L34 | G05c、G07a、G07b、G11c、G11f、G11g |
+| L35 | G05c、G07a、G07b、G11c、G11f、G11g |
 | L36 | G07b、G08b、G10a、G10c |
-| M01 | G11、G12 |
-| M02 | G11、G12 |
-| M03 | G11、G12 |
-| M04 | G07a、G07b、G11 |
-| M05 | G10a、G11 |
-| M06 | G11 |
-| M07 | G10a、G11 |
-| M08 | G11 |
-| M09 | G11 |
-| M10 | G11 |
+| M01 | G11a、G11g、G12 |
+| M02 | G11g、G12 |
+| M03 | G11a、G11d、G11g、G12 |
+| M04 | G07a、G07b、G11a、G11g |
+| M05 | G10a、G11c、G11e、G11g |
+| M06 | G11e、G11g |
+| M07 | G10a、G11c、G11f、G11g |
+| M08 | G11c、G11f、G11g |
+| M09 | G11d、G11f、G11g |
+| M10 | G11f、G11g |
 | E01 | G07a、G07b、G08a、G08b、G09a、G12 |
 | E02 | G04a、G04b、G10b、G10c |
 | E03 | G07b、G08a、G08b、G10b、G10c |
 | E04 | G09a、G09b |
-| E05 | G10a、G11 |
-| E06 | G03a、G03b、G03c、G04a、G04b、G05a、G05b、G05c、G06a、G06b、G07a、G07b、G08a、G08b、G09a、G09b、G10a、G10b、G10c、G11、G12 |
-| E07 | G02、G11、G12 |
+| E05 | G10a、G11g |
+| E06 | G03a、G03b、G03c、G04a、G04b、G05a、G05b、G05c、G06a、G06b、G07a、G07b、G08a、G08b、G09a、G09b、G10a、G10b、G10c、G11a、G11b、G11c、G11d、G11e、G11f、G11g、G12 |
+| E07 | G02、G11a、G11d、G11g、G12 |
 | E08 | G12 |
 | E09 | G12 |
-| X01 | G03a、G03c、G07a、G08a、G08b、G09a、G11、G12 |
-| X02 | G03a、G03c、G07a、G08a、G08b、G09a、G11、G12 |
-| X03 | G03a、G03c、G07a、G08a、G08b、G09a、G11、G12 |
-| X04 | G03a、G03c、G07a、G08a、G08b、G09a、G11、G12 |
-| X05 | G03a、G03c、G07a、G08a、G08b、G09a、G11、G12 |
-| X06 | G03a、G03c、G07a、G08a、G08b、G09a、G11、G12 |
-| X07 | G03a、G03c、G07a、G08a、G08b、G09a、G11、G12 |
-| X08 | G03a、G03c、G07a、G08a、G08b、G09a、G11、G12 |
-| X09 | G03a、G03c、G07a、G08a、G08b、G09a、G11、G12 |
-| X10 | G03a、G03c、G07a、G08a、G08b、G09a、G11、G12 |
-| X11 | G03a、G03c、G07a、G08a、G08b、G09a、G11、G12 |
+| X01 | G03a、G03c、G07a、G08a、G08b、G09a、G11g、G12 |
+| X02 | G03a、G03c、G07a、G08a、G08b、G09a、G11g、G12 |
+| X03 | G03a、G03c、G07a、G08a、G08b、G09a、G11g、G12 |
+| X04 | G03a、G03c、G07a、G08a、G08b、G09a、G11g、G12 |
+| X05 | G03a、G03c、G07a、G08a、G08b、G09a、G11g、G12 |
+| X06 | G03a、G03c、G07a、G08a、G08b、G09a、G11g、G12 |
+| X07 | G03a、G03c、G07a、G08a、G08b、G09a、G11g、G12 |
+| X08 | G03a、G03c、G07a、G08a、G08b、G09a、G11g、G12 |
+| X09 | G03a、G03c、G07a、G08a、G08b、G09a、G11g、G12 |
+| X10 | G03a、G03c、G07a、G08a、G08b、G09a、G11g、G12 |
+| X11 | G03a、G03c、G07a、G08a、G08b、G09a、G11g、G12 |
 
 ### 10.2 本輪必要同步驗證紀錄
 
 - 僅Markdown：business-scope有效差異分段同步，矩陣改最新規劃／P採用與子情境／gate；D01–D176討論歷史保留，舊SHA及第8/9節是歷史基線。
-- D161後readonly結構檢查：136 unique要求ID；A01為V、其餘135項U；P01–P15及25STOP保留。僅舊碼清除／保留項驗證完成，沒有新code、package、安裝、DB或部署驗證。
+- D161當時的readonly結構檢查：136 unique要求ID；A01為V、其餘135項U；P01–P15及當時25STOP保留。這是歷史回執；STOP總數其後已由D187更新為31。當次僅舊碼清除／保留項驗證完成，沒有新code、package、安裝、DB或部署驗證。
 - D159後三名原覆核者直接重讀補正，確認當時指定問題均已回應。D161另由使用者明確改變舊碼處理策略；只A01更新為V，其餘U保留。

@@ -1,9 +1,9 @@
 # PassHub v1 業務邊界規格
 
-- 文件狀態：業務與實作規劃已收斂；G02–G09b已有各自限定工程證據，依25 STOP停止於G09b；D184已使下一合法gate G10a達到READY但尚未開始，完整v1工程驗證仍未完成
-- 更新日期：2026-09-28
+- 文件狀態：業務與實作規劃已收斂；G02–G10c已有各自限定工程證據，目前停止於G10c；D187將部署／reset生命期拆成G11a–G11g，下一合法gate為G11a，完整v1工程驗證仍未完成
+- 更新日期：2026-10-03
 - 適用版本：PassHub v1
-- 文件目的：以 D01–D35 為業務底稿，同步至 D184 的有效修正；實作細節及逐關驗收集中在 implementation-plan.md，不把官方查證、歷史候選或待做測試當成工程成果
+- 文件目的：以 D01–D35 為業務底稿，同步至 D187 的有效修正；實作細節及逐關驗收集中在 implementation-plan.md，不把官方查證、歷史候選或待做測試當成工程成果
 
 原始依據見[討論紀錄](./discuss.md)，逐項實作及驗收對應見[要求追蹤矩陣](./requirements-traceability.md)。本文件的「已確認」是規格採用狀態，不代表程式／測試已完成。
 
@@ -536,14 +536,14 @@ D24 的最小揭露仍適用於公開環境：API 查詢、Access Event、錯誤
 - 重置為獨立 host 維護命令，API 停止後仍可執行；為隔離舊 DB 工作，**本方案也停止並確認舊 Mongo 程序消失，重啟恢復完成 PRIMARY 後才清理**，維護程序本身不停止。（D155 具體化 D52）
 - 順序為：停止接受新業務 → 有限等待既有操作 → 停止 API，等待超時也進安全重置 → 確認舊 DB 工作不會干擾新資料 → 清除限定 Demo 資料及重建 seed → 成功才自動啟動 API。
 - 停止 API 不證明已送 DB 工作取消。隔離／確認必須在清除前成立；不能為準時維護直接跳過安全前提，也不等於授權刪除整個 DB。
-- 精確清理僅 passhub_demo 的 qualifications、faceSlots、events、users、sources、metadata，逐 collection deleteMany({})保留索引，不 drop DB／volume／其他DB；seed 不是整庫原子，任何未知或失敗都保持關閉。（D155）
+- 精確清理僅 passhub_demo 的 qualifications、faceSlots、events、users、sources、metadata、managementReceipts，逐 collection `deleteMany({})` 保留索引，不 drop DB／collection／volume／其他DB；seed 不是整庫原子，任何未知或失敗都保持關閉。（D155、D187）
 - 重置後恢復 canonical Operator、Viewer、ENTRY Source 與 EXIT Source；公開 Demo credential 保持不變。
 - 維護者另有非公開手動重置命令；任何公開角色或 API 都不能觸發重置。
 - README 必須說明資料會每日消失，且重置期間的請求可能失敗；使用者可在重置完成後重新操作。
 - 清除或 seed 失敗維持不可用，由維護者修復重跑，不啟動半完成環境；維護開始否決過時的原項續辦許可。
 - 不提供備份、單筆復原、使用者匯出、刪除申請或正式 retention policy。
 
-v1 單 API、不自動重啟。systemd 臺北03:00／Persistent=false，漏跑不白天補清庫。host local exclusive lock／marker封入口→drain≤30秒→確認API停止→確認Mongo停止→恢復PRIMARY→精確清理seed新epoch／nullclaim→私密一次runTicket bootstrap→授權local ready→handoff才開入口。bootstrap不是ready，marker也不是普通程序接管許可。主流程各階段失敗均failclosed，未知停止／額外writer不跳步。（D149、D154–D155）
+v1 單 API、不自動重啟。systemd 臺北03:00／Persistent=false，漏跑不白天補清庫。host local exclusive lock／marker封入口→drain≤30秒→確認API停止→確認Mongo停止→恢復PRIMARY→精確清理並 seed 新epoch／nullclaim→私密一次runTicket bootstrap→授權local ready→handoff才開入口。精確清理只涵蓋 `passhub_demo` 的 qualifications、faceSlots、events、users、sources、metadata、managementReceipts 七個 collection，逐一 `deleteMany({})` 並保留 indexes；不碰其他 DB、collection 或 volume。bootstrap不是ready，marker也不是普通程序接管許可。主流程各階段失敗均failclosed，未知停止／額外writer不跳步。（D149、D154–D155、D187）
 
 ### 9.3 最低公平使用限制
 
@@ -796,10 +796,10 @@ G09b只量測既有production Mongo query adapter，不修改業務API、查詢�
 
 P01–P15採用決策與逐關驗收見[實作方案](implementation-plan.md)及追蹤矩陣。剩餘不是讓實作者自由選架構：Face唯一索引替換微型真測、固定工具相容性及fault映像digest是明確前置gate；未過便停止回討論，不靜默換策。外部主機／domain／TLS需環境提供。D161已取代舊碼私密備份要求，不再建立legacy備份。
 
-目前矩陣為 A01、A05–A09、A11–A16、B04、B08、B09、B13、B19、B27、B35、B41、B42、B44–B49、B52及E04共29項V，其餘107項仍U；G09b只把完整直接支持的E04升為V，E06仍因跨gate責任維持U。這不代表完整v1、SLA、所有秘密輸出表面、fault protocol或部署完成。依25 STOP停止於G09b；D184只使下一合法gate G10a達到READY，尚未開始且沒有新增工程證據。
+矩陣的 V／U 狀態只可依直接證據逐項更新；G10a–G10c 的限定證據不自動代表部署、maintenance、公開 HTTPS 或完整 v1 已完成。目前停止於 G10c，下一合法 gate 是 D187 定義的 G11a；G11a–G11g 尚未完成。
 
 ## 決策來源
 
-本文件以[討論紀錄](./discuss.md) D01–D35為業務底稿，同步至D184；D114明確授權持續逐題討論、預設接受及必要文件同步，非逐題個別回答。D69依D72、D17依D76修正；D89安全續辦保留，D130永久終局候選未採；D117取代binaryv1、D131七格取代三次、D129原生兩送局部例外、D149同epoch普通重啟寫入關閉，D174–D179的逐關限定證據、D180／D182／D184的開發前契約及D181／D183的限定驗收皆有效。其餘歷史候選及背景不新增產品要求。
+本文件以[討論紀錄](./discuss.md) D01–D35為業務底稿，同步至D187；D114明確授權持續逐題討論、預設接受及必要文件同步，非逐題個別回答。D69依D72、D17依D76修正；D89安全續辦保留，D130永久終局候選未採；D117取代binaryv1、D131七格取代三次、D129原生兩送局部例外、D149同epoch普通重啟寫入關閉，D187則同步G10完成狀態、七個reset target與G11a–G11g STOP。其餘歷史候選及背景不新增產品要求。
 
 本次同步不是新業務決策，也不改寫原始討論。未來若變更已確認結論，須先新增討論決策 block，再同步本文件、驗收及追蹤矩陣。實作／測試／公開證據未完成前，不把文件採用視為履歷成果。
