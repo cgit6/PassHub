@@ -394,7 +394,12 @@ export function createG10cG07RecoveryBridge(
       // composition-owned scheduler; no request or business payload crosses
       // this callback.  A wake failure must not turn a genuine unknown commit
       // into a known writer result.
-      try { wakeScheduler?.(); } catch { /* scheduler failure is fail-closed */ }
+      // Defer until pausePostCommitUnknown has returned: waking synchronously
+      // would let the scheduler claim a ticket while the bridge is still
+      // completing the caller's unknown-result path.
+      queueMicrotask(() => {
+        try { wakeScheduler?.(); } catch { /* scheduler failure is fail-closed */ }
+      });
       return true;
     },
     assertNoRetainedHandoff(context: AdmissionWorkContext): void {

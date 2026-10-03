@@ -34,6 +34,12 @@ import {
   type G10bOperationBudgetBindingFactory,
 } from '../../src/composition/internal/g10b-operation-bridge.js';
 import { attachG10bG04bPersistenceSidecar } from '../../src/composition/internal/g10b-g04b-persistence-wire.js';
+import { createG10cG07RecoveryBridge } from '../../src/composition/internal/g10c-g07-recovery-bridge.js';
+import { createG10cRecoveryScheduler } from '../../src/composition/internal/g10c-recovery-scheduler.js';
+import { createG10cPostCommitUnknownHandoffBundle } from '../../src/infrastructure/mongo/internal/g10c-post-commit-unknown-handoff.js';
+import { createRuntimeControl, createRuntimeIdentityIssuer } from '../../src/runtime/internal/runtime-control.js';
+import { createG10aWriterPermissionBinding } from '../../src/composition/internal/g10a-writer-permission-binding.js';
+import { createG10aQueryPermissionBinding } from '../../src/composition/internal/g10a-query-permission-binding.js';
 import type { WriteOperationContext } from '../../src/access/application/internal/write-operation-coordinator.js';
 import type { HumanAuthCapability } from '../../src/auth/application/index.js';
 import { HumanPrincipal, type HumanRole } from '../../src/auth/domain/index.js';
@@ -51,6 +57,7 @@ import type { G04aFaceSlotDocument } from '../../src/infrastructure/mongo/g04a-f
 const APP_URI = requiredEnvironment('G10_FAULT_APP_MONGO_URI');
 const OBSERVER_URI = requiredEnvironment('G10_FAULT_OBSERVER_MONGO_URI');
 const INTERFERER_URI = requiredEnvironment('G10_FAULT_INTERFERER_MONGO_URI');
+const TOXIPROXY_API = requiredEnvironment('G10_FAULT_TOXIPROXY_API_URL');
 const NOW = 1_800_000_000_000;
 const OWNER = '22222222-2222-4222-8222-222222222222';
 const ACTOR = '33333333-3333-4333-8333-333333333333';
@@ -85,6 +92,30 @@ function requiredEnvironment(name: string): string {
   const value = process.env[name];
   if (typeof value !== 'string' || value.length === 0) throw new Error(`G10b attached fault test requires ${name}`);
   return value;
+}
+
+async function proxyRequest(path: string, init?: RequestInit): Promise<void> {
+  const response = await fetch(`${TOXIPROXY_API}${path}`, {
+    ...init,
+    headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
+  });
+  if (!response.ok) throw new Error(`Toxiproxy ${init?.method ?? 'GET'} ${path} returned ${response.status}`);
+}
+
+async function waitUntil(predicate: () => Promise<boolean>, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error('G10c attached fault timed out waiting for canonical state');
+}
+
+async function addDownstreamResponseTimeout(name: string): Promise<void> {
+  await proxyRequest('/proxies/mongodb-rs0/toxics', {
+    method: 'POST',
+    body: JSON.stringify({ name, type: 'timeout', stream: 'downstream', attributes: { timeout: 120_000 } }),
+  });
 }
 
 function expectFaultUriSplit(): void {
@@ -148,6 +179,18 @@ function writeErrorCode(reply: unknown): number | null {
     : null;
 }
 
+async function toxiproxyRemoveToxic(name: string): Promise<void> {
+  const response = await fetch(`${TOXIPROXY_API}/proxies/mongodb-rs0/toxics/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok && response.status !== 404) throw new Error(`Toxiproxy toxic cleanup failed: ${response.status}`);
+}
+
+async function toxiproxyResetConnections(): Promise<void> {
+  const response = await fetch(`${TOXIPROXY_API}/reset`, { method: 'POST' });
+  if (!response.ok) throw new Error(`Toxiproxy connection reset failed: ${response.status}`);
+}
+
 function createAttachedHandler(adapter: G04bMongoPersistenceAdapter, fixture: G04bFixture) {
   const responsePlans = createHttpResponsePlanBundle({ currentDatasetEpoch: fixture.datasetEpoch });
   const workHandoff = createAdmissionWorkHandoffBundle();
@@ -191,7 +234,33 @@ function createAttachedHandler(adapter: G04bMongoPersistenceAdapter, fixture: G0
   });
   const management = Object.freeze({ validate: g08a.validator.validate, management: g08a.work.management });
   const routes = createG07bRouteComposition({ login, query, management, recognition });
-  return createG07bAdmissionHandler({
+  let wakeScheduler: (() => void) | undefined;
+  const handoffs = createG10cPostCommitUnknownHandoffBundle();
+  const recoveryBridge = createG10cG07RecoveryBridge({
+    adapter,
+    handoffs,
+    onPausedTicket: () => { if (wakeScheduler !== undefined) queueMicrotask(wakeScheduler); },
+  });
+  const recoveryScheduler = createG10cRecoveryScheduler({
+    clock: { nowMs: () => Date.now() },
+    timer: {
+      setTimeout: (callback, delayMs) => globalThis.setTimeout(callback, delayMs),
+      clearTimeout: (handle) => globalThis.clearTimeout(handle as ReturnType<typeof setTimeout>),
+    },
+    pausedTickets: recoveryBridge.pausedTickets,
+  });
+  wakeScheduler = recoveryScheduler.wake;
+  const runtimeClock = Object.freeze({ nowMs: () => Date.now() });
+  const processRunId = randomUUID();
+  const identityIssuer = createRuntimeIdentityIssuer({ datasetEpoch: fixture.datasetEpoch, processRunId });
+  const runtimeControl = createRuntimeControl({
+    epoch: fixture.datasetEpoch,
+    run: processRunId,
+    identityIssuer,
+    clock: runtimeClock,
+    awaitObservation: () => undefined,
+  });
+  const handler = createG07bAdmissionHandler({
     currentDatasetEpoch: fixture.datasetEpoch,
     registry,
     registryCapabilities: capabilities,
@@ -201,12 +270,17 @@ function createAttachedHandler(adapter: G04bMongoPersistenceAdapter, fixture: G0
     validator: routes.validator,
     work: routes.work,
     operationBudgetBindingFactory: bindingFactory,
+    postCommitUnknownRecoveryBridge: recoveryBridge,
+    writerPermission: createG10aWriterPermissionBinding(runtimeControl),
+    queryPermission: createG10aQueryPermissionBinding(runtimeControl),
   });
+  return Object.freeze({ handler, recoveryBridge, recoveryScheduler });
 }
 
 interface AttachedHttpApplication {
   readonly app: PassHubHttpApplication;
   readonly port: number;
+  readonly composition: ReturnType<typeof createAttachedHandler>;
 }
 
 interface HttpResult {
@@ -218,11 +292,12 @@ async function createAttachedHttpApplication(
   adapter: G04bMongoPersistenceAdapter,
   fixture: G04bFixture,
 ): Promise<AttachedHttpApplication> {
-  const app = await createPassHubHttpApplication(createAttachedHandler(adapter, fixture));
+  const composition = createAttachedHandler(adapter, fixture);
+  const app = await createPassHubHttpApplication(composition.handler);
   await app.nestApplication.listen(0, '127.0.0.1');
   const address = app.server.address();
   if (address === null || typeof address === 'string') throw new Error('attached G10b HTTP server did not bind a port');
-  return Object.freeze({ app, port: address.port });
+  return Object.freeze({ app, port: address.port, composition });
 }
 
 function invokeUpdate(
@@ -582,4 +657,80 @@ describe('G10b attached G07 to G08a to G04b fault paths through Toxiproxy', () =
       if (!httpClosed) await http.app.nestApplication.close();
     }
   });
+
+  test('G10c recovers an attached HTTP management commit after Toxiproxy reset_peer drops its response', async () => {
+    const databaseName = `passhub_g10c_attached_${randomUUID().replaceAll('-', '')}`.slice(0, 63);
+    const fixture = createG04bFixture(NOW);
+    const adapter = new G04bMongoPersistenceAdapter(appClient, databaseName, { nowMs: () => NOW });
+    await adapter.ensureSchema();
+    await adapter.clearAndSeed(fixture);
+    attachG10bG04bPersistenceSidecar(adapter);
+    const before = await readObserverSnapshot(observerClient, databaseName, fixture);
+    const http = await createAttachedHttpApplication(adapter, fixture);
+    const monitor = monitorAppFailurePath(appClient);
+    const toxic = `g10c-reset-peer-${randomUUID()}`;
+    let failpointEnabled = false;
+    let httpClosed = false;
+    const commitStarted = new Promise<void>((resolve) => {
+      const listener = (event: CommandStartedEvent): void => {
+        if (event.commandName === 'commitTransaction') {
+          appClient.off('commandStarted', listener);
+          resolve();
+        }
+      };
+      appClient.on('commandStarted', listener);
+    });
+    try {
+      await interfererClient.db('admin').command({ configureFailPoint: 'hangBeforeCommitingTxn', mode: 'alwaysOn' });
+      failpointEnabled = true;
+      const responsePromise = invokeUpdate(http.port, fixture, { displayName: 'g10c-response-lost-management' });
+      await commitStarted;
+
+      // Hold the response path open while the server commits, then reset the
+      // proxy only after the direct observer proves the transaction is durable.
+      await addDownstreamResponseTimeout(toxic);
+      await interfererClient.db('admin').command({ configureFailPoint: 'hangBeforeCommitingTxn', mode: 'off' });
+      failpointEnabled = false;
+      await waitUntil(async () => {
+        const current = await readObserverSnapshot(observerClient, databaseName, fixture);
+        return current.qualification?.displayName === 'g10c-response-lost-management';
+      }, 10_000);
+      // reset_peer closes the downstream connection when Mongo emits the
+      // commit reply; no synthetic application exception is involved.
+      await toxiproxyResetConnections();
+      await expect(responsePromise).resolves.toMatchObject({ status: 503 });
+      await toxiproxyRemoveToxic(toxic);
+      await toxiproxyResetConnections();
+
+      // The bridge/scheduler must canonical-confirm the committed receipt,
+      // close the retained original session, release FIFO, and remove the
+      // opaque recovery ticket before this test can pass.
+      try {
+        await waitUntil(async () => (
+          http.composition.recoveryScheduler?.snapshot().state === 'IDLE'
+          && http.composition.recoveryBridge.pausedTickets.pending().length === 0
+          && monitor.sessionEndCalls() >= 1
+        ), 10_000);
+      } catch (error: unknown) {
+        throw new Error(`G10c recovery did not settle: scheduler=${JSON.stringify(http.composition.recoveryScheduler?.snapshot())} pending=${http.composition.recoveryBridge.pausedTickets.pending().length} sessionEnds=${monitor.sessionEndCalls()}`, { cause: error });
+      }
+      await http.app.nestApplication.close();
+      httpClosed = true;
+      const observationsAtTerminal = monitor.observations.length;
+      const after = await readObserverSnapshot(observerClient, databaseName, fixture);
+      expect(after.eventCount).toBe(before.eventCount);
+      expect(after.qualification).toMatchObject({ displayName: 'g10c-response-lost-management', version: 1 });
+      expect(monitor.sessionEndCalls()).toBeGreaterThanOrEqual(1);
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      expect(monitor.observations.slice(observationsAtTerminal)
+        .filter((item) => item.outcome === 'STARTED' && ['abortTransaction', 'commitTransaction', 'insert', 'update', 'delete', 'findAndModify'].includes(item.commandName)))
+        .toEqual([]);
+    } finally {
+      monitor.stop();
+      await toxiproxyRemoveToxic(toxic).catch(() => undefined);
+      await toxiproxyResetConnections().catch(() => undefined);
+      if (failpointEnabled) await interfererClient.db('admin').command({ configureFailPoint: 'hangBeforeCommitingTxn', mode: 'off' }).catch(() => undefined);
+      if (!httpClosed) await http.app.nestApplication.close().catch(() => undefined);
+    }
+  }, 60_000);
 });

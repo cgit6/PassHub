@@ -141,7 +141,10 @@ export function createG10aAdmissionRuntimeComposition(
     recoveryBridge = createG10cG07RecoveryBridge({
       adapter: options.g10cMongoAdapter,
       handoffs,
-      onPausedTicket: () => wakeScheduler?.(),
+      // G07 changes REQUESTED -> PAUSED after the executor returns. Defer
+      // recovery work one microtask so the scheduler cannot adopt the ticket
+      // while the coordinator still rejects recovery as not yet paused.
+      onPausedTicket: () => { if (wakeScheduler !== undefined) queueMicrotask(wakeScheduler); },
     });
     recoveryScheduler = createG10cRecoveryScheduler({
       clock: options.monotonicClock,

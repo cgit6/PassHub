@@ -1,7 +1,10 @@
 /** @type {import('jest').Config} */
 module.exports = {
   rootDir: 'dist',
-  testMatch: ['<rootDir>/test/integration/g10c-true-transport-loss-wire-probe.test.js'],
+  testMatch: [
+    '<rootDir>/test/integration/g10c-true-transport-loss-wire-probe.test.js',
+    '<rootDir>/test/integration/g10b-attached-g04b-fault.test.js',
+  ],
   testEnvironment: 'node',
   maxWorkers: 1,
   detectOpenHandles: true,
