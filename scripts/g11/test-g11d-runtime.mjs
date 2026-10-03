@@ -133,6 +133,12 @@ try {
   assert(snapshot.unrelated?.[0]?._id === 'keep-me' && snapshot.__other?.[0]?._id === 'other-keep', 'unrelated data changed');
   assert(JSON.stringify(oldIndexes) === JSON.stringify(afterIndexes), 'indexes changed');
   result = { cases: ['G11D_EXACT_COLLECTION_ALLOWLIST', 'G11D_TRANSACTIONAL_RESET', 'G11D_SEQUENTIAL_RESET', 'G11D_STABLE_SEED', 'G11D_NEW_EPOCH_NULL_CLAIM', 'G11D_INDEXES_PRESERVED', 'G11D_OTHER_DATA_UNTOUCHED', 'G11D_REPEAT_RESET'], first: reset, second: second, sourceEpoch: initial.epoch, sourceCommit, sourceDirty, sourceSha256, runtimeComposeSha256: createHash('sha256').update(readFileSync(runtimeComposeFile)).digest('hex') };
+  const handoffFile = process.env.PASSHUB_G11D_HANDOFF_FILE;
+  if (handoffFile !== undefined) {
+    // The private handoff intentionally exposes only the publisher contract;
+    // the full evidence remains on stdout for the calling runner.
+    writeFileSync(handoffFile, `${JSON.stringify({ database: 'passhub_demo', datasetEpoch: second.datasetEpoch, indexesPreserved: true, evidence: result })}\n`, { mode: 0o400 });
+  }
   process.stdout.write(`${JSON.stringify(result)}\n`);
 } finally {
   try { compose(['down', '--volumes', '--remove-orphans'], { timeout: 60_000 }); } catch { /* cleanup is asserted by caller */ }
