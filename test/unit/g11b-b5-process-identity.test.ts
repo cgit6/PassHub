@@ -241,7 +241,7 @@ describe('G11b b5 process identity production boundary', () => {
     const productionMain = await readFile(join(process.cwd(), 'src/deployment/production-main.ts'), 'utf8');
     expect(productionMain).toContain('g11b-process-identity-intake');
     expect(productionMain).toContain('ProcessIdentityIntakeError');
-    expect(productionMain).toContain('G11B_PROCESS_IDENTITY_PATH');
+    expect(productionMain).toContain('process-run-id');
   });
 
   test('configurable engine importers are exact and test support cannot enter production', async () => {
