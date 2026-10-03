@@ -1,12 +1,21 @@
 {
   "gate": "G11g",
   "status": "PASS",
-  "sourceCommit": "774d2d4595a77484fa4f9a31f3904775680f5300",
+  "sourceCommit": "c5b537c5fa6d59149c02c727fa03b5d98aabdbc4",
+  "verifiedAtCommit": "c5b537c5fa6d59149c02c727fa03b5d98aabdbc4",
   "sourceDirty": false,
-  "sourceSha256": "8bcaa8532374dd9e10406fa8dae6ad6c83372ab0f69b023fd6f88cf884405a0f",
+  "sourceSha256": "01673f261ad988253a8cd94f1bb3ab8adb903ccd1286362dd645d7d6c2e7ac3f",
+  "configSha256": "7a8918c39803a404ac03dcf2932b8f4cbdf8ccd1405fd515838a849d11ffc6cd",
   "evidenceFiles": 10,
-  "secretScan": { "status": "PASS", "files": 468, "hits": 0 },
-  "dockerCleanup": { "available": true, "containers": [], "networks": [], "volumes": [] },
+  "secretScan": { "status": "PASS", "files": 470, "hits": 0 },
+  "dockerCleanup": { "available": true, "containers": [], "networks": [], "volumes": [], "images": [] },
+  "fingerprints": {
+    "g11bCompose": "9637ed74abbd520321f3ce2bfcf4e631a7f7966aa11fe3694d4e3198442561f9",
+    "g11bImage": "sha256:c152769e37094a774281c89cc4af28a4ec2f729b5fd6606c8a71c9c688cb7a0c",
+    "g11cCompose": "9637ed74abbd520321f3ce2bfcf4e631a7f7966aa11fe3694d4e3198442561f9",
+    "g11cImage": "sha256:f9d4865206ed3baa67aba6eae5156c8ec7037cfa9c9656ed4ff08f5ce8d90e17",
+    "g11dCompose": "87a5751bcfc63b6520a3a226385caef62fb9919615a4e89f51273195f39390be"
+  },
   "checks": ["g11e-static-contract", "g11f-unit"],
   "limitations": ["G11f policy-only fault observations remain policy scope", "no public HTTPS release claim"]
 }

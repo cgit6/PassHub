@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 const root = process.cwd();
@@ -76,4 +76,7 @@ const manifest = {
   dockerCleanup, checks: checks.map(({ name }) => name), limitations: ['G11f policy-only fault observations remain policy scope; no public HTTPS release claim'],
 };
 if (manifest.sourceDirty) throw new Error('G11G_SOURCE_DIRTY');
+if (process.env.G11G_WRITE_EVIDENCE === '1') {
+  writeFileSync(join(evidenceRoot, 'g11g/runtime.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+}
 process.stdout.write(`${JSON.stringify(manifest)}\n`);

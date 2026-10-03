@@ -10,7 +10,7 @@
 npm run test:maintenance
 ```
 
-結果：`status=PASS`、`sourceDirty=false`、468 個受掃描檔案無秘密命中、Docker containers／networks／volumes 均為空；固定來源指紋與完整 manifest 見 `runtime.json`。
+結果：`status=PASS`、`sourceDirty=false`、470 個受掃描檔案無秘密命中、Docker containers／networks／volumes／API images 均為空；動態 `passhub-g11[a-g]-<id>` Compose 專案、設定指紋、來源指紋與完整 manifest 見 `runtime.json`。本次 clean run verified commit 為 `c5b537c`。
 
 整合器確認 G11a、G11b、G11c、G11d、G11e、G11f 的 tracked report／runtime evidence 均存在且狀態有效，並重跑 G11e static contract 與 G11f unit suite（1 suite／14 tests）。
 
