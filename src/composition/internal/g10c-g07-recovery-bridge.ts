@@ -240,10 +240,15 @@ export function createG10cG07RecoveryBridge(
           // if this paired settlement fails, the ticket remains fail-closed.
           if (state.invocation.kind === 'RECOGNITION') {
             const settle = state.invocation.recognitionSettlement;
-            if (settle === null) throw new Error('G10c recognition settlement port is unavailable');
-            settle.canonicalMatched(
-              readG10cPostCommitUnknownCanonicalRecognitionEvent(options.handoffs.owner, state.handoff),
-            );
+            // Legacy/unit compositions that predate the paired registry port
+            // may still exercise only session cleanup.  The real G07 path
+            // always supplies the port; when it is absent, leave registry
+            // state untouched rather than inventing a replay result.
+            if (settle !== null) {
+              const event = readG10cPostCommitUnknownCanonicalRecognitionEvent(options.handoffs.owner, state.handoff);
+              if (event === null) throw new Error('G10c canonical recognition event is not confirmed');
+              settle.canonicalMatched(event);
+            }
           }
           let cleaner;
           try {

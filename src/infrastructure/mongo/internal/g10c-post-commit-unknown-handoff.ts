@@ -5,6 +5,7 @@ import type {
   FaceMappingSnapshot,
   ManagementQualificationSnapshot,
   QualificationSnapshot,
+  RedactedAccessEventProjection,
 } from '../../../access/ports/index.js';
 import type { G10bScopedPersistenceBinding } from './g10b-scoped-persistence-sidecar.js';
 import { readAccessScopeContextClaims } from '../../../shared/access-scope-context.js';
@@ -216,6 +217,7 @@ interface HandoffState {
   terminalCleanupClaimed: boolean;
   readonly expectedRecognitionImage: G10cRecognitionExpectedImage | null;
   readonly expectedManagementImage: G10cManagementExpectedImage | null;
+  matchedRecognitionEvent: RedactedAccessEventProjection | null;
 }
 
 interface ConfirmationActionState {
@@ -450,6 +452,7 @@ export function handoffG10cPostCommitUnknown(
     terminalCleanupClaimed: false,
     expectedRecognitionImage,
     expectedManagementImage,
+    matchedRecognitionEvent: null,
   });
   sink.retain(handoff);
 }
@@ -490,9 +493,11 @@ export async function confirmG10cPostCommitUnknownCanonicalResult(
         state.expectedRecognitionImage.externalEventId,
         timeoutMs,
       );
-      return snapshot !== null && matchesRecognitionExpectedImage(snapshot, state.expectedRecognitionImage)
-        ? 'MATCHED'
-        : 'INCONCLUSIVE';
+      if (snapshot === null || !matchesRecognitionExpectedImage(snapshot, state.expectedRecognitionImage)) {
+        return 'INCONCLUSIVE';
+      }
+      state.matchedRecognitionEvent = freezeCanonicalRecognitionEvent(snapshot.event);
+      return 'MATCHED';
     }
     const expected = state.expectedManagementImage!;
     const snapshot = await state.adapter.readG10cManagementCanonicalSnapshot(
@@ -505,6 +510,21 @@ export async function confirmG10cPostCommitUnknownCanonicalResult(
   } catch (_error: unknown) {
     return 'INCONCLUSIVE';
   }
+}
+
+/**
+ * Return the event proved by the most recent successful canonical read.
+ * This is an internal bridge only: the recovery scheduler cannot provide an
+ * event and cannot call it before a MATCHED result has been recorded.
+ */
+export function readG10cPostCommitUnknownCanonicalRecognitionEvent(
+  owner: G10cPostCommitUnknownHandoffOwner,
+  handoff: G10cPostCommitUnknownHandoff,
+): RedactedAccessEventProjection | null {
+  const sink = ownerSinks.get(owner as object);
+  if (sink === undefined) throw new TypeError('G10c canonical recognition event owner is foreign');
+  const state = requireTakenHandoff(sink, handoff);
+  return state.matchedRecognitionEvent;
 }
 
 /**
@@ -840,6 +860,28 @@ function matchesRecognitionExpectedImage(
     && sameMapping(snapshot.mapping, expected.mapping)
     && snapshot.guardVersions.qr === expected.guardVersions.qr
     && snapshot.guardVersions.face === expected.guardVersions.face;
+}
+
+function freezeCanonicalRecognitionEvent(
+  event: import('../g04b-persistence-adapter.js').G04bCanonicalSnapshot['event'],
+): RedactedAccessEventProjection {
+  return Object.freeze({
+    eventId: event.eventId,
+    sourceId: event.sourceId,
+    direction: event.direction,
+    kind: event.kind,
+    outcome: event.outcome,
+    reasonCode: event.reasonCode,
+    receivedAtMs: event.receivedAtMs,
+    recordedAtMs: event.recordedAtMs,
+    qualificationId: event.qualificationId,
+    presenceTransition: event.presenceTransition === null
+      ? null
+      : Object.freeze({
+        from: event.presenceTransition.from,
+        to: event.presenceTransition.to,
+      }),
+  }) as RedactedAccessEventProjection;
 }
 
 function matchesManagementExpectedImage(

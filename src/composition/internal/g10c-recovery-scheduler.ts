@@ -157,7 +157,7 @@ export function createG10cRecoveryScheduler(
     if (terminal.kind === 'RECOGNITION') {
       throw new G10cRecoverySchedulerError(
         'RECOGNITION_NOT_SUPPORTED',
-        'G10c recognition canonical recovery is not integrated in this increment',
+        'G10c recognition canonical recovery requires a persisted event projection',
       );
     }
     state = 'ORIGINAL_COMMIT';

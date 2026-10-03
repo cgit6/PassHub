@@ -97,7 +97,9 @@ import {
 import {
   assertG10cG07RecoveryBridge,
   type G10cG07RecoveryBridge,
+  type G10cRecognitionRecoverySettlement,
 } from './g10c-g07-recovery-bridge.js';
+import type { RedactedAccessEventProjection } from '../../access/ports/index.js';
 import type { RuntimeIdentity } from '../../runtime/internal/runtime-control.js';
 import { assertRuntimeLiveCounterBridge, notifyRuntimeLiveCounterBridge, type RuntimeLiveCounterBridge } from '../../runtime/internal/runtime-live-counter-bridge.js';
 import {
@@ -558,6 +560,7 @@ export function createG07bAdmissionHandler(
     identity: RuntimeIdentity | null,
     admissionContext: AdmissionWorkContext,
     recoveryKind: 'MANAGEMENT' | 'RECOGNITION',
+    recognitionSettlement?: G10cRecognitionRecoverySettlement,
   ): Promise<T> => {
     if (writerPermissionAcquire === undefined) return invokeNativePromise(operation);
     const lease = writerPermissionAcquire();
@@ -571,7 +574,12 @@ export function createG07bAdmissionHandler(
     let bridgeStarted = false;
     try {
       if (postCommitUnknownRecoveryBridge !== undefined) {
-        postCommitUnknownRecoveryBridge.beginIssuedPersistence(admissionContext, lease, recoveryKind);
+        postCommitUnknownRecoveryBridge.beginIssuedPersistence(
+          admissionContext,
+          lease,
+          recoveryKind,
+          recognitionSettlement,
+        );
         bridgeStarted = true;
       }
     } catch (error: unknown) {
@@ -851,6 +859,14 @@ export function createG07bAdmissionHandler(
     lease: OperationExecutionLease,
     observationReference: OperationObservationReference,
   ): Promise<void> {
+    const canonicalSettlement: { current: ((event: RedactedAccessEventProjection) => void) | null } = { current: null };
+    const recoverySettlement: G10cRecognitionRecoverySettlement = Object.freeze({
+      canonicalMatched(event: RedactedAccessEventProjection): void {
+        const settle = canonicalSettlement.current;
+        if (settle === null) throw new TypeError('G10c recognition canonical settlement is not armed');
+        settle(event);
+      },
+    });
     let outcome: AdmissionRecognitionWriterOutcome;
     try {
       outcome = sanitizeRecognitionWriterOutcome(
@@ -859,11 +875,12 @@ export function createG07bAdmissionHandler(
           input.runtimeIdentity,
           admissionContext,
           'RECOGNITION',
+          recoverySettlement,
         ),
         renderResponsePlan,
       );
     } catch {
-      transitionUnknown(input, lease, admissionContext, observationReference);
+      transitionUnknown(input, lease, admissionContext, observationReference, canonicalSettlement);
       if (postCommitUnknownRecoveryBridge?.pausePostCommitUnknown(
         admissionContext,
         settlement,
@@ -883,7 +900,7 @@ export function createG07bAdmissionHandler(
     try {
       postCommitUnknownRecoveryBridge?.assertNoRetainedHandoff(admissionContext);
     } catch {
-      transitionUnknown(input, lease, admissionContext, observationReference);
+      transitionUnknown(input, lease, admissionContext, observationReference, canonicalSettlement);
       if (postCommitUnknownRecoveryBridge?.pausePostCommitUnknown(
         admissionContext,
         settlement,
@@ -897,7 +914,7 @@ export function createG07bAdmissionHandler(
     }
 
     if (outcome.disposition === 'UNKNOWN_EFFECT') {
-      transitionUnknown(input, lease, admissionContext, observationReference);
+      transitionUnknown(input, lease, admissionContext, observationReference, canonicalSettlement);
       respond(input.owner, technical.unconfirmed);
       if (postCommitUnknownRecoveryBridge?.pausePostCommitUnknown(
         admissionContext,
@@ -919,7 +936,7 @@ export function createG07bAdmissionHandler(
         completeSafeTerminal(lease, result);
       } catch {
         if (result !== null) resultPlans.delete(result);
-        transitionUnknown(input, lease, admissionContext, observationReference);
+        transitionUnknown(input, lease, admissionContext, observationReference, canonicalSettlement);
         settleUnknown(input.owner, settlement, 'RECOGNITION_TERMINAL_UNCONFIRMED');
         return;
       }
@@ -942,13 +959,13 @@ export function createG07bAdmissionHandler(
       completeCanonical(lease, result);
     } catch {
       if (result !== null) resultPlans.delete(result);
-      transitionUnknown(input, lease, admissionContext, observationReference);
+      transitionUnknown(input, lease, admissionContext, observationReference, canonicalSettlement);
       settleUnknown(input.owner, settlement, 'RECOGNITION_TERMINAL_UNCONFIRMED');
       return;
     }
     const plans = resultPlans.get(result);
     if (plans === undefined) {
-      transitionUnknown(input, lease, admissionContext, observationReference);
+      transitionUnknown(input, lease, admissionContext, observationReference, canonicalSettlement);
       settleUnknown(input.owner, settlement, 'RECOGNITION_RESULT_PLAN_UNCONFIRMED');
       return;
     }
@@ -961,6 +978,7 @@ export function createG07bAdmissionHandler(
     lease: OperationExecutionLease,
     admissionContext: AdmissionWorkContext,
     observationReference: OperationObservationReference,
+    canonicalSettlement?: { current: ((event: RedactedAccessEventProjection) => void) | null },
   ): void {
     let confirmation: OperationConfirmationLease;
     try {
@@ -997,6 +1015,20 @@ export function createG07bAdmissionHandler(
       // The factory-owned coordinator retains any offered item. Its drain port
       // is intentionally reserved for the future G10 owner; originalConfirm
       // admission capacity remains unused in this gate.
+    }
+    if (canonicalSettlement !== undefined) {
+      canonicalSettlement.current = (event: RedactedAccessEventProjection): void => {
+        const replayResponse = canonicalRecognitionReplayPlan(event, issueBusiness);
+        const result = issueResultReference();
+        resultPlans.set(result, Object.freeze({ original: replayResponse, replay: replayResponse }));
+        try {
+          completeCanonical(confirmation, result);
+          canonicalSettlement.current = null;
+        } catch (error: unknown) {
+          resultPlans.delete(result);
+          throw error;
+        }
+      };
     }
   }
 
@@ -1933,6 +1965,30 @@ function recognitionProgressPlan(
     stage,
     confirmationState: 'NOT_STARTED',
     control: 'NONE',
+  }));
+}
+
+function canonicalRecognitionReplayPlan(
+  event: RedactedAccessEventProjection,
+  issueBusiness: (status: 200, payload: Readonly<Record<string, unknown>>) => HttpResponsePlan,
+): HttpResponsePlan {
+  const receivedAt = new Date(event.receivedAtMs);
+  const recordedAt = new Date(event.recordedAtMs);
+  if (Number.isNaN(receivedAt.getTime()) || Number.isNaN(recordedAt.getTime())) {
+    throw new TypeError('canonical recognition event timestamp is invalid');
+  }
+  return issueBusiness(200, Object.freeze({
+    eventId: event.eventId,
+    sourceId: event.sourceId,
+    direction: event.direction,
+    kind: event.kind,
+    outcome: event.outcome,
+    reasonCode: event.reasonCode,
+    receivedAt: receivedAt.toISOString(),
+    recordedAt: recordedAt.toISOString(),
+    qualificationId: event.qualificationId,
+    presenceTransition: event.presenceTransition,
+    replayed: true,
   }));
 }
 
