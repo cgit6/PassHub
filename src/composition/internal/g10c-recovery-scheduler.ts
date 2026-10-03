@@ -38,7 +38,6 @@ export type G10cRecoverySchedulerErrorCode =
   | 'INVALID_OPTIONS'
   | 'CLOCK_INVALID'
   | 'CLOCK_ROLLBACK'
-  | 'RECOGNITION_NOT_SUPPORTED'
   | 'CONFIRMATION_INTEGRITY';
 
 export class G10cRecoverySchedulerError extends Error {
@@ -154,12 +153,6 @@ export function createG10cRecoveryScheduler(
     const ticket = tickets[0];
     if (ticket === undefined) return false;
     terminal = pausedTickets.claim(ticket);
-    if (terminal.kind === 'RECOGNITION') {
-      throw new G10cRecoverySchedulerError(
-        'RECOGNITION_NOT_SUPPORTED',
-        'G10c recognition canonical recovery requires a persisted event projection',
-      );
-    }
     state = 'ORIGINAL_COMMIT';
     return true;
   };

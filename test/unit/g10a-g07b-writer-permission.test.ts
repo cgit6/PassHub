@@ -23,11 +23,13 @@ import {
   createG10cPostCommitUnknownHandoffBundle,
   handoffG10cPostCommitUnknown,
   prepareG10cManagementExpectedImage,
+  prepareG10cRecognitionExpectedImage,
   type G10cManagementExpectedImage,
+  type G10cRecognitionExpectedImage,
 } from '../../src/infrastructure/mongo/internal/g10c-post-commit-unknown-handoff.js';
 import { createG10cG07RecoveryBridge, type G10cG07RecoveryBridge } from '../../src/composition/internal/g10c-g07-recovery-bridge.js';
 import { createG10cRecoveryScheduler } from '../../src/composition/internal/g10c-recovery-scheduler.js';
-import type { G04bManagementCanonicalSnapshot } from '../../src/infrastructure/mongo/g04b-persistence-adapter.js';
+import type { G04bCanonicalSnapshot, G04bManagementCanonicalSnapshot } from '../../src/infrastructure/mongo/g04b-persistence-adapter.js';
 import type { NarrowHttpResponse } from '../../src/composition/internal/http-response-owner.js';
 
 const EPOCH = '11111111-1111-4111-8111-111111111111';
@@ -194,6 +196,7 @@ function retainPostCommitUnknown(
   adapter: G04bMongoPersistenceAdapter,
   context: Parameters<AdmissionWorkPort['management']>[1],
   withManagementImage = false,
+  withRecognitionImage = false,
 ): {
   readonly commitTransaction: jest.Mock;
   readonly endSession: jest.Mock;
@@ -252,6 +255,28 @@ function retainPostCommitUnknown(
     };
     prepareG10cManagementExpectedImage(captured.g10cManagementExpectedImageCapture, scope, managementImage);
   }
+  if (withRecognitionImage) {
+    const captured = adapter as unknown as {
+      readonly g10cRecognitionExpectedImageCapture: Parameters<typeof prepareG10cRecognitionExpectedImage>[0];
+    };
+    const recognitionImage: G10cRecognitionExpectedImage = Object.freeze({
+      sourceId: 'source-1',
+      externalEventId: 'event-1',
+      event: Object.freeze({
+        direction: 'ENTRY',
+        kind: 'FACE_MATCHED',
+        outcome: 'ACCEPTED',
+        reasonCode: 'ENTRY_ACCEPTED',
+        receivedAtMs: 1_000,
+        qualificationId: null,
+        presenceTransition: null,
+      }),
+      qualification: null,
+      mapping: null,
+      guardVersions: Object.freeze({ qr: 4, face: 8 }),
+    });
+    prepareG10cRecognitionExpectedImage(captured.g10cRecognitionExpectedImageCapture, scope, recognitionImage);
+  }
   handoffG10cPostCommitUnknown(adapter, scope, session as never, binding as never);
   return Object.freeze({ ...session, managementImage });
 }
@@ -269,6 +294,21 @@ function managementSnapshot(image: G10cManagementExpectedImage): G04bManagementC
     mapping: image.mapping,
     guardVersions: image.guardVersions,
   });
+}
+
+function recognitionSnapshot(image: G10cRecognitionExpectedImage): G04bCanonicalSnapshot {
+  return Object.freeze({
+    event: Object.freeze({
+      eventId: '99999999-9999-4999-8999-999999999999',
+      sourceId: image.sourceId,
+      externalEventId: image.externalEventId,
+      ...image.event,
+      recordedAtMs: image.event.receivedAtMs + 1,
+    }),
+    qualification: image.qualification,
+    mapping: image.mapping,
+    guardVersions: image.guardVersions,
+  }) as G04bCanonicalSnapshot;
 }
 
 class ManualRecoveryTimer {
@@ -295,21 +335,13 @@ class ManualRecoveryTimer {
 }
 
 describe('G10a A3 eligible-original G07b writer permission seam', () => {
-  test.each([
-    ['management', '/qualifications'],
-    ['recognition', '/recognition/attempts'],
-  ] as const)('G10c %s handoff pairs the paused writer lease with one opaque recovery ticket', async (kind, path) => {
+  test('G10c management handoff pairs the paused writer lease with one opaque recovery ticket', async () => {
+    const path = '/qualifications' as const;
     const control = makeRuntimeControl();
     const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
     const h = g10cBridgeHarness();
     const handler = makeHandler(control, {
       management: (_token, context) => {
-        if (kind !== 'management') return Promise.resolve({ disposition: 'KNOWN_NO_EFFECT', response: plans.technical.issue('INVALID_REQUEST') });
-        retainPostCommitUnknown(h.adapter, context);
-        return Promise.resolve({ disposition: 'UNKNOWN_EFFECT', response: plans.technical.issue('PERSISTENCE_UNAVAILABLE') });
-      },
-      recognition: (_token, context) => {
-        if (kind !== 'recognition') return Promise.resolve({ disposition: 'KNOWN_NO_EFFECT', response: plans.technical.issue('INVALID_REQUEST') });
         retainPostCommitUnknown(h.adapter, context);
         return Promise.resolve({ disposition: 'UNKNOWN_EFFECT', response: plans.technical.issue('PERSISTENCE_UNAVAILABLE') });
       },
@@ -551,15 +583,33 @@ describe('G10a A3 eligible-original G07b writer permission seam', () => {
     expect(scheduler.snapshot()).toEqual({ state: 'FAILED_CLOSED', timerArmed: false });
   });
 
-  test('G10c scheduler fails closed before issuing a recognition confirmation command', async () => {
+  test('G10c scheduler confirms recognition canonically and settles the G07 replay registry', async () => {
     const control = makeRuntimeControl();
     const plans = createHttpResponsePlanBundle({ currentDatasetEpoch: EPOCH });
     const h = g10cBridgeHarness();
     const timer = new ManualRecoveryTimer();
     let retained!: ReturnType<typeof retainPostCommitUnknown>;
+    const image: G10cRecognitionExpectedImage = Object.freeze({
+      sourceId: 'source-1',
+      externalEventId: 'event-1',
+      event: Object.freeze({
+        direction: 'ENTRY',
+        kind: 'FACE_MATCHED',
+        outcome: 'ACCEPTED',
+        reasonCode: 'ENTRY_ACCEPTED',
+        receivedAtMs: 1_000,
+        qualificationId: null,
+        presenceTransition: null,
+      }),
+      qualification: null,
+      mapping: null,
+      guardVersions: Object.freeze({ qr: 4, face: 8 }),
+    });
+    h.adapter.readG10cCanonicalSnapshot = jest.fn(async () => recognitionSnapshot(image));
     const handler = makeHandler(control, {
       recognition: (_token, context) => {
-        retained = retainPostCommitUnknown(h.adapter, context);
+        retained = retainPostCommitUnknown(h.adapter, context, false, true);
+        retained.commitTransaction.mockRejectedValueOnce(new Error('post-send response lost'));
         return Promise.resolve({ disposition: 'UNKNOWN_EFFECT', response: plans.technical.issue('PERSISTENCE_UNAVAILABLE') });
       },
     }, undefined, plans, undefined, undefined, undefined, undefined, h.bridge, timer);
@@ -573,10 +623,18 @@ describe('G10a A3 eligible-original G07b writer permission seam', () => {
     scheduler.wake();
     await flush();
 
-    expect(retained.commitTransaction).not.toHaveBeenCalled();
-    expect(timer.delays).toEqual([]);
-    expect(control.snapshot().issuedPersistence).toBe(1);
-    expect(scheduler.snapshot()).toEqual({ state: 'FAILED_CLOSED', timerArmed: false });
+    expect(retained.commitTransaction).toHaveBeenCalledTimes(1);
+    expect(timer.delays).toEqual([1_000]);
+
+    timer.runNext();
+    await flush();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await flush();
+
+    expect(h.adapter.readG10cCanonicalSnapshot).toHaveBeenCalledTimes(1);
+    expect(retained.endSession).toHaveBeenCalledTimes(1);
+    expect(control.snapshot().issuedPersistence).toBe(0);
+    expect(scheduler.snapshot()).toEqual({ state: 'IDLE', timerArmed: false });
   });
 
   test('writer wake binding rejects foreign receivers and duplicate binding; a deferred throwing wake cannot roll back release', async () => {
