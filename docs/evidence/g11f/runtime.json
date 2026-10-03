@@ -1,0 +1,24 @@
+{
+  "gate": "G11f",
+  "status": "PASS",
+  "sourceCommit": "53c05aa1f1ef808599ac0693378133a5608d3465",
+  "sourceDirty": false,
+  "sourceSha256": "65db51c400ffe9ec330c233243f26d6205089b22138fbd3d916ef587253c86d5",
+  "unit": { "suites": 1, "tests": 14, "status": "PASS" },
+  "runtime": {
+    "status": "PASS",
+    "g11dRuns": 1,
+    "sameDatasetPartialHandoffRejected": true,
+    "sameDatasetControlledRerun": true,
+    "realG11eLockContention": true,
+    "realG11eTicketHandoff": true,
+    "policyCases": [
+      "MARKER_OFF", "API_RUNNING", "MONGO_NOT_PRIMARY", "EXTRA_WRITER",
+      "ORDINARY_RESTART", "UNKNOWN_RESET", "LOCK_LOST", "TICKET_INVALID",
+      "PARTIAL_HANDOFF_FAIL_CLOSED", "REAL_SAME_DATASET_G11E_PARTIAL_REJECT",
+      "CONTROLLED_SAME_DATASET_G11D_RERUN", "REAL_G11E_LOCK_CONTENTION",
+      "REAL_G11E_HANDOFF_FROM_G11D_RESULT"
+    ]
+  },
+  "cleanup": { "composeResourcesRemoved": true, "temporaryDirectoryRemoved": true }
+}

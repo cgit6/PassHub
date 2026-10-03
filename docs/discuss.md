@@ -3496,3 +3496,11 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - authority handoff：G11d reset result 由 private publisher 驗證 `passhub_demo`／`indexesPreserved` 後，以 temporary＋fsync＋same-directory atomic rename 更新持久 `StateDirectory` epoch file；controller 只讀 0400 process identity／epoch files，使用 numeric UID 1000 契約，將 ticket 寫入 G11b canonical API runtime path並對 stdout 去敏。首次 handoff 與重複更新均有 runtime evidence。
 - 驗收：2 suites／3 tests、static 5 cases、runtime 5 cases、syntax／diff checks 全部通過。未建立 public maintenance route，也未把 G11d reset 或 G11f fault/recovery 責任偷併進本關。
 - 邊界：G11e 只解除 host lock、reset-result handoff、ticket signing 與 timer；G11f fault matrix、extra writer、partial reset recovery、ordinary restart及G11g綜合 release仍未完成。
+
+### D197｜G11f fail-closed 與同 Mongo 受控重跑限定工程證據通過
+
+- 日期：2026-10-04；狀態：PM、架構師與測試員覆核最新 `53c05aa` 後 PASS；G11f STOP 解除，目前停止於 G11f，下一合法 gate 為 G11g。正式證據為 `docs/evidence/g11f/report.md` 與 `runtime.json`。
+- 因果鏈：同一 Mongo 第一次 G11d reset 後產生 malformed private handoff；真實 G11e publisher 拒絕且 epoch 不變。G11d runner 暫停等待 authorization；G11f 先以 uncontrolled partial observation fail-closed，只有 canonical policy 回傳 `REPAIR_RERUN` 後才寫入 authorization，接著同一 Mongo 才執行第二次 reset。
+- 驗收：clean detached runtime `sourceDirty=false`、source commit `53c05aa`、1 suite／14 unit tests、同一 Mongo 新 epoch／stable seed／indexes／未管理資料／`writeRunClaim=null` 收斂、真實 G11e 0400 ticket、雙 controller flock contention（第二者 `75/G11E_CONTROLLER_BUSY`）及 cleanup 全部通過。
+- scope：marker off、API running、Mongo 非 PRIMARY、extra writer、ordinary restart、lock／ticket invalid 的 canonical matrix 是 policy-only observations，不宣稱每一項都已獨立 Docker／Mongo fault injection；G11c／G11e 的相鄰 lifecycle evidence 保留。G11f 不宣稱 G11g 綜合 maintenance release、公開 HTTPS 或完整 production fault coverage。
+- 交接：G11g 只可整合 G11a–G11f tracked evidence、秘密掃描、cleanup、source/config/image fingerprints 與三角色最終 audit；不得把 G11f policy-only cases 改寫成真實 fault coverage。
