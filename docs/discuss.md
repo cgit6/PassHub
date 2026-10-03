@@ -31,7 +31,7 @@ updated: "2026-10-03"
 ## 快速檢索卡
 
 - 核心問題：在小型訪客資格／模擬辨識決策業務上，形成合理、模組化、可驗證的Node.js/TypeScript架構與逐關方案；不以兩天時限取代品質論證。
-- 當前結論：D160完成規劃封口；G02–G10c各自限定 evidence 已保存，目前停止於 G10c。D187 同步七個 reset target、canonical writeRunClaim 語意及 G11a–G11g STOP；下一合法 gate 為 G11a，完整 v1 未完成。
+- 當前結論：D160完成規劃封口；G02–G11a各自限定 evidence 已保存，目前停止於 G11a。D187 同步七個 reset target、canonical writeRunClaim 語意及 G11a–G11g STOP；下一合法 gate 為 G11b，完整 v1 未完成。
 - 關鍵爭點：D129原生中止兩送有界組預扣不退、跨窗口局部例外；D130較早確認起點／D131七格；D143 Face反向unique同txn替換必须G04a先真測。D149同epoch普通restart關寫是明示可用性代價，不能依memory空接管。
 - 適用於：D01–D187有效採用／修正、獨立角色公開論點、官方查證及剩餘gate風險。採Nest預設Express/strictTS/官方driver/單API/單Mongo member replica set，非無框架或HA；D157原25STOP經D187拆分G11後現為31STOP，見實作方案。
 - 不適用於：把歷史候選／官方語法／manifest／獨立唯讀實驗當PassHub已完成成果。D117 JSON v2已取代binary v1，D130永久終局候選未採，D89安全條件續辦仍有效；D161只有A01為V。
@@ -3419,3 +3419,12 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - STOP 規則：每一子關都必須先有 targeted validation、真實環境證據（若該責任涉及 Docker／Mongo／process）、PM 需求覆核、架構 review 與 tester 邏輯覆核；缺證、零測試、環境 skip、cleanup 無法證實或角色要求修改時不得進下一關。timeout 只代表失敗，不證 rollback／程序消失／DB 工作收束。
 - G11 邊界：不增加業務 API、public reset／claim／runTicket route、第二 API writer、HA、分散式 queue、跨 reset 原操作延續、備份或資料救援。G11 本機 TLS／Compose 證據不冒充 public HTTPS 已上線；host/domain/certificate 與完整 release audit 保留 G12。
 - 前置工程狀態同步：G10a、G10b、G10c 已各自產生 tracked evidence；目前停止於 G10c，下一合法 gate 為 G11a。舊摘要仍稱停止於 G09b 的文字是歷史狀態，不得再作當前 gate 判斷。矩陣 requirement 是否升 V 仍須在各 G11 子關由直接證據逐項裁定，不能因 D187 或檔名存在自動升格。
+
+### D188｜G11a 部署拓撲基線限定 gate 通過並停止
+
+- 日期：2026-10-03；狀態：PM、架構師與測試員最終只讀覆核均PASS。G11a限定gate解除STOP，目前停止於G11a；下一合法gate為G11b，尚未開始。
+- 正式來源與工具鏈：source commit `320f5430753d4eda795f113b12a15dbe9dc3e004`的隔離detached clean worktree；正式runner在任何phase前拒絕tracked dirty、記錄sourceCommit並hash全部tracked files。固定digest Node 24.21.0／npm 11.19.0容器內先`npm ci`，再執行完整G11a與full unit；主工作區既存`src/access/domain/access-decision.ts`使用者修改未進正式build/test artifact。
+- 正式結果：G11a unit 1 suite／18 tests、static exact 11 cases、真runtime exact 8 cases；full unit 59 suites／1009 tests，全數exit 0。runtime實際build production image、啟動認證Mongo單成員rs0 PRIMARY與Nginx/API，驗固定proxy身分、internal route封閉、edge對DB固定IP TCP隔離、marker 503不進API、SIGTERM 30秒內exit 0及project/image/temp-secret cleanup。
+- 指紋：`sourceSha256=e0a6fcf56aac4eef373280b38ee24f514c503d493c700696771cd040a2458bb5`；`apiImageId=sha256:bd657847d1e6de5a017c70afaba00e59fdcd19dbde5d5b15d3b2293dce7fe500`。Dockerfile、Compose、smoke Compose、Nginx與Mongo entrypoint去敏hash及完整情境見`docs/evidence/g11a/report.md`。
+- 修正演化：前兩次綠燈因非固定Node/npm及dirty主workspace而明確排除；一次exact-toolchain嘗試因驗證容器未使用host network、loopback到不了host HTTPS而失敗並cleanup，也不列正式PASS。只有exact toolchain＋host network＋clean worktree run作正式證據。
+- 邊界：G11a只證production deployment shell與拓撲基線；非probe業務路徑仍fail-closed `SERVICE_NOT_READY`。Mongo writeRunClaim／runTicket／bootstrap-ready、完整maintenance controller、七collection reset/seed、systemd、fault matrix、公開HTTPS及G12 release均未完成，不因本關通過而升格。

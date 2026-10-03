@@ -27,7 +27,7 @@ updated: "2026-09-28"
 ## 快速檢索卡
 
 - 核心問題：把已採用的業務與架構討論交給實作者，避免自行補架構、丟要求或用測試數量取代證據。
-- 當前結論：P01–P15規劃已收斂；G02–G10c已有各自限定證據並通過 gate，目前停止於 G10c。G11 依 D187 拆成 G11a–G11g 七個 STOP，下一合法 gate 為 G11a；矩陣仍須由各 gate 的直接證據逐項更新，完整 v1 尚未完成。
+- 當前結論：P01–P15規劃已收斂；G02–G11a已有各自限定證據並通過 gate，目前停止於 G11a。G11 依 D187 拆成 G11a–G11g 七個 STOP，下一合法 gate 為 G11b；矩陣仍須由各 gate 的直接證據逐項更新，完整 v1 尚未完成。
 - 關鍵爭點：G04a 真 Mongo 8.0.32 已證明窄 face reverse-unique release/reuse 交易情境；G02只證工具鏈可用，不證API、模組接線或完整交易 adapter。
 - 適用於：單API／單logicalplace／單次Qualification／QR或模擬Face的公開共享sandbox；Nest預設Express、strictTS、官方Mongo driver。
 - 不適用於：真實人臉辨識／硬體門禁、多據點／多租戶、多API、跨崩潰／reset續辦、正式SLA或業務復原。
@@ -262,7 +262,7 @@ API/Mongo SIGTERM grace30s，API無自動restart；stoprequest/graceexpiry不是
 
 ### 9. 固定31個STOP點
 
-前關通過才進表後關，每子關交差異／要求D／command exit／指紋／真情境證據及覆核即停止。失敗、不相容、無效fault、缺證立即停；不auto還原使用者檔案或fallback。G04a／G04b敗必回設計討論。**G00、G01a／G01b 及 G02–G10c 已有各自限定局部通過證據；目前停止於 G10c，下一合法 gate 為 G11a。**
+前關通過才進表後關，每子關交差異／要求D／command exit／指紋／真情境證據及覆核即停止。失敗、不相容、無效fault、缺證立即停；不auto還原使用者檔案或fallback。G04a／G04b敗必回設計討論。**G00、G01a／G01b 及 G02–G11a 已有各自限定局部通過證據；目前停止於 G11a，下一合法 gate 為 G11b。**
 
 | Gate | 單一交付責任 | 未來代表驗證／artifact |
 |---|---|---|
@@ -289,7 +289,7 @@ API/Mongo SIGTERM grace30s，API無自動restart；stoprequest/graceexpiry不是
 | G10a | PASS：allowlist日志／私密控制屏障 | 正式 evidence 見 `docs/evidence/g10a/report.md`；logger／FS／socket／control／permission seam 已有直接證據 |
 | G10b | PASS：precommit終止／abort完整清理 | clean `77e8c21`、private run `g10b-41a126f2424d49c6a89df8f9b7d200e6`；unit 8／65、topology PASS、真fault 2 suites／3 tests：112與11000均`NO_APP_PARTIAL_EFFECT`；exact Docker cleanup PASS。僅證precommit，G10c仍未完成。 |
 | G10c | PASS：真傳輸未知確認與 canonical 收束 | `4aa5f4f`；G10c unit 9／67、fault 2 suites／4 tests；實際 HTTP→G07→G08a→G04b 管理更新經 Mongo `hangBeforeCommitingTxn` 與 Toxiproxy downstream timeout，direct observer 確認完整提交，scheduler canonical confirmation、session/lease cleanup、no-late CRUD 全通過；另有獨立 wire probe。 |
-| G11a | 部署拓撲基線 | production Compose／Dockerfile／NGINX contract；單 API／Mongo／proxy、固定映像、網路與 host-port 隔離的 static＋runtime smoke |
+| G11a | PASS：部署拓撲基線 | 正式證據見 `docs/evidence/g11a/report.md`；exact clean source/toolchain 下18 unit／11 static／8 runtime、full unit 59 suites／1009 tests，三角色覆核PASS |
 | G11b | 持久寫入權與兩階段啟動 | Mongo atomic writeRunClaim、一次 runTicket、bootstrap 與 local ready 分離、ordinary restart 關寫 |
 | G11c | 維護入口與停機隔離 | persistent marker、private drain≤30s、API／Mongo process disappearance 與 no-late-work 證據 |
 | G11d | 精確 reset／seed | passhub_demo 七 collection sequential deleteMany、保 indexes、stable seed、新 epoch／null claim、其他資料不變 |
