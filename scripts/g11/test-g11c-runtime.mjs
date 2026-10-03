@@ -141,6 +141,27 @@ function findPort() { return new Promise((resolvePort, reject) => { const server
 function identityEvidence(identity) {
   return { idSha256: createHash('sha256').update(identity.id).digest('hex'), pidBefore: identity.pidBefore, finalState: identity.state };
 }
+function captureContainerEvidence(service) {
+  const id = compose(['ps', '-q', service]);
+  assert(/^[0-9a-f]{12,64}$/u.test(id), `${service} identity missing`);
+  const before = containerState(id);
+  assert(before.Running === true && Number.isSafeInteger(before.Pid) && before.Pid > 0, `${service} was not running before lifecycle`);
+  return Object.freeze({ id, pidBefore: before.Pid });
+}
+function assertRuntimeCleanup() {
+  const selectors = [
+    ['ps', '-aq', '--filter', `label=com.docker.compose.project=${project}`],
+    ['network', 'ls', '-q', '--filter', `label=com.docker.compose.project=${project}`],
+    ['volume', 'ls', '-q', '--filter', `label=com.docker.compose.project=${project}`],
+  ];
+  for (const args of selectors) if (command('docker', args).length !== 0) throw new Error(`G11c cleanup left compose resource: ${args[0]}`);
+  try {
+    command('docker', ['image', 'inspect', imageTag, '--format', '{{.Id}}']);
+    throw new Error('G11c cleanup left API image');
+  } catch (error) {
+    if (error instanceof Error && error.message === 'G11c cleanup left API image') throw error;
+  }
+}
 
 try {
   assert(process.geteuid?.() === 1000, 'G11c formal runtime requires uid 1000');
@@ -156,19 +177,62 @@ try {
   port = await findPort(); env.PASSHUB_HTTPS_PORT = String(port);
   await initMongo(); seedBeforeMaintenance(); writeBootstrap();
   compose(['up', '-d', 'api', 'proxy']); await waitFor('API ready', runtimeReady); assert(metadata().claim?.runId === runId, 'bootstrap claim missing'); cases.push('G11C_BOOTSTRAP_READY');
-  const before = metadata(); const beforeSnapshot = datasetSnapshot(); const markerPath = acquireMarker(); assert(existsSync(markerPath), 'persistent marker missing'); cases.push('G11C_MARKER_ACTIVE');
-  const drain = privateDrain(30_000); cases.push(`G11C_PRIVATE_DRAIN_${drain.outcome}`);
-  const api = stopAndObserve('api'); apiProcessEvidence = identityEvidence(api); assert(!existsSync(join(runtime, 'control', 'runtime-control.sock')), 'API private socket survived'); cases.push('G11C_API_PROCESS_GONE');
-  const mongo = stopAndObserve('mongo'); mongoProcessEvidence = identityEvidence(mongo); cases.push('G11C_MONGO_PROCESS_GONE');
-  await mongoPrimary(); cases.push('G11C_MONGO_PRIMARY_RECOVERED');
-  assert(existsSync(markerPath), 'maintenance marker disappeared during recovery'); assert(containerState(api.id).Running === false); assert(containerState(mongo.id).Running === true);
+  const before = metadata(); const beforeSnapshot = datasetSnapshot();
+  const markerPath = join(state, 'maintenance');
+  const expectedApi = captureContainerEvidence('api');
+  const expectedMongo = captureContainerEvidence('mongo');
+  let apiGoneState; let mongoGoneState;
+  const processCommandRunner = async (binary, args, timeoutMs) => {
+    const stdout = command(binary, args, { timeout: timeoutMs });
+    if (args[0] === 'inspect') {
+      const inspected = JSON.parse(stdout);
+      const identity = args.at(-1);
+      if (identity === expectedApi.id && inspected.Running === false && inspected.Pid === 0) apiGoneState = inspected;
+      if (identity === expectedMongo.id && inspected.Running === false && inspected.Pid === 0) mongoGoneState = inspected;
+    }
+    return { stdout, stderr: '' };
+  };
+  const [{ createG11cMaintenanceComposition }, { createG11cMaintenanceMarkerAdapter }, { createG11cPrivateDrainAdapter }, { createG11cDockerProcessAdapter }] = await Promise.all([
+    import('../../dist/src/deployment/internal/g11c-maintenance-composition.js'),
+    import('../../dist/src/deployment/internal/g11c-maintenance-marker.js'),
+    import('../../dist/src/deployment/internal/g11c-private-drain.js'),
+    import('../../dist/src/deployment/internal/g11c-docker-process-adapter.js'),
+  ]);
+  const lifecycle = createG11cMaintenanceComposition({
+    marker: createG11cMaintenanceMarkerAdapter({ directory: state }),
+    drain: createG11cPrivateDrainAdapter({ socketPath: join(runtime, 'control', 'runtime-control.sock'), epoch, run: runId }),
+    process: {
+      ...createG11cDockerProcessAdapter({ project, composeFile, commandRunner: processCommandRunner }),
+      verifyNoLateWork: async () => {
+        assert(containerState(expectedApi.id).Running === false && containerState(expectedApi.id).Pid === 0, 'old API process is not gone at no-late barrier');
+        noLateObservations = [];
+        for (let index = 0; index < 3; index += 1) {
+          const observation = apiDatabaseOperations();
+          noLateObservations.push(observation);
+          assert(observation.count === 0, 'old API database operation remained after process disappearance');
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+        assert(datasetSnapshot() === beforeSnapshot, 'business collections changed after API disappearance and Mongo recovery');
+      },
+    },
+  });
+  const lifecycleResult = await lifecycle.run(30_000);
+  assert(lifecycleResult.phase === 'NO_LATE_WORK_VERIFIED' && lifecycleResult.failure === null && lifecycleResult.drain === 'DRAINED', 'G11c composition did not complete nominally');
+  assert(existsSync(markerPath), 'maintenance marker disappeared during recovery');
+  assert(containerState(expectedApi.id).Running === false && containerState(expectedApi.id).Pid === 0, 'API remained running after lifecycle');
+  assert(containerState(expectedMongo.id).Running === true, 'Mongo did not remain running after recovery');
+  assert(apiGoneState !== undefined && mongoGoneState !== undefined, 'process disappearance observations were not captured');
+  const api = { id: expectedApi.id, pidBefore: expectedApi.pidBefore, state: apiGoneState };
+  const mongo = { id: expectedMongo.id, pidBefore: expectedMongo.pidBefore, state: mongoGoneState };
+  apiProcessEvidence = identityEvidence(api); mongoProcessEvidence = identityEvidence(mongo);
+  cases.push('G11C_MARKER_ACTIVE', 'G11C_PRIVATE_DRAIN_DRAINED', 'G11C_API_PROCESS_GONE', 'G11C_MONGO_PROCESS_GONE', 'G11C_MONGO_PRIMARY_RECOVERED', 'G11C_NO_LATE_WORK_OBSERVED');
   const after = metadata(); assert(JSON.stringify(after) === JSON.stringify(before), 'no-late-work metadata changed across isolated recovery');
-  noLateObservations = await verifyNoLateWork(api, beforeSnapshot); cases.push('G11C_NO_LATE_WORK_OBSERVED');
   assert(metadata().claim?.runId === runId, 'claim changed during G11c');
 } catch (error) { failure = error; }
 finally {
   const cleanup = []; try { compose(['down', '--volumes', '--remove-orphans', '--timeout', '30'], { timeout: 120_000 }); } catch { cleanup.push('compose'); }
   try { docker(['image', 'rm', '--force', imageTag], { timeout: 60_000 }); } catch { /* absence checked below */ }
+  try { assertRuntimeCleanup(); } catch { cleanup.push('resources'); }
   try { rmSync(temporary, { recursive: true, force: true }); } catch { cleanup.push('temporary'); }
   if (cleanup.length > 0) failure = failure === undefined ? new Error(`G11c cleanup failed: ${cleanup.join(',')}`) : new AggregateError([failure, new Error(`cleanup:${cleanup.join(',')}`)]);
 }

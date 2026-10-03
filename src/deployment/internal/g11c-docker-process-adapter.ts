@@ -86,6 +86,13 @@ async function waitForGone(run: G11cCommandRunner, options: Readonly<G11cDockerP
   while (Date.now() <= deadline) {
     const state = await inspect(run, identity.id, service);
     if (!state.Running && state.Pid === 0) return;
+    // A container identity alone is not enough: a restarted container can
+    // retain the same ID while running a different host process.  Keep
+    // observing the captured PID and fail closed if it changes before the
+    // original process has disappeared.
+    if (state.Running && state.Pid !== identity.pid) {
+      throw new G11cDockerProcessError(service === 'api' ? 'API_PROCESS_NOT_GONE' : 'MONGO_PROCESS_NOT_GONE');
+    }
     await pause(options.pollIntervalMs!);
   }
   throw new G11cDockerProcessError(service === 'api' ? 'API_PROCESS_NOT_GONE' : 'MONGO_PROCESS_NOT_GONE');

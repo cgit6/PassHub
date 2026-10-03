@@ -6,13 +6,14 @@ import { MongoClient } from 'mongodb';
 
 import { resolveIngressClientAddress } from './ingress-client-address.js';
 import { createG11bProductionApplication, G11bProductionAuthorityError, type G11bProductionApplication } from './internal/g11b-production-application.js';
-import { ProcessIdentityIntakeError } from './internal/g11b-process-identity-intake.js';
+import { G11B_PROCESS_IDENTITY_PATH, ProcessIdentityIntakeError } from './internal/g11b-process-identity-intake.js';
 import { RunTicketIntakeError } from './internal/g11b-run-ticket-intake.js';
 import { DatasetVerificationError } from './internal/g11b-dataset-verification.js';
 import { closeG11bProductionResources, createG11bProductionHttpHandler, G11bProductionLifecycleError, listenG11bProductionServer, takeG11bProductionBusinessListener } from './internal/g11b-production-http-lifecycle.js';
 import { installG11bProductionShutdown } from './internal/g11b-production-shutdown.js';
 
 const MAX_SECRET_BYTES = 4_096;
+const PROCESS_IDENTITY_FILE_NAME = 'process-run-id';
 let startupStage = 'CONFIG';
 
 interface DeploymentConfig {
@@ -79,6 +80,7 @@ function reply(response: ServerResponse, status: number, body: Readonly<Record<s
 }
 
 async function main(): Promise<void> {
+  if (!G11B_PROCESS_IDENTITY_PATH.endsWith(`/${PROCESS_IDENTITY_FILE_NAME}`)) throw new Error('deployment process identity path is invalid');
   const config = await loadConfig();
   startupStage = 'MONGO_CONNECT';
   const mongo = new MongoClient(config.mongoUri, {

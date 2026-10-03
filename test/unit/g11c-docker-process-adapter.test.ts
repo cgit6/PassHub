@@ -70,6 +70,18 @@ describe('G11c Docker process lifecycle adapter', () => {
     await expect(adapter.awaitApiProcessGone()).rejects.toMatchObject({ code: 'API_PROCESS_NOT_GONE' });
   });
 
+  test('fails closed if the same container identity reports a replacement PID', async () => {
+    const ctx = fixture();
+    const runner = async (binary: string, args: readonly string[], timeout: number) => {
+      const result = await ctx.runner(binary, args, timeout);
+      if (args[0] === 'inspect' && args.at(-1) === apiId) return { stdout: `${state(true, 999)}\n`, stderr: '' };
+      return result;
+    };
+    const adapter = createG11cDockerProcessAdapter({ project: 'passhub-g11c', composeFile, commandRunner: runner, pollIntervalMs: 1, observeTimeoutMs: 2 });
+    await adapter.requestApiStop();
+    await expect(adapter.awaitApiProcessGone()).rejects.toMatchObject({ code: 'API_PROCESS_NOT_GONE' });
+  });
+
   test('Mongo stop is a distinct command; lifecycle composition owns API-before-Mongo ordering', async () => {
     const ctx = fixture();
     const adapter = createG11cDockerProcessAdapter({ project: 'passhub-g11c', composeFile, commandRunner: ctx.runner, pollIntervalMs: 1, observeTimeoutMs: 100 });
