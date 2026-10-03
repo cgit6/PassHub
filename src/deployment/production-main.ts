@@ -69,6 +69,7 @@ async function main(): Promise<void> {
   const mongo = new MongoClient(config.mongoUri, {
     retryReads: false,
     retryWrites: false,
+    maxAdaptiveRetries: 0,
     maxPoolSize: 8,
     serverSelectionTimeoutMS: 5_000,
     connectTimeoutMS: 5_000,

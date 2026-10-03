@@ -365,7 +365,7 @@ describe('G11b-b3a private boundaries', () => {
     }
   });
 
-  test('claim engine has exactly the test-support importer in b3a', async () => {
+  test('claim engine has exactly the production facade and test-support importers', async () => {
     const { readFile, readdir } = await import('node:fs/promises');
     const guarded = ['g11b', 'persistent', 'run', 'claim', 'engine'].join('-');
     const importers: string[] = [];
@@ -375,7 +375,10 @@ describe('G11b-b3a private boundaries', () => {
         if ((await readFile(join(root, name), 'utf8')).includes(guarded)) importers.push(`${rootName}/${name}`);
       }
     }
-    expect(importers).toEqual(['test/support/g11b-persistent-run-claim-test-support.ts']);
+    expect(importers.sort()).toEqual([
+      'src/deployment/internal/g11b-persistent-run-claim.ts',
+      'test/support/g11b-persistent-run-claim-test-support.ts',
+    ]);
   });
 
   test('shared metadata capture has only the b2 and b3 engine importers and no public export', async () => {
