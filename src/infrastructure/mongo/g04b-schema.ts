@@ -405,6 +405,9 @@ export interface G04bCollections {
   readonly managementReceipts: Collection<G04bManagementReceiptDocument>;
 }
 
+/** Detached bootstrap facts returned by the read-only existing-schema inspector. */
+export type G04bExistingMetadataProjection = Readonly<G04bMetadataDocument>;
+
 const STARTUP_VECTOR_NAMES = new Set(G04B_STARTUP_VECTORS.map((vector) => vector.name));
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const EVEN_LOWER_HEX = /^(?:[0-9a-f]{2})+$/u;
@@ -513,6 +516,93 @@ export async function ensureG04bSchema(database: Db): Promise<G04bCollections> {
     await startupSession.endSession();
   }
   return { qualifications, faceSlots, events, users, sources, metadata, managementReceipts };
+}
+
+/**
+ * Verifies an already-provisioned G04b/G10c dataset without creating,
+ * repairing, seeding, or returning a mutable database capability.
+ */
+export async function inspectExistingG04bSchemaReadOnly(
+  database: Db,
+): Promise<G04bExistingMetadataProjection> {
+  const required = [
+    G04B_QUALIFICATIONS_COLLECTION, G04A_FACE_SLOTS_COLLECTION, G04B_EVENTS_COLLECTION,
+    G04B_USERS_COLLECTION, G04B_SOURCES_COLLECTION, G04B_METADATA_COLLECTION,
+    G04B_MANAGEMENT_RECEIPTS_COLLECTION,
+  ] as const;
+  const actual = new Set((await database.listCollections({}, { nameOnly: true }).toArray())
+    .map((entry) => entry.name));
+  const missing = required.find((name) => !actual.has(name));
+  if (missing !== undefined) {
+    throw new TypeError(`G04b existing schema is missing required collection ${missing}`);
+  }
+
+  for (const [name, validator] of [
+    [G04B_QUALIFICATIONS_COLLECTION, G04B_QUALIFICATIONS_VALIDATOR],
+    [G04A_FACE_SLOTS_COLLECTION, G04A_FACE_SLOTS_VALIDATOR],
+    [G04B_EVENTS_COLLECTION, G04B_EVENTS_VALIDATOR],
+    [G04B_USERS_COLLECTION, G04B_USERS_VALIDATOR],
+    [G04B_SOURCES_COLLECTION, G04B_SOURCES_VALIDATOR],
+    [G04B_METADATA_COLLECTION, G04B_METADATA_VALIDATOR],
+    [G04B_MANAGEMENT_RECEIPTS_COLLECTION, G04B_MANAGEMENT_RECEIPTS_VALIDATOR],
+  ] as const) await assertExistingCollectionOptions(database, name, validator);
+
+  const collections: G04bCollections = {
+    qualifications: database.collection<G04bQualificationDocument>(G04B_QUALIFICATIONS_COLLECTION),
+    faceSlots: database.collection<G04aFaceSlotDocument>(G04A_FACE_SLOTS_COLLECTION),
+    events: database.collection<G04bEventDocument>(G04B_EVENTS_COLLECTION),
+    users: database.collection<G04bUserDocument>(G04B_USERS_COLLECTION),
+    sources: database.collection<G04bSourceDocument>(G04B_SOURCES_COLLECTION),
+    metadata: database.collection<G04bMetadataDocument>(G04B_METADATA_COLLECTION),
+    managementReceipts: database.collection<G04bManagementReceiptDocument>(G04B_MANAGEMENT_RECEIPTS_COLLECTION),
+  };
+  await assertExistingIndexContract(collections.qualifications, G04B_QUALIFICATION_INDEXES, G04B_QUALIFICATIONS_COLLECTION);
+  await assertExistingIndexContract(collections.faceSlots, G04A_FACE_SLOTS_INDEXES, G04A_FACE_SLOTS_COLLECTION);
+  await assertExistingIndexContract(collections.events, G04B_EVENT_INDEXES, G04B_EVENTS_COLLECTION);
+  await assertExistingIndexContract(collections.users, G04B_USER_INDEXES, G04B_USERS_COLLECTION);
+  await assertExistingIndexContract(collections.sources, G04B_SOURCE_INDEXES, G04B_SOURCES_COLLECTION);
+  await assertExistingIndexContract(collections.metadata, [], G04B_METADATA_COLLECTION);
+  await assertExistingIndexContract(collections.managementReceipts, [], G04B_MANAGEMENT_RECEIPTS_COLLECTION);
+
+  const session = database.client.startSession();
+  try {
+    session.startTransaction({ readConcern: { level: 'snapshot' }, readPreference: 'primary' });
+    const metadata = await collections.metadata.findOne({ _id: 'system' }, { session });
+    if (metadata === null) throw new TypeError('G04b metadata/system document is required for an existing schema');
+    assertG04bMetadataBootstrap(metadata);
+    await assertExistingLegacyIntegrity(collections, metadata, session);
+    await session.commitTransaction();
+    return freezeMetadataProjection(metadata);
+  } catch (error: unknown) {
+    if (session.inTransaction()) await session.abortTransaction().catch(() => undefined);
+    throw error;
+  } finally {
+    await session.endSession();
+  }
+}
+
+function freezeMetadataProjection(metadata: G04bMetadataDocument): G04bExistingMetadataProjection {
+  const startupVectors = Object.freeze(metadata.startupVectors.map((vector) => Object.freeze({
+    name: vector.name,
+    expectedFrameHex: vector.expectedFrameHex,
+    expectedHmacHex: vector.expectedHmacHex,
+  })));
+  const writeRunClaim = metadata.writeRunClaim === null ? null : Object.freeze({
+    runId: metadata.writeRunClaim.runId,
+    claimedAt: new Date(metadata.writeRunClaim.claimedAt.getTime()),
+  });
+  return Object.freeze({
+    _id: 'system',
+    kind: 'system',
+    datasetEpoch: metadata.datasetEpoch,
+    comparisonReferenceId: metadata.comparisonReferenceId,
+    frameVersion: 'v2',
+    startupVectors,
+    qrGuardVersion: metadata.qrGuardVersion,
+    faceGuardVersion: metadata.faceGuardVersion,
+    slotCount: metadata.slotCount,
+    writeRunClaim,
+  });
 }
 
 async function assertExistingIndexContract<T extends Document>(
