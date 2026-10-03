@@ -31,7 +31,8 @@ export function createG11cPrivateDrainAdapter(input: G11cPrivateDrainOptions): G
         v: 'c1', requestControlId: randomUUID(), command: 'STATUS', epoch: options.epoch, run: options.run,
       });
       if (status === null || status.ok !== true || status.command !== 'STATUS' || status.snapshot === null || status.snapshot === undefined
-        || status.snapshot.epoch !== options.epoch || status.snapshot.run !== options.run) return 'INTERNAL_UNAVAILABLE';
+        || status.snapshot.epoch !== options.epoch || status.snapshot.run !== options.run
+        || status.snapshot.revision !== status.revision) return 'INTERNAL_UNAVAILABLE';
       const response = await request(options.socketPath, {
         v: 'c1', requestControlId: randomUUID(), command: 'DRAIN', epoch: options.epoch, run: options.run,
         expectedRevision: status.revision, timeoutMs,
@@ -41,11 +42,14 @@ export function createG11cPrivateDrainAdapter(input: G11cPrivateDrainOptions): G
         || response.snapshot === undefined || response.snapshot.epoch !== options.epoch || response.snapshot.run !== options.run
         || !/^(?:0|[1-9][0-9]*)$/u.test(response.revision ?? '')
         || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(response.controlId ?? '')
+        || response.snapshot.revision !== response.revision
         || response.snapshot.maintenance?.active !== true
         || response.snapshot.maintenance.controlId !== response.controlId
         || response.snapshot.maintenance.outcome !== response.outcome) return 'INTERNAL_UNAVAILABLE';
-      return response.outcome === 'DRAINED' || response.outcome === 'NOT_DRAINED'
-        ? response.outcome : 'INTERNAL_UNAVAILABLE';
+      if (response.outcome !== 'DRAINED' && response.outcome !== 'NOT_DRAINED') return 'INTERNAL_UNAVAILABLE';
+      if (response.outcome === 'DRAINED'
+        && (response.snapshot.issuedPersistence !== 0 || response.snapshot.activeQueryReads !== 0)) return 'INTERNAL_UNAVAILABLE';
+      return response.outcome;
     },
   });
 }
@@ -59,6 +63,9 @@ interface ControlResponse {
   readonly snapshot?: {
     readonly epoch?: unknown;
     readonly run?: unknown;
+    readonly revision?: unknown;
+    readonly issuedPersistence?: unknown;
+    readonly activeQueryReads?: unknown;
     readonly maintenance?: { readonly active?: unknown; readonly controlId?: unknown; readonly outcome?: unknown } | null;
   } | null;
 }
