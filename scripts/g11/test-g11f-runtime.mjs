@@ -101,11 +101,12 @@ try {
   const ticket = JSON.parse(readFileSync(join(runtime, 'bootstrap-ticket.json'), 'utf8'));
   if (ticket.datasetEpoch !== targetEpoch || ticket.processRunId !== runId) throw new Error('G11e ticket did not use real G11d epoch');
   if ((statSync(join(runtime, 'bootstrap-ticket.json')).mode & 0o777) !== 0o400) throw new Error('ticket mode mismatch');
+  unlinkSync(join(runtime, 'bootstrap-ticket.json'));
   const held = runController({ PASSHUB_MAINTENANCE_HOLD_MS: '500' });
   await new Promise((resolve) => setTimeout(resolve, 75));
   const competing = await runController();
   const heldResult = await held;
-  if (competing.code !== 75 || heldResult.code !== 1) throw new Error('real G11e lock contention did not fail closed');
+  if (competing.code !== 75 || !competing.err.includes('G11E_CONTROLLER_BUSY') || heldResult.code !== 0) throw new Error('real G11e lock contention did not fail closed');
   policyCases.push('REAL_G11E_LOCK_CONTENTION');
   policyCases.push('REAL_G11E_HANDOFF_FROM_G11D_RESULT');
   process.stdout.write(JSON.stringify({ ok: true, sourceDirty, g11dRuns, policyCases, firstMongo, secondMongo }) + '\n');
