@@ -104,6 +104,7 @@
     "test:g11b:b5-production:unit": "npm run build && timeout --foreground 60s env NODE_OPTIONS=--experimental-vm-modules jest --config jest.g11b.b5-production.unit.config.cjs",
     "test:g11b:runtime": "npm run build && timeout --foreground 900s node scripts/g11/test-g11b-runtime.mjs",
     "test:g11b:b5-production-http:unit": "npm run build && timeout --foreground 60s env NODE_OPTIONS=--experimental-vm-modules jest --config jest.g11b.b5-production-http.unit.config.cjs",
+    "test:g11b:b5:manifest": "npm run build && node scripts/g11/check-g11b-b5-manifest.mjs",
     "test:g11b:b5:runtime": "node scripts/g11/test-g11b-runtime.mjs",
     "test:integration": "npm run build && NODE_OPTIONS=--experimental-vm-modules jest --config jest.integration.config.cjs",
     "test:g04a": "node scripts/test-g04a-integration.mjs",
