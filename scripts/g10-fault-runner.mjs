@@ -21,8 +21,8 @@ for (const name of requiredEnvironment) {
 }
 
 const mode = process.argv[2];
-if (process.argv.length !== 3 || (mode !== '--print-contract' && mode !== '--g10b-wire-probe')) {
-  throw new Error('G10 fault runner requires --print-contract or --g10b-wire-probe');
+if (process.argv.length !== 3 || !['--print-contract', '--g10b-wire-probe', '--g10c-transport-loss-probe'].includes(mode)) {
+  throw new Error('G10 fault runner requires --print-contract, --g10b-wire-probe, or --g10c-transport-loss-probe');
 }
 
 if (mode === '--print-contract') {
@@ -35,7 +35,7 @@ if (mode === '--print-contract') {
     '--experimental-vm-modules',
     'node_modules/jest/bin/jest.js',
     '--config',
-    'jest.g10b.fault.config.cjs',
+    mode === '--g10b-wire-probe' ? 'jest.g10b.fault.config.cjs' : 'jest.g10c.fault.config.cjs',
     '--runInBand',
   ], { stdio: 'inherit', shell: false, env: process.env });
   const outcome = await new Promise((resolve, reject) => {

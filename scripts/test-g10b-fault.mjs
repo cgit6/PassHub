@@ -6,6 +6,9 @@ const runToken = randomBytes(16).toString('hex');
 const projectName = `passhub-g10b-fault-${process.pid}-${runToken}`;
 const generatedNpmCacheVolume = `${projectName}_g10-fault-npm-cache`;
 const compose = ['compose', '--project-name', projectName, '-f', 'infra/g10-fault-compose.yml'];
+const mode = process.env.G10_FAULT_PROBE_MODE === 'g10c'
+  ? '--g10c-transport-loss-probe'
+  : '--g10b-wire-probe';
 const mainDeadline = Date.now() + 180_000;
 const CLEANUP_TIMEOUT_MS = 30_000;
 let primaryFailure;
@@ -16,7 +19,7 @@ try {
     ...compose,
     'run', '--rm', '--no-deps', 'g10-fault-runner',
     'sh', '-lc',
-    'node scripts/g10-fault-topology-init.mjs && exec node scripts/g10-fault-runner.mjs --g10b-wire-probe',
+    `node scripts/g10-fault-topology-init.mjs && exec node scripts/g10-fault-runner.mjs ${mode}`,
   ]);
 } catch (error) {
   primaryFailure = error;
