@@ -6,7 +6,7 @@ G10c 通過本輪驗收。證據同時涵蓋 Mongo/Toxiproxy wire probe 與實�
 
 ## 固定來源
 
-- source commit：`<see git commit containing this report>`
+- source commit：`4aa5f4f`（G10c implementation and HTTP fault test）
 - Mongo image：`mongo:8.0.32-noble`，沿用 `infra/g10-fault-compose.yml` 固定 digest
 - Toxiproxy image：`2.12.0`，沿用固定 digest
 - Node image：`24.21.0`，沿用固定 digest
@@ -19,7 +19,7 @@ npm run test:g10c:unit   PASS — 9 suites / 67 tests
 npm run test:g10b:unit   PASS — 8 suites / 65 tests
 npm run test:g10:fault-topology PASS
 npm run test:g10c:fault  PASS — 2 suites / 4 tests
-npm run test:g10b:fault  PASS — 2 suites / 3 tests
+npm run test:g10b:fault  PASS — 2 suites / 4 tests（其中 3 個 G10b baseline case，另 1 個 G10c HTTP case）
 ```
 
 G10c fault run 的 Docker compose cleanup 通過，測試產生的 container、network 與 npm cache volume 均移除。

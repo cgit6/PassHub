@@ -288,7 +288,7 @@ API/Mongo SIGTERM grace30s，API無自動restart；stoprequest/graceexpiry不是
 | G09b | PASS：分case查詢效能 | clean `dd0bc14`、固定10k／4k／40k fixture、10 cases×2 pages×2 states、4,000 raw、40 executionStats；correctness／inventory／hash全綠，E04升V |
 | G10a | READY、尚未開始：allowlist日志／私密控制屏障 | D184 exact logger／FS／socket／control／permission seam；未有工程證據 |
 | G10b | PASS：precommit終止／abort完整清理 | clean `77e8c21`、private run `g10b-41a126f2424d49c6a89df8f9b7d200e6`；unit 8／65、topology PASS、真fault 2 suites／3 tests：112與11000均`NO_APP_PARTIAL_EFFECT`；exact Docker cleanup PASS。僅證precommit，G10c仍未完成。 |
-| G10c | 真傳輸未知確認 | 真fault transport-unknown／precommit未知及commit後回程loss、coherent observer |
+| G10c | PASS：真傳輸未知確認與 canonical 收束 | `4aa5f4f`；G10c unit 9／67、fault 2 suites／4 tests；實際 HTTP→G07→G08a→G04b 管理更新經 Mongo `hangBeforeCommitingTxn` 與 Toxiproxy downstream timeout，direct observer 確認完整提交，scheduler canonical confirmation、session/lease cleanup、no-late CRUD 全通過；另有獨立 wire probe。 |
 | G11 | 部署／reset生命期 | test:maintenance／唯一writer隔離、恢復、精確target、bootstrap ready、失敗off及普通restart |
 | G12 | 完整交付證據audit | 全必需套件、OpenAPI／boundary／requirements／cleaninstall、CI／Demo／publicHTTPS及136證據 |
 
