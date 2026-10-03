@@ -181,9 +181,13 @@ try {
   const markerPath = join(state, 'maintenance');
   const expectedApi = captureContainerEvidence('api');
   const expectedMongo = captureContainerEvidence('mongo');
-  let apiGoneState; let mongoGoneState;
+  let apiGoneState; let mongoGoneState; let adapterApiId; let adapterMongoId;
   const processCommandRunner = async (binary, args, timeoutMs) => {
     const stdout = command(binary, args, { timeout: timeoutMs });
+    if (args[0] === 'compose' && args.includes('ps') && (args.at(-1) === 'api' || args.at(-1) === 'mongo')) {
+      if (args.at(-1) === 'api') adapterApiId = stdout;
+      else adapterMongoId = stdout;
+    }
     if (args[0] === 'inspect') {
       const inspected = JSON.parse(stdout);
       const identity = args.at(-1);
@@ -222,6 +226,7 @@ try {
   assert(containerState(expectedApi.id).Running === false && containerState(expectedApi.id).Pid === 0, 'API remained running after lifecycle');
   assert(containerState(expectedMongo.id).Running === true, 'Mongo did not remain running after recovery');
   assert(apiGoneState !== undefined && mongoGoneState !== undefined, 'process disappearance observations were not captured');
+  assert(adapterApiId === expectedApi.id && adapterMongoId === expectedMongo.id, 'adapter process identity differed from preflight identity');
   const api = { id: expectedApi.id, pidBefore: expectedApi.pidBefore, state: apiGoneState };
   const mongo = { id: expectedMongo.id, pidBefore: expectedMongo.pidBefore, state: mongoGoneState };
   apiProcessEvidence = identityEvidence(api); mongoProcessEvidence = identityEvidence(mongo);
