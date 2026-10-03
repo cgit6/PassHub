@@ -1,8 +1,4 @@
-import { types as nodeTypes } from 'node:util';
-
-import { G04B_STARTUP_VECTORS } from '../../infrastructure/mongo/g04b-schema.js';
-
-const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+import { captureClosedMetadata } from './g11b-closed-metadata-capture.js';
 const TOKEN_MINT = Symbol('G11b verified dataset token mint');
 const VERIFIER_MINT = Symbol('G11b dataset verifier mint');
 
@@ -105,84 +101,9 @@ export function readVerifiedDatasetForRuntime(
 }
 
 function captureProjection(input: unknown): VerifiedDatasetFacts {
-  const metadata = captureExactObject(input, [
-    '_id', 'kind', 'datasetEpoch', 'comparisonReferenceId', 'frameVersion',
-    'startupVectors', 'qrGuardVersion', 'faceGuardVersion', 'slotCount', 'writeRunClaim',
-  ]);
-  if (metadata._id !== 'system' || metadata.kind !== 'system' || metadata.frameVersion !== 'v2'
-    || typeof metadata.datasetEpoch !== 'string' || !UUID_V4.test(metadata.datasetEpoch)
-    || typeof metadata.comparisonReferenceId !== 'string' || !UUID_V4.test(metadata.comparisonReferenceId)
-    || !Number.isSafeInteger(metadata.qrGuardVersion) || (metadata.qrGuardVersion as number) < 0
-    || !Number.isSafeInteger(metadata.faceGuardVersion) || (metadata.faceGuardVersion as number) < 0
-    || !Number.isSafeInteger(metadata.slotCount) || (metadata.slotCount as number) < 0
-    || (metadata.slotCount as number) > 4096) {
-    throw new DatasetVerificationError('DATASET_VERIFICATION_FAILED');
-  }
-  captureStartupVectors(metadata.startupVectors);
-
-  let observedWriteRunClaim: 'NULL' | 'PRESENT';
-  if (metadata.writeRunClaim === null) {
-    observedWriteRunClaim = 'NULL';
-  } else {
-    const claim = captureExactObject(metadata.writeRunClaim, ['runId', 'claimedAt']);
-    if (typeof claim.runId !== 'string' || !UUID_V4.test(claim.runId)
-      || !(claim.claimedAt instanceof Date) || nodeTypes.isProxy(claim.claimedAt)
-      || Object.getPrototypeOf(claim.claimedAt) !== Date.prototype
-      || Reflect.ownKeys(claim.claimedAt).length !== 0
-      || !Number.isFinite(claim.claimedAt.getTime())) {
-      throw new DatasetVerificationError('DATASET_VERIFICATION_FAILED');
-    }
-    observedWriteRunClaim = 'PRESENT';
-  }
-  return Object.freeze({ datasetEpoch: metadata.datasetEpoch, observedWriteRunClaim });
-}
-
-function captureStartupVectors(input: unknown): void {
-  if (nodeTypes.isProxy(input) || !Array.isArray(input) || Object.getPrototypeOf(input) !== Array.prototype) {
-    throw new DatasetVerificationError('DATASET_VERIFICATION_FAILED');
-  }
-  const keys = Reflect.ownKeys(input);
-  const expectedKeys: readonly PropertyKey[] = ['0', '1', '2', 'length'];
-  if (keys.length !== expectedKeys.length || keys.some((key) => !expectedKeys.includes(key))) {
-    throw new DatasetVerificationError('DATASET_VERIFICATION_FAILED');
-  }
-  const length = Object.getOwnPropertyDescriptor(input, 'length');
-  if (length === undefined || !Object.hasOwn(length, 'value') || length.value !== 3) {
-    throw new DatasetVerificationError('DATASET_VERIFICATION_FAILED');
-  }
-  for (let index = 0; index < 3; index += 1) {
-    const descriptor = Object.getOwnPropertyDescriptor(input, String(index));
-    if (descriptor === undefined || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) {
-      throw new DatasetVerificationError('DATASET_VERIFICATION_FAILED');
-    }
-    const vector = descriptor.value;
-    const captured = captureExactObject(vector, ['name', 'expectedFrameHex', 'expectedHmacHex']);
-    const expected = G04B_STARTUP_VECTORS[index];
-    if (expected === undefined || captured.name !== expected.name
-      || captured.expectedFrameHex !== expected.expectedFrameHex
-      || captured.expectedHmacHex !== expected.expectedHmacHex) {
-      throw new DatasetVerificationError('DATASET_VERIFICATION_FAILED');
-    }
-  }
-}
-
-function captureExactObject(input: unknown, expectedKeys: readonly string[]): Record<string, unknown> {
-  if (typeof input !== 'object' || input === null || Array.isArray(input) || nodeTypes.isProxy(input)
-    || Object.getPrototypeOf(input) !== Object.prototype) {
-    throw new DatasetVerificationError('DATASET_VERIFICATION_FAILED');
-  }
-  const keys = Reflect.ownKeys(input);
-  if (keys.length !== expectedKeys.length
-    || keys.some((key) => typeof key !== 'string' || !expectedKeys.includes(key))) {
-    throw new DatasetVerificationError('DATASET_VERIFICATION_FAILED');
-  }
-  const result: Record<string, unknown> = {};
-  for (const key of expectedKeys) {
-    const descriptor = Object.getOwnPropertyDescriptor(input, key);
-    if (descriptor === undefined || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) {
-      throw new DatasetVerificationError('DATASET_VERIFICATION_FAILED');
-    }
-    result[key] = descriptor.value;
-  }
-  return result;
+  const metadata = captureClosedMetadata(input);
+  return Object.freeze({
+    datasetEpoch: metadata.datasetEpoch,
+    observedWriteRunClaim: metadata.writeRunClaim === null ? 'NULL' : 'PRESENT',
+  });
 }
