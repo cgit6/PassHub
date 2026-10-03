@@ -1,4 +1,4 @@
-import type { G11cMaintenanceEffects, G11cMaintenanceLifecycle, G11cMaintenanceResult } from './g11c-maintenance-lifecycle-engine.js';
+import type { G11cMaintenanceEffects, G11cMaintenanceResult } from './g11c-maintenance-lifecycle-engine.js';
 import { createG11cMaintenanceLifecycle } from './g11c-maintenance-lifecycle-engine.js';
 import type { G11cMaintenanceMarkerAdapter } from './g11c-maintenance-marker.js';
 import type { G11cPrivateDrainAdapter } from './g11c-private-drain.js';
@@ -19,8 +19,9 @@ export interface G11cMaintenanceCompositionOptions {
 }
 
 export interface G11cMaintenanceComposition {
-  readonly lifecycle: G11cMaintenanceLifecycle;
   readonly run: (drainTimeoutMs: number) => Promise<G11cMaintenanceResult>;
+  /** Read-only diagnostic projection; the lifecycle owner stays private. */
+  readonly snapshot: () => G11cMaintenanceResult;
 }
 
 /**
@@ -42,7 +43,10 @@ export function createG11cMaintenanceComposition(input: G11cMaintenanceCompositi
     awaitMongoPrimary: options.process.awaitMongoPrimary,
     verifyNoLateWork: options.process.verifyNoLateWork,
   });
-  return Object.freeze({ lifecycle, run: (drainTimeoutMs: number) => lifecycle.run(effects, drainTimeoutMs) });
+  return Object.freeze({
+    run: (drainTimeoutMs: number) => lifecycle.run(effects, drainTimeoutMs),
+    snapshot: () => lifecycle.snapshot(),
+  });
 }
 
 function captureOptions(input: G11cMaintenanceCompositionOptions): Readonly<G11cMaintenanceCompositionOptions> {
