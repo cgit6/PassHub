@@ -277,7 +277,6 @@ try {
   const createCode = typeof created.body?.code === 'string' && /^[A-Z_]{1,64}$/u.test(created.body.code) ? created.body.code : 'NO_TECHNICAL_CODE';
   assert(created.status === 201 && typeof created.body?.qrToken === 'string', `real production create failed (status=${Number(created.status)},code=${createCode},stages=${safeRuntimeStages().join(',')})`);
   forbiddenSecrets.push(created.body.qrToken, login.body.accessToken);
-  allowedHttpSecrets.add(created.body.qrToken); allowedHttpSecrets.add(login.body.accessToken);
   await waitFor('fixture validFrom', () => Date.now() >= validFrom, 10_000);
   const entry = await https('/recognition/attempts', 'POST', { externalEventId: 'runtime-entry', kind: 'QR_SCANNED', token: created.body.qrToken }, {
     Authorization: `Source entry.${sourceSecret}`, 'PassHub-Dataset-Epoch': epoch,
