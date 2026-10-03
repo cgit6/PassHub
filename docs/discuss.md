@@ -3442,3 +3442,11 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - ordinary boot：canonical ticket不存在時不得claim或local-ready；可完成安全相容性檢查並保持診斷用local-not-ready／READ_ONLY，但本關不宣稱完整read-only HTTP已接線。canonical absence只能是`NOT_PROVEN`，不能證明舊操作不存在或可接管。ticket path、claim、ready authorization、reset都不得新增public route。
 - 驗收分層：b1 ticket intake與跨restart消耗；b2 verification-only schema／metadata；b3真Mongo CAS與16個獨立競爭者exact one winner、BSON Date、command count及unknown fail-closed；b4 nominal G05c bridge與local-ready exact-once；b5 production process／container接線與clean evidence。正式suite須至少封閉18 unit、9真Mongo、9真process/runtime的exact manifest，拒絕zero／skip／todo／pending；unknown case須證claim command確實送出且可能落庫但仍不開寫。production test必須走Compose image相同ticket file與entrypoint，並證ticket不在argv／env／log、used marker及cleanup；不得用只在Jest存在的替身冒充production路徑。
 - trace與邊界：G11b直接切片補入L13、L35、A18、M03、B50、E06、E07，但各row仍依完整責任維持U。G11b不做persistent marker、drain、API／Mongo確停或no-late-work（G11c），不做七collection reset／seed／new epoch（G11d），不做host flock／controller／systemd與ticket簽發（G11e），不做完整fault／rerun matrix（G11f），也不宣稱public HTTPS／release。每個b切片先targeted validation；整個G11b通過前仍須clean exact toolchain、真Mongo／process證據及三角色最終覆核。
+
+### D190｜G11b 限定工程證據通過，停止於 G11b
+
+- 日期：2026-10-03；狀態：PM、架構師與測試員對修正版只讀覆核均PASS。G11b STOP解除，目前停止於G11b，下一合法gate為G11c。正式報告為`docs/evidence/g11b/report.md`，來源commit為`342f5efd3f23b25e563a02b4fbe332e7d973397e`。
+- targeted結果：b1 54 tests、b2a 4、b2b 31、b3a 30、b3b unit 10、b3b真Mongo 6、b3c-a 16-way真Mongo competition 1 suite／1 test、b3c-b真Mongo＋Toxiproxy response-loss 1 suite／1 test；full unit 64 suites／1138 tests，全數exit 0。
+- b3c-a證明16個獨立MongoClient／Db／verifier／ticket／claimer同時競爭時恰有1個`CLAIMED`、15個`CLAIM_HELD`，只發生一次CAS；b3c-b在downstream response被阻斷且canonical claim已由direct majority observer證實落庫時，app仍回`CLAIM_UNKNOWN`，不classification、不retry、不clear、不late mutation，同ticket replay在Mongo I/O前拒絕。
+- 首輪架構覆核發現fault測試可能漏掉UNKNOWN後的late CRUD／clear；修正版擴大target DB及transaction command監控、closed exact wire assertions，並在UNKNOWN與replay後做第二次majority snapshot deep-equal。修正後fault、回歸、cleanup及去敏檢查再跑且PASS。
+- 邊界：本證據只解除G11b；persistent marker／drain／API及Mongo確停仍屬G11c，七collection reset／seed屬G11d，host flock／systemd屬G11e，完整故障矩陣屬G11f，綜合manifest及最終audit屬G11g。G11b不宣稱G12或公開HTTPS release。

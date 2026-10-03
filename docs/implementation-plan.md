@@ -27,7 +27,7 @@ updated: "2026-09-28"
 ## 快速檢索卡
 
 - 核心問題：把已採用的業務與架構討論交給實作者，避免自行補架構、丟要求或用測試數量取代證據。
-- 當前結論：P01–P15規劃已收斂；G02–G11a已有各自限定證據並通過 gate，目前停止於 G11a。G11 依 D187 拆成 G11a–G11g 七個 STOP，下一合法 gate 為 G11b；矩陣仍須由各 gate 的直接證據逐項更新，完整 v1 尚未完成。
+- 當前結論：P01–P15規劃已收斂；G02–G11b已有各自限定證據並通過 gate，目前停止於 G11b。G11 依 D187 拆成 G11a–G11g 七個 STOP，下一合法 gate 為 G11c；矩陣仍須由各 gate 的直接證據逐項更新，完整 v1 尚未完成。
 - 關鍵爭點：G04a 真 Mongo 8.0.32 已證明窄 face reverse-unique release/reuse 交易情境；G02只證工具鏈可用，不證API、模組接線或完整交易 adapter。
 - 適用於：單API／單logicalplace／單次Qualification／QR或模擬Face的公開共享sandbox；Nest預設Express、strictTS、官方Mongo driver。
 - 不適用於：真實人臉辨識／硬體門禁、多據點／多租戶、多API、跨崩潰／reset續辦、正式SLA或業務復原。
@@ -262,7 +262,7 @@ API/Mongo SIGTERM grace30s，API無自動restart；stoprequest/graceexpiry不是
 
 ### 9. 固定31個STOP點
 
-前關通過才進表後關，每子關交差異／要求D／command exit／指紋／真情境證據及覆核即停止。失敗、不相容、無效fault、缺證立即停；不auto還原使用者檔案或fallback。G04a／G04b敗必回設計討論。**G00、G01a／G01b 及 G02–G11a 已有各自限定局部通過證據；目前停止於 G11a，下一合法 gate 為 G11b。**
+前關通過才進表後關，每子關交差異／要求D／command exit／指紋／真情境證據及覆核即停止。失敗、不相容、無效fault、缺證立即停；不auto還原使用者檔案或fallback。G04a／G04b敗必回設計討論。**G00、G01a／G01b 及 G02–G11b 已有各自限定局部通過證據；目前停止於 G11b，下一合法 gate 為 G11c。**
 
 | Gate | 單一交付責任 | 未來代表驗證／artifact |
 |---|---|---|
@@ -290,7 +290,7 @@ API/Mongo SIGTERM grace30s，API無自動restart；stoprequest/graceexpiry不是
 | G10b | PASS：precommit終止／abort完整清理 | clean `77e8c21`、private run `g10b-41a126f2424d49c6a89df8f9b7d200e6`；unit 8／65、topology PASS、真fault 2 suites／3 tests：112與11000均`NO_APP_PARTIAL_EFFECT`；exact Docker cleanup PASS。僅證precommit，G10c仍未完成。 |
 | G10c | PASS：真傳輸未知確認與 canonical 收束 | `4aa5f4f`；G10c unit 9／67、fault 2 suites／4 tests；實際 HTTP→G07→G08a→G04b 管理更新經 Mongo `hangBeforeCommitingTxn` 與 Toxiproxy downstream timeout，direct observer 確認完整提交，scheduler canonical confirmation、session/lease cleanup、no-late CRUD 全通過；另有獨立 wire probe。 |
 | G11a | PASS：部署拓撲基線 | 正式證據見 `docs/evidence/g11a/report.md`；exact clean source/toolchain 下18 unit／11 static／8 runtime、full unit 59 suites／1009 tests，三角色覆核PASS |
-| G11b | READY：持久寫入權與兩階段啟動 | D189固定private-file one-use runTicket、verification-only bootstrap、Mongo atomic writeRunClaim、nominal WRITABLE bridge、bootstrap receipt與local-ready分離、ordinary restart關寫；尚未實作 |
+| G11b | PASS：持久寫入權與兩階段啟動 | 正式證據見 `docs/evidence/g11b/report.md`；one-use runTicket、verification-only provenance、Mongo atomic claim、16-way competition、response-loss UNKNOWN、exact wire與clean regression均通過；下一 gate 為 G11c |
 | G11c | 維護入口與停機隔離 | persistent marker、private drain≤30s、API／Mongo process disappearance 與 no-late-work 證據 |
 | G11d | 精確 reset／seed | passhub_demo 七 collection sequential deleteMany、保 indexes、stable seed、新 epoch／null claim、其他資料不變 |
 | G11e | 外部排程與唯一 controller | local nonblocking flock、同一手動／timer command、Asia/Taipei 03:00、Persistent=false |
@@ -302,7 +302,7 @@ API/Mongo SIGTERM grace30s，API無自動restart；stoprequest/graceexpiry不是
 
 ### 10. 命令dictionary、期限及artifact
 
-下面是root package的統一命令字典。G02–G10c 已依各自報告建立並執行對應命令；G11a 已建立 `test:g11a:*` 限定命令。其餘命令只有在對應 gate 實際建立、執行並保存證據後，才可視為完成：
+下面是root package的統一命令字典。G02–G10c 已依各自報告建立並執行對應命令；G11a 已建立 `test:g11a:*` 限定命令，G11b 已建立 `test:g11b:*` 的 b1／b2／b3 限定命令。其餘命令只有在對應 gate 實際建立、執行並保存證據後，才可視為完成：
 
 ```bash
 npm ci
@@ -384,6 +384,6 @@ Q1–Q13各實際細分見discuss原查證block（D105/111/116–125/127/133/135
 
 G05c evidence supplemental: exact Node image、G05c 51 tests、全 unit 189、G05a 21、G05b 80、boundary／negative compile／coverage及registry fail-closed boundary均已由 `docs/evidence/g05c/report.md` 保存；G06a evidence 另由 `docs/evidence/g06a/report.md` 保存，含 unit 88、true Mongo integration 5、full unit 277；G06b evidence 由 `docs/evidence/g06b/report.md` 保存，含 unit 78、true Mongo integration 4、full unit 355；G07a evidence由 `docs/evidence/g07a/report.md` 保存，含strict JSON unit 32、true HTTP e2e 41、combined 73、full unit 387；G07b evidence由 `docs/evidence/g07b/report.md` 保存，含unit 40、true HTTP e2e 5、combined 45、full unit 427；G08a evidence由 `docs/evidence/g08a/report.md` 保存，含unit 52、true HTTP e2e 12、true Mongo 8.0.32 integration 10、coverage combined 74及full unit 479；G08b evidence由 `docs/evidence/g08b/report.md` 保存，含unit 42、true HTTP e2e 6、true Mongo 8.0.32 integration 3、combined 51及full unit 521；G09a evidence由 `docs/evidence/g09a/report.md` 保存，含unit 92、true HTTP e2e 13、true Mongo 8.0.32 integration 16、combined 121及full unit 613；G09b evidence由 `docs/evidence/g09b/report.md`保存，含4,000 raw、40 cells、40 executionStats及完整correctness／inventory／hash核對。本段不把限定query benchmark推論為G10真故障／控制／logs、G11部署、SLA或完整API完成。
 
-當前停止點為 **G10c 限定 evidence 已通過；下一合法 gate 為 D187 定義的 G11a**。G11 deployment／maintenance 與完整 release 仍未解鎖；矩陣狀態只可依直接證據逐項更新。
+當前停止點為 **G11b 限定 evidence 已通過；下一合法 gate 為 D187 定義的 G11c**。G11c–G11g maintenance 與完整 release 仍未解鎖；矩陣狀態只可依直接證據逐項更新。
 
-安全採用P01–P15契約、31STOP與136矩陣，另受D166正式Jest runner決策約束。G02–G10c各自限定evidence已保存；G04a/G04b另記錄真Mongo 8.0.32、9／57 integration。`ManageQualifications` 已於G08a收斂為公開discriminated result；G08b辨識回覆只由已保存Event映射；G09a查詢維持exact去敏投影；G09b只量測同一Mongo adapter。不得由此推論G11 maintenance、deployment、公開runtime或SLA成立。各gate的clean source commit只證該gate provenance，不冒稱G12完整release evidence。
+安全採用P01–P15契約、31STOP與136矩陣，另受D166正式Jest runner決策約束。G02–G11b各自限定evidence已保存；G04a/G04b另記錄真Mongo 8.0.32、9／57 integration。`ManageQualifications` 已於G08a收斂為公開discriminated result；G08b辨識回覆只由已保存Event映射；G09a查詢維持exact去敏投影；G09b只量測同一Mongo adapter。不得由此推論G11c–G11g maintenance、公開runtime或SLA成立。各gate的clean source commit只證該gate provenance，不冒稱G12完整release evidence。
