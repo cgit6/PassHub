@@ -376,6 +376,7 @@ describe('G11b-b3a private boundaries', () => {
       }
     }
     expect(importers.sort()).toEqual([
+      `src/composition/internal/${['g11b', 'claimed', 'runtime', 'bootstrap', 'engine'].join('-')}.ts`,
       'src/deployment/internal/g11b-persistent-run-claim.ts',
       'test/support/g11b-persistent-run-claim-test-support.ts',
     ]);
