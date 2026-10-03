@@ -77,6 +77,11 @@ try {
   // decision must not invoke G11d; only an explicit controlled rerun may do so.
   chmodSync(handoffFile, 0o600);
   writeFileSync(handoffFile, '{"database":"passhub_demo"}\n', { mode: 0o400 });
+  const epochBeforePartial = readFileSync(epochFile, 'utf8');
+  const partialController = await runController();
+  if (partialController.code === 0 || !partialController.err.includes('G11E_EPOCH_PUBLISH_FAILED')
+    || readFileSync(epochFile, 'utf8') !== epochBeforePartial) throw new Error('partial handoff was not rejected by real G11e publisher');
+  if (statSync(join(runtime, 'bootstrap-ticket.json'), { throwIfNoEntry: false }) !== undefined) throw new Error('partial handoff issued a ticket');
   const partial = { ...base, resetState: 'PARTIAL' };
   try { decideG11fMaintenance(partial); throw new Error('uncontrolled partial reset was admitted'); }
   catch (error) { if (error?.code !== 'PARTIAL_RESET_REQUIRES_CONTROL' || g11dRuns !== 1) throw error; }
@@ -87,7 +92,7 @@ try {
   targetEpoch = secondMongo.second.datasetEpoch;
   const handoff = JSON.parse(readFileSync(handoffFile, 'utf8'));
   if (handoff.datasetEpoch !== targetEpoch || g11dRuns !== 2) throw new Error(`controlled rerun handoff mismatch: handoff=${handoff.datasetEpoch} target=${targetEpoch} runs=${g11dRuns} result=${secondMongo.second?.datasetEpoch}`);
-  policyCases.push('PARTIAL_HANDOFF_FAIL_CLOSED', 'CONTROLLED_REAL_G11D_RERUN');
+  policyCases.push('PARTIAL_HANDOFF_FAIL_CLOSED', 'REAL_G11E_PARTIAL_REJECT', 'CONTROLLED_REAL_G11D_RERUN');
 
   const nominal = await runController({ PASSHUB_MAINTENANCE_HOLD_MS: '300' });
   const outputLines = nominal.out.trim().split('\n').filter(Boolean);
