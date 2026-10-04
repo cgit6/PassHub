@@ -3511,3 +3511,10 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - `npm run test:maintenance` 在 HEAD `516cabd` 的 clean detached worktree 通過；確認 G11a–G11f 共10份 tracked evidence、G11e static contract、G11f 14 unit tests、470檔秘密掃描（0 hits）、Docker containers／networks／volumes／images清理為空、sourceDirty=false，以及 source/config/image fingerprints；三角色 reviewer 均 PASS。
 - 綜合器不重新解釋前置 gate，也不把 G11f policy-only fault observations 改寫為完整 process／Mongo fault injection；G11f 同 Mongo partial handoff／受控 rerun與真實 G11e lock contention仍以其自身 report為準。
 - 邊界：G11g不宣稱OpenAPI、CI、公開HTTPS、完整v1、SLA或production個資生命週期；上述交付與136要求的最終audit留在G12。
+
+### D199｜G12a release baseline 與需求帳本凍結通過
+
+- 日期：2026-10-04；狀態：PM、架構師與測試員對 G12a baseline tooling、前置 evidence、需求矩陣與 provenance 各自覆核後 PASS。G12a STOP 解除，目前停止於 G12a；下一合法 gate 為 G12b。
+- 正式命令：`npm run check:g12a:baseline`。在 clean detached worktree 以 source commit `2267a167940b553be7575e281085b6c47531f14c` 重跑通過；G12a manifest 另由後續文件提交發布，不改變受測 baseline。
+- 結果：27 份 G02–G11g report 存在且含限定 PASS／通過狀態；具 status 的既有 JSON 均為 `PASS*`；正式需求矩陣 125 個、明確排除 11 個，合計 136 個唯一 ID；`sourceDirty=false`、`excludedUserChanges=[]`；G11g provenance、文件 hash與下一 gate可追溯。
+- 邊界：G12a只凍結 release baseline 與需求帳本，不宣稱 OpenAPI、CI、clean install、Docker Demo、public HTTPS、完整 v1或逐136項已完成。下一關 G12b 只處理既有 API 的 OpenAPI與可重跑 curl Demo 契約，不新增業務能力。
