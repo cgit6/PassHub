@@ -1,0 +1,12 @@
+{
+  "gate": "G12a",
+  "status": "PASS",
+  "sourceCommit": "f7bdd19f53f1159386b9e4e0405c6f82ba3cfa98",
+  "sourceDirty": false,
+  "requiredEvidence": 27,
+  "formalRequirementIds": 125,
+  "excludedRequirementIds": 11,
+  "totalRequirementIds": 136,
+  "g11gEvidenceCommit": "516cabd34a72e38b3927539478ca25c1dc69de43",
+  "docsConfigSha256": "bfb57ed8472c045c96a11b52ecf963ad1b4893d2525e44590dc1cdf79f8a89ab"
+}
