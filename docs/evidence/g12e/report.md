@@ -1,4 +1,4 @@
-# G12e CI Pipeline（待遠端執行）
+# G12e CI Pipeline
 
 ## Result
 

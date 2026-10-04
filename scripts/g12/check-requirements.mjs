@@ -98,12 +98,14 @@ const business = readFileSync(resolve(root, 'docs/business-scope.md'), 'utf8');
 const plan = readFileSync(resolve(root, 'docs/implementation-plan.md'), 'utf8');
 const traceStatus = readFileSync(tracePath, 'utf8');
 for (const [name, text] of [['business-scope', business], ['implementation-plan', plan], ['requirements-traceability', traceStatus]]) {
-  const currentPair = /(?:目前停止於\s*G12c[\s\S]*下一合法\s*gate\s*(?:為|是)?\s*G12d|目前停止於\s*G12d[\s\S]*下一合法\s*gate\s*(?:為|是)?\s*G12e)/u.test(text);
+  const statusMatch = /目前停止於\s*G12([a-h])[\s\S]*下一合法\s*gate\s*(?:為|是)?\s*G12([a-h])/u.exec(text);
+  const currentPair = statusMatch !== null && statusMatch[2].charCodeAt(0) === statusMatch[1].charCodeAt(0) + 1;
   if (!currentPair || /目前停止於\s*G(?:11g|12b)\b/u.test(text) || /下一合法\s*gate\s*(?:為|是)?\s*G12c\b/u.test(text)) {
     throw new Error(`G12C_CURRENT_STOP_INCONSISTENT:${name}`);
   }
 }
-if (!/(?:當前停止點：G12c[\s\S]*下一合法 gate 為 G12d|當前停止點：G12d[\s\S]*下一合法 gate 為 G12e)/u.test(traceStatus)) {
+const tracePair = /當前停止點：G12([a-h])[\s\S]*下一合法 gate 為 G12([a-h])/u.exec(traceStatus);
+if (tracePair === null || tracePair[2].charCodeAt(0) !== tracePair[1].charCodeAt(0) + 1) {
   throw new Error('G12C_TRACE_STATUS_NOT_CANONICAL');
 }
 
