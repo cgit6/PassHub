@@ -1,8 +1,9 @@
 {
   "gate": "G12a",
   "status": "PASS",
-  "sourceCommit": "f7bdd19f53f1159386b9e4e0405c6f82ba3cfa98",
+  "sourceCommit": "7635f1014dd9cbc91ab26d11fa54b28b4cd07877",
   "sourceDirty": false,
+  "excludedUserChanges": [],
   "requiredEvidence": 27,
   "formalRequirementIds": 125,
   "excludedRequirementIds": 11,

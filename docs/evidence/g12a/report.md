@@ -8,11 +8,12 @@
 npm run check:g12a:baseline
 ```
 
-在 detached clean worktree 執行，source commit 為 `f7bdd19f53f1159386b9e4e0405c6f82ba3cfa98`，`sourceDirty=false`。
+在 detached clean worktree 執行，source commit 為 `7635f1014dd9cbc91ab26d11fa54b28b4cd07877`，`sourceDirty=false`；本次 manifest 的 `excludedUserChanges=[]`，沒有將主工作樹外部修改納入 release baseline。
 
 ## 驗證結果
 
 - G02–G11g 前置 evidence report 共 27 份，均存在且非空。
+- 27 份報告均含限定 PASS／通過狀態；既有 JSON evidence 的 status 亦通過 `PASS*` 檢查。
 - 正式要求矩陣包含 125 個 ID；明確排除區段包含 11 個 ID，合計 136 個唯一 ID。
 - G11g manifest 綁定 `516cabd34a72e38b3927539478ca25c1dc69de43`，且已保存 source/config/image fingerprints、秘密掃描與 cleanup 結果。
 - `requirements-traceability.md` 已同步目前停止點：G11g 完成，下一合法 gate 為 G12。
