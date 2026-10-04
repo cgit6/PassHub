@@ -262,7 +262,7 @@ API/Mongo SIGTERM grace30s，API無自動restart；stoprequest/graceexpiry不是
 
 ### 9. 固定31個STOP點
 
-前關通過才進表後關，每子關交差異／要求D／command exit／指紋／真情境證據及覆核即停止。失敗、不相容、無效fault、缺證立即停；不auto還原使用者檔案或fallback。G04a／G04b敗必回設計討論。**G00、G01a／G01b 及 G02–G11b 已有各自限定局部通過證據；目前停止於 G11b，下一合法 gate 為 G11c。**
+前關通過才進表後關，每子關交差異／要求D／command exit／指紋／真情境證據及覆核即停止。失敗、不相容、無效fault、缺證立即停；不auto還原使用者檔案或fallback。G04a／G04b敗必回設計討論。**G00、G01a／G01b 及 G02–G11g 已有各自限定局部通過證據；目前停止於 G11g，下一合法 gate 為 G12。**
 
 | Gate | 單一交付責任 | 未來代表驗證／artifact |
 |---|---|---|
@@ -302,7 +302,7 @@ API/Mongo SIGTERM grace30s，API無自動restart；stoprequest/graceexpiry不是
 
 ### 10. 命令dictionary、期限及artifact
 
-下面是root package的統一命令字典。G02–G10c 已依各自報告建立並執行對應命令；G11a 已建立 `test:g11a:*` 限定命令，G11b 已建立並執行 b1–b5 的限定命令與 clean process evidence。其餘命令只有在對應 gate 實際建立、執行並保存證據後，才可視為完成：
+下面是root package的統一命令字典。G02–G11g 已依各自報告建立並執行對應限定命令與證據；其餘 G12 命令只有在對應子關實際建立、執行並保存證據後，才可視為完成：
 
 ```bash
 npm ci
