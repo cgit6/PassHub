@@ -31,4 +31,4 @@ assert(script.includes("process.once('SIGTERM'"), 'runner has no SIGTERM cleanup
 for (const forbidden of ['/__g11a/', '/internal/ready', 'runtime-control.sock']) {
   assert(!docs.includes(forbidden), `public demo docs expose private path: ${forbidden}`);
 }
-process.stdout.write(JSON.stringify({ gate: 'G12f', status: 'PASS', checks: 13 }) + '\n');
+process.stdout.write(JSON.stringify({ gate: 'G12f', status: 'PASS', checks: 17 }) + '\n');
