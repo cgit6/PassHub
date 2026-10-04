@@ -2,6 +2,7 @@
   "gate": "G12d",
   "status": "PASS",
   "sourceCommit": "90aee0d8b5768e634d110f238e45fc8f89ed539e",
+  "reportPublicationRevision": "e998475e7dc328c00107dbf6db505c3e9b2ff816",
   "sourceDirty": false,
   "toolchain": {
     "image": "node:24.21.0-bookworm-slim",

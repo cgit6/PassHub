@@ -7,6 +7,7 @@
 ## Formal run
 
 - Source commit：`90aee0d8b5768e634d110f238e45fc8f89ed539e`
+- Evidence publication revision：`e998475e7dc328c00107dbf6db505c3e9b2ff816`（只含 gate 文件、稽核器 current-stop 相容性與 evidence；正式 clean test 使用上列 source commit）
 - Toolchain image：`node:24.21.0-bookworm-slim`
 - Image digest：`sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6`
 - Node：`v24.21.0`
