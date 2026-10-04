@@ -24,6 +24,10 @@ assert(script.includes("resolve(repository, 'infra/g11/api.Dockerfile')"), 'runn
 assert(script.includes("const composeFile = resolve(repository, 'infra/g11/compose.yml')"), 'runner does not reuse the G11 production compose');
 assert(script.includes("compose(['down', '--volumes', '--remove-orphans"), 'runner has no compose cleanup');
 assert(script.includes("rmSync(temporary, { recursive: true, force: true })"), 'runner has no temporary directory cleanup');
+assert(script.includes("label=com.docker.compose.project=${project}"), 'runner has no project resource cleanup probe');
+assert(script.includes("reference=${imageTag}"), 'runner has no image cleanup probe');
+assert(script.includes("process.once('SIGINT'"), 'runner has no SIGINT cleanup handler');
+assert(script.includes("process.once('SIGTERM'"), 'runner has no SIGTERM cleanup handler');
 for (const forbidden of ['/__g11a/', '/internal/ready', 'runtime-control.sock']) {
   assert(!docs.includes(forbidden), `public demo docs expose private path: ${forbidden}`);
 }

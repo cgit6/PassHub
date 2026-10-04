@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { request } from 'node:https';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -44,6 +44,7 @@ let imageBuilt = false;
 let port;
 let epoch;
 let failure;
+let cleanupStarted = false;
 
 function command(binary, args, options = {}) {
   const output = execFileSync(binary, args, {
@@ -55,6 +56,30 @@ function command(binary, args, options = {}) {
 const docker = (args, options) => command('docker', args, options);
 const compose = (args, options) => docker([...composeArgs, ...args], options);
 function assert(condition, message) { if (!condition) throw new Error(message); }
+function cleanupResources() {
+  if (cleanupStarted) return;
+  cleanupStarted = true;
+  const errors = [];
+  try { compose(['down', '--volumes', '--remove-orphans', '--timeout', '30'], { timeout: 120_000 }); } catch (error) { errors.push(error); }
+  try {
+    const leftovers = [
+      docker(['ps', '-aq', '--filter', `label=com.docker.compose.project=${project}`]),
+      docker(['network', 'ls', '-q', '--filter', `label=com.docker.compose.project=${project}`]),
+      docker(['volume', 'ls', '-q', '--filter', `label=com.docker.compose.project=${project}`]),
+    ].filter((value) => value.length > 0);
+    if (leftovers.length > 0) throw new Error('project-scoped Docker resources survived cleanup');
+  } catch (error) { errors.push(error); }
+  if (imageBuilt) {
+    try { docker(['image', 'rm', '--force', imageTag], { timeout: 60_000 }); } catch (error) { errors.push(error); }
+    try { if (docker(['image', 'ls', '-q', '--filter', `reference=${imageTag}`]).length > 0) throw new Error('API image tag survived cleanup'); }
+    catch (error) { errors.push(error); }
+  }
+  try { rmSync(temporary, { recursive: true, force: true }); if (existsSync(temporary)) throw new Error('temporary directory survived cleanup'); }
+  catch (error) { errors.push(error); }
+  if (errors.length > 0) throw new AggregateError(errors, 'G12f cleanup failed');
+}
+process.once('SIGINT', () => { try { cleanupResources(); } catch (error) { process.stderr.write(`G12f interrupted; cleanup failed: ${error.message}\n`); } finally { process.exit(130); } });
+process.once('SIGTERM', () => { try { cleanupResources(); } catch (error) { process.stderr.write(`G12f terminated; cleanup failed: ${error.message}\n`); } finally { process.exit(143); } });
 async function waitFor(label, probe, timeoutMs = 120_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -176,8 +201,6 @@ try {
   imageBuilt = true; await runDemo();
 } catch (error) { failure = error; }
 finally {
-  try { compose(['down', '--volumes', '--remove-orphans', '--timeout', '30'], { timeout: 120_000 }); } catch (error) { failure ??= error; }
-  try { if (imageBuilt) docker(['image', 'rm', '--force', imageTag], { timeout: 60_000 }); } catch (error) { failure ??= error; }
-  try { rmSync(temporary, { recursive: true, force: true }); } catch (error) { failure ??= error; }
+  try { cleanupResources(); } catch (error) { failure = failure === undefined ? error : new AggregateError([failure, error], 'G12f run and cleanup failed'); }
 }
 if (failure !== undefined) { process.stderr.write(`G12f Docker Demo failed: ${failure instanceof Error ? failure.message : String(failure)}\n`); process.exitCode = 1; }
