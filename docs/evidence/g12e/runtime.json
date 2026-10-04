@@ -1,0 +1,17 @@
+{
+  "gate": "G12e",
+  "status": "PARTIAL",
+  "sourceCommit": "cec5d29c447ff49a97bca9457bdbf7c8d89f3187",
+  "sourceDirty": false,
+  "workflowChecker": "PASS",
+  "requiredChecks": 22,
+  "remoteRun": "NOT_EXECUTED",
+  "localEquivalent": {
+    "build": "PASS",
+    "httpE2e": {"g07a": 41,"g07b": 7,"g08a": 12,"g08b": 6,"g09a": 13,"total": 69},
+    "boundary": "PASS",
+    "openapi": "PASS",
+    "requirements": "PASS"
+  },
+  "blocker": "GitHub hosted runner evidence and run ID require remote push/dispatch"
+}

@@ -3539,3 +3539,10 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - 正式 run 使用 source `90aee0d8b5768e634d110f238e45fc8f89ed539e`、`node:24.21.0-bookworm-slim`（Node v24.21.0／npm 11.19.0），乾淨 `npm ci`、`npm run build`、`npm run test:unit` 全部通過；完整 Jest 為 81 suites／1290 tests。另重跑 G03c、G06a、G06b、G08a、G08b、G09a、G10、G11a、G11e boundary、G12b OpenAPI 與 G12c requirements checks，均 PASS。
 - 中間兩次 container run 因缺 Docker CLI 或以 root 造成權限測試失真，均不列證據；最後 run 以非 root、Docker CLI／socket及同路徑 host `/tmp`掛載，foreign-UID與umask案例全綠。clean worktree 測試後已移除，主工作樹保持 clean。
 - 限制：本關只證 lockfile 安裝、TypeScript build、完整 unit suite 與既有靜態檢查可重跑，不把它升格為 Mongo integration、CI、Docker Demo、公開 HTTPS 或 136 項需求完成。下一關 G12e 處理 CI pipeline。
+
+### D203｜G12e CI pipeline 建立但等待遠端執行
+
+- 日期：2026-10-04；狀態：PM、架構師與測試員確認 workflow 設計可接受，但三者一致判定 `PARTIAL`，不能解除 G12e STOP。主工作樹仍停止於 G12d，下一合法 gate 仍為 G12e。
+- 新增 `.github/workflows/ci.yml` 與 `npm run check:g12e:workflow`。workflow 固定 `ubuntu-24.04`、`.nvmrc`、`npm ci`、build、完整 unit、G07a／G07b／G08a／G08b／G09a HTTP e2e、現行 boundary、OpenAPI、G12c requirements 與 diff check。
+- 本地等價命令通過：workflow checker 22 checks、build、HTTP e2e 合計 69 tests、boundary／OpenAPI／requirements checks。checker 明確輸出 `remoteRun: NOT_EXECUTED`。
+- 阻塞條件：尚無 GitHub hosted runner 的 run ID、log 與 artifact。必須在取得遠端成功 run 後，才能把 E08 升級並進入 G12f；不擅自 push 或把本地 PASS 當 CI PASS。

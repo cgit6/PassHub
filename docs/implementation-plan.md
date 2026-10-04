@@ -300,7 +300,8 @@ API/Mongo SIGTERM grace30s，API無自動restart；stoprequest/graceexpiry不是
 | G12b | PASS：OpenAPI 與可重跑 curl Demo | `docs/evidence/g12b/report.md`；8 path templates／10 methods、0 internal routes、OpenAPI check、build、G08a／G08b／G09a HTTP e2e，三角色覆核PASS |
 | G12c | PASS：boundary／requirements ledger audit（非 136 項完成） | `docs/evidence/g12c/report.md`；136 IDs結構／映射、現行邊界檢查、G07舊檢查器分類，三角色覆核PASS |
 | G12d | PASS：clean install／完整 unit 重跑 | `docs/evidence/g12d/report.md`；Node 24.21.0／npm 11.19.0、npm ci、build、81 suites／1290 tests、boundary／OpenAPI／G12c regression，三角色覆核PASS |
-| G12e–G12h | 尚未開始：完整交付證據 audit | CI、Docker Demo、public HTTPS與最終 release audit，依子關逐一驗證 |
+| G12e | PARTIAL：CI workflow 已建立，待 GitHub hosted runner | `docs/evidence/g12e/report.md`；workflow checker／本地等價命令與 69 HTTP e2e tests PASS；remote run 尚未執行，不解除 STOP |
+| G12f–G12h | 尚未開始：完整交付證據 audit | Docker Demo、public HTTPS與最終 release audit，依子關逐一驗證 |
 
 各gate對136IDs見矩陣§10.1；子情境細化見§10，**名字存在不代表覆蓋或通過**。G11不增加業務，只驗部署/reset；G12綜合既有責任，不寫新平臺。不同suite選擇器是將來script傳給Node runner的測試pattern，實作後確認選中數>0及情境符合，不能零測試exit0當gate成功。
 
