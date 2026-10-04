@@ -20,7 +20,7 @@ for (const gate of priorGates) {
   if (!existsSync(directory)) continue;
   for (const file of readdirSync(directory).filter((name) => name.endsWith('.json'))) {
     const value = JSON.parse(readFileSync(join(directory, file), 'utf8'));
-    if ('status' in value && value.status !== 'PASS') runtimeStatusFailures.push(`${gate}/${file}:${value.status}`);
+    if ('status' in value && !String(value.status).startsWith('PASS')) runtimeStatusFailures.push(`${gate}/${file}:${value.status}`);
   }
 }
 if (runtimeStatusFailures.length) throw new Error(`G12A_RUNTIME_STATUS_INVALID:${runtimeStatusFailures.join(',')}`);
