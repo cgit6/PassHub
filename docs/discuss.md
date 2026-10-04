@@ -3518,3 +3518,10 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - 正式命令：`npm run check:g12a:baseline`。在 clean detached worktree 以 source commit `2267a167940b553be7575e281085b6c47531f14c` 重跑通過；G12a manifest 另由後續文件提交發布，不改變受測 baseline。
 - 結果：27 份 G02–G11g report 存在且含限定 PASS／通過狀態；具 status 的既有 JSON 均為 `PASS*`；正式需求矩陣 125 個、明確排除 11 個，合計 136 個唯一 ID；`sourceDirty=false`、`excludedUserChanges=[]`；G11g provenance、文件 hash與下一 gate可追溯。
 - 邊界：G12a只凍結 release baseline 與需求帳本，不宣稱 OpenAPI、CI、clean install、Docker Demo、public HTTPS、完整 v1或逐136項已完成。下一關 G12b 只處理既有 API 的 OpenAPI與可重跑 curl Demo 契約，不新增業務能力。
+
+### D200｜G12b OpenAPI 與 curl Demo 限定 gate 通過
+
+- 日期：2026-10-04；狀態：PM、架構師與測試員對 OpenAPI、curl 認證格式、route classifier 對齊及既有 HTTP e2e 各自覆核後 PASS。G12b STOP 解除，目前停止於 G12b；下一合法 gate 為 G12c。
+- 正式證據：`docs/evidence/g12b/report.md` 與 `runtime.json`。OpenAPI 有 8 個 path template／10 個 D150 業務 method，沒有 `/internal/*`、reset、claim、runTicket 或其他維護介面；Source 認證範例固定使用 `Authorization: Source $ENTRY_SOURCE`／`$EXIT_SOURCE`。
+- 驗證：`npm run check:g12b:openapi`、`npm run build`、G08a e2e 12/12、G08b e2e 6/6、G09a e2e 13/13 全部 PASS。release manifest source 為 `5e60e40`，HTTP e2e 實際 run 為 `383d758`，兩者差異只有文件／evidence 修正，沒有 production code 變更。
+- 邊界：本關只建立靜態 OpenAPI 與 curl Demo 文件，不新增 runtime `/openapi.json` route，不宣稱 CI、Docker 一鍵 Demo、公開 HTTPS、完整 v1或真實影像／RTSP；下一關 G12c 進行 boundary 與 136 項需求逐項稽核。
