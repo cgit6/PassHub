@@ -1,6 +1,6 @@
 # PassHub 有效要求與實作追蹤矩陣
 
-規劃狀態：**D160封口；D161完成舊碼清除；D166改定正式Jest runner；G02–G11g、G12a–G12e已發行各自限定 evidence，目前停止於 G12e；D187 將本階段拆為 G11a–G11g，G12再拆為G12a–G12h，下一合法 gate 為 G12f**。工程矩陣仍須逐項以直接證據更新，任何限定 gate 不自動代表完整 v1。整理日期：2026-10-04。
+規劃狀態：**D160封口；D161完成舊碼清除；D166改定正式Jest runner；G02–G11g、G12a–G12f已發行各自限定 evidence，目前停止於 G12f；D187 將本階段拆為 G11a–G11g，G12再拆為G12a–G12h，下一合法 gate 為 G12g**。工程矩陣仍須逐項以直接證據更新，任何限定 gate 不自動代表完整 v1。整理日期：2026-10-04。
 
 這份文件回答：「討論過的要求，實作時如何避免漏掉？」它不是已完成成果，也不授權開始重寫程式。
 
@@ -191,9 +191,9 @@
 | E04 | D152／D182固定10k Qualification／40k Event與Qualification、INSIDE及八種Event filter cases的索引前後實驗；正確性及完整證據為門檻，不要求改善百分比。 | 業務 §12、D152、D182 | 查詢／測量 | T-E04：SHA-256 deterministic fixture及hash；10 cases各first／oracle fixed-next、tie≥64；每格10 warmup／100 serial measured，BEFORE／AFTER共4,000 raw ns，nearest-rank p50／p95 index 49／94；只切四個query non-unique indexes，兩state輸出相同；40份真adapter aggregate executionStats、主cursor／lookup分開、環境／index inventory／完整與公開去敏證據。 | V：clean `dd0bc14`正式run完成4,000 raw／40 cells／40 executionStats，fixture／readback hash、oracle、tie、無gap／duplicate、BEFORE／AFTER輸出及index inventory全綠；manifest 50 artifacts重算一致，見`docs/evidence/g09b/report.md`。 |
 | E05 | 結構化日誌與 request ID 可追蹤請求、原項及故障，不洩漏秘密。 | D21、業務 §12 | 可觀測性 | T-E05：跨層關聯可查；斷線、重送、未知、維護紀錄有安全上下文。 | U |
 | E06 | 自動化測試涵蓋規則、權限、秘密、冪等、並行、故障、預算及維護。 | D35、D65–D99、業務 §12 | 測試套件 | T-E06：逐列對應，不把單元測試數量等同需求覆蓋。 | U：G11a新增18 unit／11 static／8真runtime cases，full unit為59 suites／1009 tests；此前各gate另有直接報告。G11b–G11g及逐136 release audit仍未完成，數量不等同完整覆蓋。 |
-| E07 | 乾淨 Docker 環境啟動 API／真 Mongo，seed 與一鍵 Demo 可重跑且有斷言。 | D30、D35、D189、業務 §12 | 交付／展示 | T-E07：無本機殘留安裝；交易環境、verification-only bootstrap、persistent claim、初始化及主流程成功。 | U：G11a已由Dockerfile建置並啟動production shell、認證Mongo單成員PRIMARY與Nginx HTTPS，且驗project cleanup；G11b真Mongo／process bootstrap、seed、完整業務主流程與公開Demo仍屬後續gate。 |
+| E07 | 乾淨 Docker 環境啟動 API／真 Mongo，seed 與一鍵 Demo 可重跑且有斷言。 | D30、D35、D189、業務 §12 | 交付／展示 | T-E07：無本機殘留安裝；交易環境、verification-only bootstrap、persistent claim、初始化及主流程成功。 | V：G12f clean source 以 production Dockerfile／Compose 建置，真 Mongo PRIMARY、seed、bootstrap、QR ENTRY、INSIDE、Face EXIT、EXITED／Events 與 project/image/temp cleanup probes 全通過；只限本機 synthetic Demo，不含 public HTTPS。 |
 | E08 | CI 靜態檢查、測試與建置有實際成功證據，保存 commit／環境／命令。 | 業務 §12 | CI | T-E08：乾淨 runner 通過；失敗阻止宣稱完成。 | U |
-| E09 | README／設計文件交代信任邊界、狀態、資料流、原子性、模擬、共享及每日重置限制。 | D01、D25–D26、D30、D34、業務 §12 | 操作／設計文件 | T-E09：陌生讀者能重跑及解釋限制；不提公司現行系統或複製其資料／畫面。 | U |
+| E09 | README／設計文件交代信任邊界、狀態、資料流、原子性、模擬、共享及每日重置限制。 | D01、D25–D26、D30、D34、業務 §12 | 操作／設計文件 | T-E09：陌生讀者能重跑及解釋限制；不提公司現行系統或複製其資料／畫面。 | V：README 與 `docs/demo/g12f-docker.md` 已說明 Mock Face／QR 邊界、非 RTSP／硬體、synthetic data、無 SLA／隔離保證、主流程與清理；公開 HTTPS／共享部署仍待 G12g。 |
 
 ## 3. 明確排除與負面驗收
 
@@ -299,7 +299,7 @@
 | P14 | D154–D155、D187單API/單成員replset/NGINX；systemd03臺北Persistent=false、host lock/marker、API與Mongo確停及恢復、七collection精確清理／runTicket分bootstrap-ready／failclosed。 | A18、M01、M05–M10；G11a–G11g |
 | P15 | D156未被D166取代的命令／期限／clean sourceCommit規則；D166正式Jest runner與其證據失效／重驗範圍；D157原25STOP經D187拆分G11後固定為31STOP，maintenance600/1800不變。文件封口G00，完整release136證據G12。 | E01–E09；G00/G01a–G12 |
 
-實作方案記錄逐關 STOP、命令 dictionary 與證據位置。G01a／G01b、G02–G11g、G12a–G12e 已各自完成限定驗收；目前停止於 G12e。完整 release、Demo／public HTTPS 與逐項 G12 audit 仍未驗證；G12c限定證據只證帳本結構與邊界稽核，G12d限定證據只證 clean install／完整 unit 重跑，G12e限定證據只證遠端 CI pipeline，不自動證明完整 v1。
+實作方案記錄逐關 STOP、命令 dictionary 與證據位置。G01a／G01b、G02–G11g、G12a–G12f 已各自完成限定驗收；目前停止於 G12f。完整 release、public HTTPS 與逐項 G12 audit 仍未驗證；G12c限定證據只證帳本結構與邊界稽核，G12d限定證據只證 clean install／完整 unit 重跑，G12e限定證據只證遠端 CI pipeline，G12f限定證據只證本機 synthetic Docker Demo，不自動證明完整 v1。
 
 ## 7. 實作時的證據帳本與反向覆核
 
@@ -317,7 +317,7 @@
 4. 獨立覆核者直接讀原始 D 段與測試，反查矩陣是否漏要求或誤採舊提案；不只閱讀實作者摘要。
 5. 交付差異與證據後停止。未達條件不進下一關，不因時間壓力靜默縮減要求；必要變更先與使用者確認。
 
-**當前停止點：G12e CI pipeline evidence 已通過；下一合法 gate 為 G12f。矩陣 V／U 只可在直接證據與逐項覆核後更新；G12c／G12d／G12e 的 PASS 均不把 136 項要求升格為完成。**
+**當前停止點：G12f Docker Demo evidence 已通過；下一合法 gate 為 G12g。矩陣 V／U 只可在直接證據與逐項覆核後更新；G12c／G12d／G12e／G12f 的 PASS 均不把 136 項要求升格為完成。**
 
 ## 8. 追蹤矩陣建立時的文件覆核紀錄（歷史）
 

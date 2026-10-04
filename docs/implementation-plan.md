@@ -301,7 +301,8 @@ API/Mongo SIGTERM grace30s，API無自動restart；stoprequest/graceexpiry不是
 | G12c | PASS：boundary／requirements ledger audit（非 136 項完成） | `docs/evidence/g12c/report.md`；136 IDs結構／映射、現行邊界檢查、G07舊檢查器分類，三角色覆核PASS |
 | G12d | PASS：clean install／完整 unit 重跑 | `docs/evidence/g12d/report.md`；Node 24.21.0／npm 11.19.0、npm ci、build、81 suites／1290 tests、boundary／OpenAPI／G12c regression，三角色覆核PASS |
 | G12e | PASS：CI pipeline | `docs/evidence/g12e/report.md`；GitHub Actions run 37190525677、81 unit suites／1290 tests、69 HTTP e2e、boundary／OpenAPI／requirements checks，三角色覆核PASS |
-| G12f–G12h | 尚未開始：完整交付證據 audit | Docker Demo、public HTTPS與最終 release audit，依子關逐一驗證 |
+| G12f | PASS：可重跑 Docker Demo | `docs/evidence/g12f/report.md`；clean source `1800ed3`、17 項靜態檢查、production image／Mongo PRIMARY／主流程與 cleanup probes；三角色覆核PASS。僅證本機 synthetic Demo，不證 public HTTPS。 |
+| G12g–G12h | 尚未開始：完整交付證據 audit | public HTTPS與最終 release audit，依子關逐一驗證 |
 
 各gate對136IDs見矩陣§10.1；子情境細化見§10，**名字存在不代表覆蓋或通過**。G11不增加業務，只驗部署/reset；G12綜合既有責任，不寫新平臺。不同suite選擇器是將來script傳給Node runner的測試pattern，實作後確認選中數>0及情境符合，不能零測試exit0當gate成功。
 
@@ -389,6 +390,6 @@ Q1–Q13各實際細分見discuss原查證block（D105/111/116–125/127/133/135
 
 G05c evidence supplemental: exact Node image、G05c 51 tests、全 unit 189、G05a 21、G05b 80、boundary／negative compile／coverage及registry fail-closed boundary均已由 `docs/evidence/g05c/report.md` 保存；G06a evidence 另由 `docs/evidence/g06a/report.md` 保存，含 unit 88、true Mongo integration 5、full unit 277；G06b evidence 由 `docs/evidence/g06b/report.md` 保存，含 unit 78、true Mongo integration 4、full unit 355；G07a evidence由 `docs/evidence/g07a/report.md` 保存，含strict JSON unit 32、true HTTP e2e 41、combined 73、full unit 387；G07b evidence由 `docs/evidence/g07b/report.md` 保存，含unit 40、true HTTP e2e 5、combined 45、full unit 427；G08a evidence由 `docs/evidence/g08a/report.md` 保存，含unit 52、true HTTP e2e 12、true Mongo 8.0.32 integration 10、coverage combined 74及full unit 479；G08b evidence由 `docs/evidence/g08b/report.md` 保存，含unit 42、true HTTP e2e 6、true Mongo 8.0.32 integration 3、combined 51及full unit 521；G09a evidence由 `docs/evidence/g09a/report.md` 保存，含unit 92、true HTTP e2e 13、true Mongo 8.0.32 integration 16、combined 121及full unit 613；G09b evidence由 `docs/evidence/g09b/report.md`保存，含4,000 raw、40 cells、40 executionStats及完整correctness／inventory／hash核對。本段不把限定query benchmark推論為G10真故障／控制／logs、G11部署、SLA或完整API完成。
 
-當前停止點為 **G12e 已完成 CI pipeline；下一合法動作為進入 G12f**。G11f 的 policy-only fault cases 不得在 G12 擴張為完整 production fault coverage；矩陣狀態只可依直接證據逐項更新。G12c 的 PASS 只代表帳本結構與邊界稽核，G12d 的 PASS 只代表可重建與測試套件重跑，G12e 的 PASS 只代表遠端 CI pipeline 成功，不代表 136 項要求均已完成。
+當前停止點為 **G12f 已完成本機 Docker Demo；下一合法動作為進入 G12g**。G11f 的 policy-only fault cases 不得在 G12 擴張為完整 production fault coverage；矩陣狀態只可依直接證據逐項更新。G12c 的 PASS 只代表帳本結構與邊界稽核，G12d 的 PASS 只代表可重建與測試套件重跑，G12e 的 PASS 只代表遠端 CI pipeline 成功，G12f 的 PASS 只代表 production compose 上的本機 synthetic 主流程與清理，不代表 public HTTPS 或 136 項要求均已完成。
 
 安全採用P01–P15契約、31STOP與136矩陣，另受D166正式Jest runner決策約束。G02–G11e各自限定evidence已保存；G04a/G04b另記錄真Mongo 8.0.32、9／57 integration。`ManageQualifications` 已於G08a收斂為公開discriminated result；G08b辨識回覆只由已保存Event映射；G09a查詢維持exact去敏投影；G09b只量測同一Mongo adapter。不得由此推論G11f–G11g maintenance、公開runtime或SLA成立。各gate的clean source commit只證該gate provenance，不冒稱G12完整release evidence。

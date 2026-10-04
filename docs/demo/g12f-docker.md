@@ -30,6 +30,7 @@ runner 會以正式 production entrypoint 啟動服務，並斷言：
 ## 限制
 
 - 這是本機 synthetic data Demo，不是公開服務，不提供 SLA、資料隔離、正式個資治理或跨重啟資料保證。
+- 若未來以共享 sandbox 部署，資料會依既定維護排程每日重置；本機 runner 不依賴或模擬共享 sandbox 的持久資料。
 - 不使用真實個資；不要把真實姓名、聯絡方式或生物辨識資料放入 Demo。
 - 不含多據點、多租戶、通知、Webhook、RTSP、硬體、人臉 enrollment 或正式維運介面。
 - G12f 只證 Docker 可重建及固定業務流程；不代表 G12g public HTTPS 或完整 v1 已完成。

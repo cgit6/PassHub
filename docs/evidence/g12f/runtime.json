@@ -1,0 +1,37 @@
+{
+  "gate": "G12f",
+  "status": "PASS",
+  "testedSourceCommit": "1800ed314c56822db8ef84f83319ed69506d9cd8",
+  "sourceWasCleanBeforeRun": true,
+  "command": "npm run check:g12f:docker-demo && npm run demo:g12f:docker",
+  "exitCode": 0,
+  "staticChecks": 17,
+  "cases": [
+    "DOCKER_BUILD",
+    "MONGO_PRIMARY",
+    "API_READY",
+    "CREATE_QR",
+    "QR_ENTRY",
+    "INSIDE_QUERY",
+    "FACE_EXIT",
+    "EVENTS_EXITED"
+  ],
+  "docker": {
+    "version": "29.0.0",
+    "compose": "v2.40.3",
+    "composeFile": "infra/g11/compose.yml",
+    "composeSha256": "9637ed74abbd520321f3ce2bfcf4e631a7f7966aa11fe3694d4e3198442561f9",
+    "temporaryResourcesCleaned": true,
+    "apiDockerfileSha256": "6d022c40336cbc94c9ac1de707957c2790dd9b7d6637fc9a34a8f2b65f51afe3"
+  },
+  "fingerprints": {
+    "runnerSha256": "a4a0b8c69ff4daf6d23ccf504a236732993c2187ac7608b78994033a9a4e201a",
+    "checkerSha256": "5d785f018b266e70e4f93b6b68896985a67fee1b6fad30ccc473145757670b33",
+    "packageJsonSha256": "3ee4036c4b4e3da43ab9d5ffd5a52ba4f36f48efed445c91ab53c6fc33a9f539",
+    "packageLockSha256": "70fce3c9a46f686e6bca2e6f6e66894c6e4510ffbc6bd4518d781f2f2bb9320b",
+    "readmeSha256": "132a1987248d884d351f8b29226dcca841e4af57f74b9ade7cf1e9c276423fe0"
+  },
+  "secretsEmitted": false,
+  "publicHttps": false,
+  "nextGate": "G12g"
+}

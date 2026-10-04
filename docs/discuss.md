@@ -3558,3 +3558,10 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - 日期：2026-10-04；狀態：PM、架構師與測試員對成功遠端 run、修正後測試與 workflow scope 各自覆核後 PASS。G12e STOP 解除，目前停止於 G12e，下一合法 gate 為 G12f。
 - GitHub Actions run `37190525677`（head `c1bb0871c78d2b258f64bdfbfe1005025f6e6e8a`）在 `ubuntu-24.04` 成功，耗時約 2 分 50 秒。Clean install、toolchain assertion、build、unit 81 suites／1290 tests、HTTP e2e 69 tests、9 組現行 boundary、OpenAPI、G12c requirements 與 diff check 全部 PASS。
 - 首次 run `37188396914` 的 foreign-UID 失敗已由動態 UID 修正；修正版遠端結果已驗證。Workflow 仍不宣稱 Mongo integration、fault、maintenance、Docker Demo 或 public HTTPS。
+
+### D206｜G12f 本機 Docker Demo 通過
+
+- 日期：2026-10-04；狀態：專案經理、架構師與測試員分別覆核 runner、production Compose 重用、秘密邊界與清理探針後 PASS。G12f STOP 解除，目前停止於 G12f，下一合法 gate 為 G12g。
+- 新增 `npm run demo:g12f:docker` 與 `npm run check:g12f:docker-demo`。runner 重用 `infra/g11/api.Dockerfile`、`infra/g11/compose.yml`，在暫存目錄產生 TLS／secret／process identity／一次性 ticket，建立空 Mongo volume 並執行正式 production entrypoint。
+- 正式 run source `1800ed314c56822db8ef84f83319ed69506d9cd8` clean；17 項靜態檢查與 Docker runtime cases `DOCKER_BUILD`、`MONGO_PRIMARY`、`API_READY`、`CREATE_QR`、`QR_ENTRY`、`INSIDE_QUERY`、`FACE_EXIT`、`EVENTS_EXITED` 全通過。結果與指紋見 `docs/evidence/g12f/report.md`、`runtime.json`。
+- runner 另驗 project-labeled containers／networks／volumes、API image tag 與暫存目錄在清理後消失；SIGINT／SIGTERM 走相同 cleanup path。G12f 只證本機 synthetic Demo，不宣稱 public HTTPS、共享部署、RTSP、硬體或完整 136 項需求；下一關 G12g。
