@@ -116,7 +116,7 @@
       "UnknownRecognition": { "type": "object", "additionalProperties": false, "required": ["externalEventId", "kind"], "properties": { "externalEventId": { "type": "string", "minLength": 1, "maxLength": 128 }, "kind": { "const": "FACE_UNKNOWN" } } }
     },
     "responses": {
-      "Json": { "description": "Safe JSON projection; QR token is returned only by successful create.", "content": { "application/json": { "schema": { "type": "object" } } } },
+      "Json": { "description": "Safe JSON projection; QR token is returned only by successful create.", "content": { "application/json": { "schema": { "oneOf": [{ "type": "object" }, { "type": "array" }] } } } },
       "Error": { "description": "Safe error envelope without request body, credentials, token or full subject.", "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["code"], "properties": { "code": { "type": "string" }, "message": { "type": "string" } } } } } }
     }
   }
