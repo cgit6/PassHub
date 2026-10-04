@@ -26,7 +26,7 @@ qualification_id=$(jq -er '.qualificationId' <<<"$create")
 qr_token=$(jq -er '.qrToken' <<<"$create")
 
 curl --fail-with-body -sS -X POST "$BASE_URL/recognition/attempts" \
-  -H "Authorization: $ENTRY_SOURCE" -H "PassHub-Dataset-Epoch: $DATASET_EPOCH" \
+  -H "Authorization: Source $ENTRY_SOURCE" -H "PassHub-Dataset-Epoch: $DATASET_EPOCH" \
   -H 'content-type: application/json' \
   --data "$(jq -n --arg token "$qr_token" '{externalEventId:"demo-entry-001",kind:"QR_SCANNED",token:$token}')"
 
@@ -34,7 +34,7 @@ curl --fail-with-body -sS "$BASE_URL/qualifications/inside" \
   -H "Authorization: Bearer $VIEWER_TOKEN"
 
 curl --fail-with-body -sS -X POST "$BASE_URL/recognition/attempts" \
-  -H "Authorization: $EXIT_SOURCE" -H "PassHub-Dataset-Epoch: $DATASET_EPOCH" \
+  -H "Authorization: Source $EXIT_SOURCE" -H "PassHub-Dataset-Epoch: $DATASET_EPOCH" \
   -H 'content-type: application/json' \
   --data '{"externalEventId":"demo-exit-001","kind":"FACE_MATCHED","provider":"DemoFace","externalSubjectId":"demo-subject-001"}'
 

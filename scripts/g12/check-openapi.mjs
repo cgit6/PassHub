@@ -22,5 +22,6 @@ if (Object.keys(spec.paths).some((path) => path.startsWith('/internal'))) throw 
 if (!spec.components?.securitySchemes?.humanBearer || !spec.components?.securitySchemes?.sourceCredential) throw new Error('G12B_SECURITY_SCHEMES_MISSING');
 const demo = readFileSync(demoPath, 'utf8');
 for (const path of ['/qualifications', '/recognition/attempts', '/qualifications/inside', '/events']) if (!demo.includes(path)) throw new Error(`G12B_DEMO_ROUTE_MISSING:${path}`);
+if (!demo.includes('Authorization: Source $ENTRY_SOURCE') || !demo.includes('Authorization: Source $EXIT_SOURCE')) throw new Error('G12B_SOURCE_AUTH_FORMAT_INVALID');
 if (/curl[^\n]*\/internal|curl[^\n]*reset|curl[^\n]*claim|BEGIN .*PRIVATE KEY/u.test(demo)) throw new Error('G12B_DEMO_SECRET_OR_MAINTENANCE_LEAK');
 process.stdout.write(`${JSON.stringify({ gate: 'G12b', status: 'PASS', paths: actual.size, demo: 'curl', internalRoutes: 0 })}\n`);
