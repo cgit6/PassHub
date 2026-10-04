@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 
@@ -12,6 +12,18 @@ const priorGates = ['g02', 'g03a', 'g03b', 'g03c', 'g04a', 'g04b', 'g05a', 'g05b
 const requiredEvidence = priorGates.map((gate) => join('docs/evidence', gate, 'report.md'));
 const missing = requiredEvidence.filter((file) => !existsSync(join(root, file)) || readFileSync(join(root, file), 'utf8').trim().length === 0);
 if (missing.length) throw new Error(`G12A_EVIDENCE_MISSING:${missing.join(',')}`);
+const statuslessReports = requiredEvidence.filter((file) => !/PASS|通過/u.test(readFileSync(join(root, file), 'utf8')));
+if (statuslessReports.length) throw new Error(`G12A_EVIDENCE_STATUS_MISSING:${statuslessReports.join(',')}`);
+const runtimeStatusFailures = [];
+for (const gate of priorGates) {
+  const directory = resolve(evidenceRoot, gate);
+  if (!existsSync(directory)) continue;
+  for (const file of readdirSync(directory).filter((name) => name.endsWith('.json'))) {
+    const value = JSON.parse(readFileSync(join(directory, file), 'utf8'));
+    if ('status' in value && value.status !== 'PASS') runtimeStatusFailures.push(`${gate}/${file}:${value.status}`);
+  }
+}
+if (runtimeStatusFailures.length) throw new Error(`G12A_RUNTIME_STATUS_INVALID:${runtimeStatusFailures.join(',')}`);
 
 const tracePath = resolve(root, 'docs/requirements-traceability.md');
 const trace = readFileSync(tracePath, 'utf8');
@@ -40,7 +52,7 @@ const hash = createHash('sha256');
 for (const file of ['package.json', 'package-lock.json', 'docs/business-scope.md', 'docs/implementation-plan.md', 'docs/requirements-traceability.md']) {
   hash.update(`${file}\0`).update(readFileSync(resolve(root, file))).update('\0');
 }
-process.stdout.write(`${JSON.stringify({ gate: 'G12a', status: 'PASS', sourceCommit: commit, sourceDirty: false,
+process.stdout.write(`${JSON.stringify({ gate: 'G12a', status: 'PASS', sourceCommit: commit, sourceDirty: false, excludedUserChanges: [],
   requiredEvidence: requiredEvidence.length, requirementIds: unique.length, effectiveRequirementIds: effectiveIds.length,
   excludedRequirementIds: excludedIds.length,
   g11gEvidenceCommit: maintenance.verifiedAtCommit ?? maintenance.sourceCommit,
