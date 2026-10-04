@@ -1,0 +1,20 @@
+{
+  "gate": "G12b",
+  "status": "PASS",
+  "openapiPathTemplates": 8,
+  "businessMethods": 10,
+  "internalRoutesInSpec": 0,
+  "openapiCheck": "PASS",
+  "build": "PASS",
+  "existingHttpEvidence": {
+    "g08aE2e": { "suites": 1, "tests": 12, "status": "PASS" },
+    "g08bE2e": { "suites": 1, "tests": 6, "status": "PASS" },
+    "g09aE2e": { "suites": 1, "tests": 13, "status": "PASS" }
+  },
+  "demo": "docs/demo/g12b-curl.md",
+  "limitations": [
+    "OpenAPI is a static document; no public /openapi.json route is added.",
+    "The curl demo requires a separately started local deployment and injected demo credentials.",
+    "No maintenance, reset, claim, runTicket or internal route is exposed."
+  ]
+}

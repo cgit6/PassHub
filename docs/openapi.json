@@ -1,0 +1,123 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "PassHub Visitor Access API",
+    "version": "1.0.0",
+    "description": "求職展示用的單一地點、單次訪客通行資格與辨識決策 API。Face 輸入代表外部辨識服務已完成的模擬結果；本 API 不處理影像、RTSP 或門鎖。"
+  },
+  "servers": [{ "url": "http://localhost:3000", "description": "Local demo placeholder" }],
+  "tags": [
+    { "name": "Auth" },
+    { "name": "Qualifications" },
+    { "name": "Recognition" },
+    { "name": "Events" }
+  ],
+  "paths": {
+    "/auth/login": {
+      "post": {
+        "tags": ["Auth"], "operationId": "login", "security": [],
+        "requestBody": { "$ref": "#/components/requestBodies/Login" },
+        "responses": { "200": { "$ref": "#/components/responses/Json" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/qualifications": {
+      "post": {
+        "tags": ["Qualifications"], "operationId": "createQualification", "security": [{ "humanBearer": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/DatasetEpoch" }],
+        "requestBody": { "$ref": "#/components/requestBodies/QualificationCreate" },
+        "responses": { "201": { "$ref": "#/components/responses/Json" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" }, "503": { "$ref": "#/components/responses/Error" } }
+      },
+      "get": {
+        "tags": ["Qualifications"], "operationId": "listQualifications", "security": [{ "humanBearer": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/Limit" }, { "$ref": "#/components/parameters/Cursor" }],
+        "responses": { "200": { "$ref": "#/components/responses/Json" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" }, "503": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/qualifications/inside": {
+      "get": {
+        "tags": ["Qualifications"], "operationId": "listInsideQualifications", "security": [{ "humanBearer": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/Limit" }, { "$ref": "#/components/parameters/Cursor" }],
+        "responses": { "200": { "$ref": "#/components/responses/Json" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" }, "503": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/qualifications/{qualificationId}": {
+      "parameters": [{ "$ref": "#/components/parameters/QualificationId" }],
+      "get": {
+        "tags": ["Qualifications"], "operationId": "getQualification", "security": [{ "humanBearer": [] }],
+        "responses": { "200": { "$ref": "#/components/responses/Json" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" }, "503": { "$ref": "#/components/responses/Error" } }
+      },
+      "patch": {
+        "tags": ["Qualifications"], "operationId": "updateQualification", "security": [{ "humanBearer": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/DatasetEpoch" }],
+        "requestBody": { "$ref": "#/components/requestBodies/QualificationUpdate" },
+        "responses": { "200": { "$ref": "#/components/responses/Json" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" }, "503": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/qualifications/{qualificationId}/revoke": {
+      "post": {
+        "tags": ["Qualifications"], "operationId": "revokeQualification", "security": [{ "humanBearer": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/QualificationId" }, { "$ref": "#/components/parameters/DatasetEpoch" }],
+        "requestBody": { "$ref": "#/components/requestBodies/Revoke" },
+        "responses": { "200": { "$ref": "#/components/responses/Json" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" }, "503": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/recognition/attempts": {
+      "post": {
+        "tags": ["Recognition"], "operationId": "submitRecognitionAttempt", "security": [{ "sourceCredential": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/DatasetEpoch" }, { "$ref": "#/components/parameters/RetryMode" }],
+        "requestBody": { "$ref": "#/components/requestBodies/Recognition" },
+        "responses": { "200": { "$ref": "#/components/responses/Json" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" }, "429": { "$ref": "#/components/responses/Error" }, "503": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/events": {
+      "get": {
+        "tags": ["Events"], "operationId": "listEvents", "security": [{ "humanBearer": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/Limit" }, { "$ref": "#/components/parameters/Cursor" }, { "$ref": "#/components/parameters/QualificationFilter" }, { "$ref": "#/components/parameters/OutcomeFilter" }, { "$ref": "#/components/parameters/ReasonFilter" }],
+        "responses": { "200": { "$ref": "#/components/responses/Json" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" }, "503": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/events/{eventId}": {
+      "get": {
+        "tags": ["Events"], "operationId": "getEvent", "security": [{ "humanBearer": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/EventId" }],
+        "responses": { "200": { "$ref": "#/components/responses/Json" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" }, "503": { "$ref": "#/components/responses/Error" } }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "humanBearer": { "type": "http", "scheme": "bearer", "bearerFormat": "JWT", "description": "預置 Operator 或 Viewer 的人員 token。" },
+      "sourceCredential": { "type": "apiKey", "in": "header", "name": "Authorization", "description": "Source alias.secret；不可與人員 Bearer token 混用。" }
+    },
+    "parameters": {
+      "DatasetEpoch": { "name": "PassHub-Dataset-Epoch", "in": "header", "required": true, "schema": { "type": "string", "format": "uuid" } },
+      "RetryMode": { "name": "PassHub-Retry-Mode", "in": "header", "required": false, "schema": { "type": "string", "enum": ["existing-only"] } },
+      "Limit": { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 } },
+      "Cursor": { "name": "cursor", "in": "query", "required": false, "schema": { "type": "string", "maxLength": 512 } },
+      "QualificationId": { "name": "qualificationId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+      "EventId": { "name": "eventId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+      "QualificationFilter": { "name": "qualificationId", "in": "query", "required": false, "schema": { "type": "string", "format": "uuid" } },
+      "OutcomeFilter": { "name": "outcome", "in": "query", "required": false, "schema": { "type": "string", "enum": ["ACCEPTED", "REJECTED"] } },
+      "ReasonFilter": { "name": "reasonCode", "in": "query", "required": false, "schema": { "type": "string" } }
+    },
+    "requestBodies": {
+      "Login": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["username", "password"], "properties": { "username": { "type": "string", "minLength": 1, "maxLength": 128 }, "password": { "type": "string", "minLength": 1, "maxLength": 128, "format": "password" } } } } } },
+      "QualificationCreate": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/QualificationCreate" } } } },
+      "QualificationUpdate": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/QualificationUpdate" } } } },
+      "Revoke": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["reason"], "properties": { "reason": { "type": "string", "minLength": 1, "maxLength": 512 } } } } } },
+      "Recognition": { "required": true, "content": { "application/json": { "schema": { "oneOf": [{ "$ref": "#/components/schemas/QrRecognition" }, { "$ref": "#/components/schemas/FaceRecognition" }, { "$ref": "#/components/schemas/UnknownRecognition" }], "discriminator": { "propertyName": "kind" } } } } }
+    },
+    "schemas": {
+      "FaceBinding": { "type": "object", "additionalProperties": false, "required": ["provider", "externalSubjectId"], "properties": { "provider": { "type": "string", "minLength": 1, "maxLength": 64 }, "externalSubjectId": { "type": "string", "minLength": 1, "maxLength": 256 } } },
+      "QualificationCreate": { "type": "object", "additionalProperties": false, "required": ["displayName", "validFrom", "validUntil", "face"], "properties": { "displayName": { "type": "string", "minLength": 1, "maxLength": 128 }, "validFrom": { "type": "string", "format": "date-time" }, "validUntil": { "type": "string", "format": "date-time" }, "face": { "oneOf": [{ "$ref": "#/components/schemas/FaceBinding" }, { "type": "null" }] } } },
+      "QualificationUpdate": { "type": "object", "additionalProperties": false, "minProperties": 1, "properties": { "displayName": { "type": "string", "minLength": 1, "maxLength": 128 }, "validFrom": { "type": "string", "format": "date-time" }, "validUntil": { "type": "string", "format": "date-time" }, "face": { "oneOf": [{ "$ref": "#/components/schemas/FaceBinding" }, { "type": "null" }] } } },
+      "QrRecognition": { "type": "object", "additionalProperties": false, "required": ["externalEventId", "kind", "token"], "properties": { "externalEventId": { "type": "string", "minLength": 1, "maxLength": 128 }, "kind": { "const": "QR_SCANNED" }, "token": { "type": "string" } } },
+      "FaceRecognition": { "type": "object", "additionalProperties": false, "required": ["externalEventId", "kind", "provider", "externalSubjectId"], "properties": { "externalEventId": { "type": "string", "minLength": 1, "maxLength": 128 }, "kind": { "const": "FACE_MATCHED" }, "provider": { "type": "string" }, "externalSubjectId": { "type": "string" } } },
+      "UnknownRecognition": { "type": "object", "additionalProperties": false, "required": ["externalEventId", "kind"], "properties": { "externalEventId": { "type": "string", "minLength": 1, "maxLength": 128 }, "kind": { "const": "FACE_UNKNOWN" } } }
+    },
+    "responses": {
+      "Json": { "description": "Safe JSON projection; QR token is returned only by successful create.", "content": { "application/json": { "schema": { "type": "object" } } } },
+      "Error": { "description": "Safe error envelope without request body, credentials, token or full subject.", "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["code"], "properties": { "code": { "type": "string" }, "message": { "type": "string" } } } } } }
+    }
+  }
+}
