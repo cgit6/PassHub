@@ -40,6 +40,14 @@ jobs:
       - name: Unit suite
         run: npm run test:unit
 
+      - name: HTTP e2e suites
+        run: |
+          npm run test:g07a:e2e
+          npm run test:g07b:e2e
+          npm run test:g08a:e2e
+          npm run test:g08b:e2e
+          npm run test:g09a:e2e
+
       - name: Current boundary checks
         run: |
           node scripts/check-g03c-boundary.mjs
