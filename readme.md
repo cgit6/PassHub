@@ -1,64 +1,37 @@
-# Visitor Management System (VMS)
+# PassHub
 
-A full-stack web application designed to manage visitor entries, appointments, and security check-ins for an organization. The system uses QR code scanning and PDF pass generation to streamline the visitor registration process.
+PassHub 是一個以 Node.js／TypeScript 實作的單一邏輯地點訪客通行資格與辨識決策 API，使用 MongoDB 官方 driver。它接收 QR token 或外部辨識服務傳來的模擬 Face 結果，由後端統一完成資格映射、ENTRY／EXIT 決策、Presence 狀態與事件稽核。
 
-## Features
+## 技術重點
 
-- User authentication and role-based access control (RBAC).
-- Visitor registration (Internal by employees or Public via registration page).
-- Appointment scheduling and approval workflow.
-- Automatic PDF pass generation with embedded QR codes.
-- Email and SMS notifications for issued passes.
-- Real-time QR code scanning for visitor check-in and check-out.
-- Admin dashboard with system-wide statistics and activity logs.
-- Security lookup tool to find visitor passes by email.
+- Node.js 24、TypeScript、原生 HTTP composition、MongoDB 8 replica set
+- Operator／Viewer 人員登入與個別 ENTRY／EXIT Source 認證
+- QR／Face 替代輸入、冪等事件、原子 Presence 與 Event 保存
+- OpenAPI、Jest、Docker Compose、NGINX HTTPS 與 GitHub Actions CI
 
-## Tech Stack
+## 本機 Docker Demo
 
-- Frontend: React.js, Tailwind CSS, React Router, Axios.
-- Backend: Node.js, Express.js.
-- Database: MongoDB (Mongoose).
-- Storage: Cloudinary (for PDF and Photo storage).
-- Utilities: PDFKit (PDF generation), QRCode (QR generation), Nodemailer (Email), Twilio (SMS).
+```bash
+npm ci
+npm run demo:g12f:docker
+```
 
-## User Roles
+完整說明見 [`docs/demo/g12f-docker.md`](docs/demo/g12f-docker.md)。Demo 會自行建立暫存 secret、TLS、Mongo seed 與一次性 runtime ticket，執行「建立 → QR ENTRY → INSIDE → 模擬 Face EXIT → EXITED／事件查詢」，最後清除所有 project-scoped Docker 資源。
 
-- Admin: Full system access, user management, system logs, and statistics.
-- Employee: Register visitors, create and approve appointments.
-- Security: Issue passes for approved appointments, scan QR codes, and lookup visitor passes.
-- Visitor: Register themselves, request appointments, and download their passes.
+這是求職展示，不是正式門禁產品：不處理 RTSP、影像、人臉辨識演算法、相機或門鎖，也不提供正式個資、可用性或資料隔離保證。請只使用虛構資料。
 
-## Installation
+## API 文件
 
-### Prerequisites
-- Node.js installed.
-- MongoDB database (local or Atlas).
-- Cloudinary account for file storage.
+- [OpenAPI](docs/openapi.json)
+- [curl API 操作範例](docs/demo/g12b-curl.md)
+- [Docker Demo 操作與限制](docs/demo/g12f-docker.md)
 
-### Setup Backend
-1. Navigate to the backend folder: `cd backend`
-2. Install dependencies: `npm install`
-3. Create a `.env` file and add the following:
-   - PORT=4000
-   - MONGO_URI=your_mongodb_connection_string
-   - JWT_SECRET=your_secret_key
-   - CLOUDINARY_CLOUD_NAME=your_name
-   - CLOUDINARY_API_KEY=your_key
-   - CLOUDINARY_API_SECRET=your_secret
-   - EMAIL_USER=your_email
-   - EMAIL_PASS=your_email_password
-   - TWILIO_SID=your_sid
-   - TWILIO_AUTH_TOKEN=your_token
-   - TWILIO_PHONE=your_twilio_number
-4. Start the server: `npm start`
+## 其他驗證
 
-### Setup Frontend
-1. Navigate to the frontend folder: `cd frontend`
-2. Install dependencies: `npm install`
-3. Create a `.env` file and add:
-   - VITE_API_URL=http://localhost:4000/api
-4. Start the development server: `npm run dev`
-
-## Usage
-- Access the application at `http://localhost:5173`.
-- The first user should be created directly in the database with the role "admin" to start managing the system.
+```bash
+npm run build
+npm run test:unit
+npm run check:g12b:openapi
+npm run check:g12c:requirements
+npm run check:g12e:workflow
+```
