@@ -1,11 +1,11 @@
 {
   "gate": "G12e",
-  "status": "PARTIAL",
-  "sourceCommit": "cec5d29c447ff49a97bca9457bdbf7c8d89f3187",
+  "status": "PASS",
+  "sourceCommit": "c1bb0871c78d2b258f64bdfbfe1005025f6e6e8a",
   "sourceDirty": false,
   "workflowChecker": "PASS",
   "requiredChecks": 22,
-  "remoteRun": {"id":37188396914,"status":"FAIL","failedTest":"g10a-runtime-control-socket-listener foreign-UID","passedSuites":80,"passedTests":1289,"failedTests":1},
+  "remoteRun": {"id":37190525677,"status":"SUCCESS","duration":"2m50s","unitSuites":81,"unitTests":1290,"httpE2eTests":69},
   "localEquivalent": {
     "build": "PASS",
     "httpE2e": {"g07a": 41,"g07b": 7,"g08a": 12,"g08b": 6,"g09a": 13,"total": 69},
@@ -13,5 +13,5 @@
     "openapi": "PASS",
     "requirements": "PASS"
   },
-  "blocker": "Fix committed locally; a new remote run is required before G12e can pass"
+  "blocker": null
 }

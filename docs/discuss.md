@@ -3552,3 +3552,9 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - 日期：2026-10-04；狀態：GitHub Actions run `37188396914` 真實執行，但 G12e 維持 `PARTIAL`。Build、clean install、Node／npm pin 通過；unit 為 80 suites／1289 tests PASS、1 test FAIL。
 - 根因：`g10a-runtime-control-socket-listener` 測試固定用 Docker numeric UID 1001，GitHub hosted runner 的測試 process 也正好是 UID 1001，因此產生的 socket 並非 foreign UID。這是測試環境假設錯誤，不是 production code 失敗。
 - 修正：測試現在讀取 `process.getuid()`，若目前為 1001 則使用 1002，否則使用 1001，保證 nested Docker socket owner 與測試 process 不同。targeted 6 tests 本地 PASS；修正 commit 需再次 push 取得遠端全綠 run。
+
+### D205｜G12e GitHub Actions 遠端驗證通過
+
+- 日期：2026-10-04；狀態：PM、架構師與測試員對成功遠端 run、修正後測試與 workflow scope 各自覆核後 PASS。G12e STOP 解除，目前停止於 G12e，下一合法 gate 為 G12f。
+- GitHub Actions run `37190525677`（head `c1bb0871c78d2b258f64bdfbfe1005025f6e6e8a`）在 `ubuntu-24.04` 成功，耗時約 2 分 50 秒。Clean install、toolchain assertion、build、unit 81 suites／1290 tests、HTTP e2e 69 tests、9 組現行 boundary、OpenAPI、G12c requirements 與 diff check 全部 PASS。
+- 首次 run `37188396914` 的 foreign-UID 失敗已由動態 UID 修正；修正版遠端結果已驗證。Workflow 仍不宣稱 Mongo integration、fault、maintenance、Docker Demo 或 public HTTPS。

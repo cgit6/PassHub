@@ -1,6 +1,6 @@
 # PassHub 有效要求與實作追蹤矩陣
 
-規劃狀態：**D160封口；D161完成舊碼清除；D166改定正式Jest runner；G02–G11g、G12a–G12d已發行各自限定 evidence，目前停止於 G12d；D187 將本階段拆為 G11a–G11g，G12再拆為G12a–G12h，下一合法 gate 為 G12e**。工程矩陣仍須逐項以直接證據更新，任何限定 gate 不自動代表完整 v1。整理日期：2026-10-04。
+規劃狀態：**D160封口；D161完成舊碼清除；D166改定正式Jest runner；G02–G11g、G12a–G12e已發行各自限定 evidence，目前停止於 G12e；D187 將本階段拆為 G11a–G11g，G12再拆為G12a–G12h，下一合法 gate 為 G12f**。工程矩陣仍須逐項以直接證據更新，任何限定 gate 不自動代表完整 v1。整理日期：2026-10-04。
 
 這份文件回答：「討論過的要求，實作時如何避免漏掉？」它不是已完成成果，也不授權開始重寫程式。
 
@@ -299,7 +299,7 @@
 | P14 | D154–D155、D187單API/單成員replset/NGINX；systemd03臺北Persistent=false、host lock/marker、API與Mongo確停及恢復、七collection精確清理／runTicket分bootstrap-ready／failclosed。 | A18、M01、M05–M10；G11a–G11g |
 | P15 | D156未被D166取代的命令／期限／clean sourceCommit規則；D166正式Jest runner與其證據失效／重驗範圍；D157原25STOP經D187拆分G11後固定為31STOP，maintenance600/1800不變。文件封口G00，完整release136證據G12。 | E01–E09；G00/G01a–G12 |
 
-實作方案記錄逐關 STOP、命令 dictionary 與證據位置。G01a／G01b、G02–G11g、G12a–G12d 已各自完成限定驗收；目前停止於 G12d。完整 release、CI、Demo／public HTTPS 與逐項 G12 audit 仍未驗證；G12c限定證據只證帳本結構與邊界稽核，G12d限定證據只證 clean install／完整 unit 重跑，不自動證明完整 v1。
+實作方案記錄逐關 STOP、命令 dictionary 與證據位置。G01a／G01b、G02–G11g、G12a–G12e 已各自完成限定驗收；目前停止於 G12e。完整 release、Demo／public HTTPS 與逐項 G12 audit 仍未驗證；G12c限定證據只證帳本結構與邊界稽核，G12d限定證據只證 clean install／完整 unit 重跑，G12e限定證據只證遠端 CI pipeline，不自動證明完整 v1。
 
 ## 7. 實作時的證據帳本與反向覆核
 
@@ -317,7 +317,7 @@
 4. 獨立覆核者直接讀原始 D 段與測試，反查矩陣是否漏要求或誤採舊提案；不只閱讀實作者摘要。
 5. 交付差異與證據後停止。未達條件不進下一關，不因時間壓力靜默縮減要求；必要變更先與使用者確認。
 
-**當前停止點：G12d clean install／完整 unit 重跑 evidence 已通過；下一合法 gate 為 G12e。矩陣 V／U 只可在直接證據與逐項覆核後更新；G12c／G12d 的 PASS 均不把 136 項要求升格為完成。**
+**當前停止點：G12e CI pipeline evidence 已通過；下一合法 gate 為 G12f。矩陣 V／U 只可在直接證據與逐項覆核後更新；G12c／G12d／G12e 的 PASS 均不把 136 項要求升格為完成。**
 
 ## 8. 追蹤矩陣建立時的文件覆核紀錄（歷史）
 
