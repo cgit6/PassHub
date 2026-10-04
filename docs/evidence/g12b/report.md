@@ -14,7 +14,7 @@ npm run test:g09a:e2e
 
 ## 驗證結果
 
-- 最新 clean detached run 的 source commit 為 `383d758a3cae14bd6c688ce3bf6a660479a55c8c`，`sourceDirty=false`。
+- release manifest source commit 為 `5e60e40b9d36ac94c9e50e6f02d1fdb0f99f39e1`，`sourceDirty=false`；HTTP e2e 實際執行於 `383d758a3cae14bd6c688ce3bf6a660479a55c8c`。兩者之間只有 G12b 文件／evidence 修正，沒有 production code 變更。
 - [`docs/openapi.json`](../../openapi.json) 描述 D150 的 10 條業務 method、8 個 path template。
 - OpenAPI 與 curl 文件一致性檢查通過；spec 沒有 `/internal/*`、reset、claim 或 runTicket route。
 - G08a HTTP e2e：1 suite／12 tests PASS。

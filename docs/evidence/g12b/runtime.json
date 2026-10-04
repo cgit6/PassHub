@@ -1,8 +1,9 @@
 {
   "gate": "G12b",
   "status": "PASS",
-  "sourceCommit": "383d758a3cae14bd6c688ce3bf6a660479a55c8c",
+  "sourceCommit": "5e60e40b9d36ac94c9e50e6f02d1fdb0f99f39e1",
   "sourceDirty": false,
+  "httpEvidenceRunCommit": "383d758a3cae14bd6c688ce3bf6a660479a55c8c",
   "openapiPathTemplates": 8,
   "businessMethods": 10,
   "internalRoutesInSpec": 0,
