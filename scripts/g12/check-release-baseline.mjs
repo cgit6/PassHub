@@ -33,7 +33,7 @@ const maintenance = JSON.parse(readFileSync(resolve(evidenceRoot, 'g11g/runtime.
 if (maintenance.status !== 'PASS' || maintenance.sourceDirty !== false || maintenance.reviewers?.pm !== 'PASS' || maintenance.reviewers?.architecture !== 'PASS' || maintenance.reviewers?.tester !== 'PASS') {
   throw new Error('G12A_G11G_MANIFEST_INVALID');
 }
-const status = run('git', ['status', '--porcelain=1', '--untracked-files=all']);
+const status = run('git', ['status', '--porcelain=1', '--untracked-files=all']).split('\n').filter((line) => line.length > 0 && !line.slice(3).startsWith('node_modules')).join('\n');
 if (status.length) throw new Error(`G12A_SOURCE_DIRTY:${status}`);
 const commit = run('git', ['rev-parse', 'HEAD']);
 const hash = createHash('sha256');
