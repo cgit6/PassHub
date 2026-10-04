@@ -36,9 +36,11 @@ async function wrongOwnerSocket(directory: string, socketPath: string): Promise<
   // after restoring the host-owned 0700 directory it is safe to exercise the
   // listener's real lstat owner branch without mocks.
   await chmod(directory, 0o777);
+  const currentUid = process.getuid?.() ?? 1000;
+  const foreignUid = currentUid === 1001 ? 1002 : 1001;
   try {
     await execFileAsync('docker', [
-      'run', '--rm', '--user', '1001:1001', '-v', `${directory}:/control`,
+      'run', '--rm', '--user', `${foreignUid}:${foreignUid}`, '-v', `${directory}:/control`,
       'node:24.21.0-bookworm-slim', 'node', '-e',
       "require('node:net').createServer().listen('/control/runtime-control.sock',()=>process.exit(0))",
     ]);

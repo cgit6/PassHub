@@ -3546,3 +3546,9 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - 新增 `.github/workflows/ci.yml` 與 `npm run check:g12e:workflow`。workflow 固定 `ubuntu-24.04`、`.nvmrc`、`npm ci`、build、完整 unit、G07a／G07b／G08a／G08b／G09a HTTP e2e、現行 boundary、OpenAPI、G12c requirements 與 diff check。
 - 本地等價命令通過：workflow checker 22 checks、build、HTTP e2e 合計 69 tests、boundary／OpenAPI／requirements checks。checker 明確輸出 `remoteRun: NOT_EXECUTED`。
 - 阻塞條件：尚無 GitHub hosted runner 的 run ID、log 與 artifact。必須在取得遠端成功 run 後，才能把 E08 升級並進入 G12f；不擅自 push 或把本地 PASS 當 CI PASS。
+
+### D204｜G12e 首次遠端 run 暴露 foreign-UID 測試假設
+
+- 日期：2026-10-04；狀態：GitHub Actions run `37188396914` 真實執行，但 G12e 維持 `PARTIAL`。Build、clean install、Node／npm pin 通過；unit 為 80 suites／1289 tests PASS、1 test FAIL。
+- 根因：`g10a-runtime-control-socket-listener` 測試固定用 Docker numeric UID 1001，GitHub hosted runner 的測試 process 也正好是 UID 1001，因此產生的 socket 並非 foreign UID。這是測試環境假設錯誤，不是 production code 失敗。
+- 修正：測試現在讀取 `process.getuid()`，若目前為 1001 則使用 1002，否則使用 1001，保證 nested Docker socket owner 與測試 process 不同。targeted 6 tests 本地 PASS；修正 commit 需再次 push 取得遠端全綠 run。

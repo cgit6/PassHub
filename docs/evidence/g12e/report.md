@@ -23,4 +23,4 @@ Workflow 目前包含：`npm ci`、toolchain assertion、build、完整 unit、5
 
 ## Remaining blocker
 
-尚無 GitHub Actions run ID、hosted runner log、實際 CI commit／artifact。需要將 workflow commit 推到遠端並取得成功 run；在此之前不得把 G12e 標為 PASS。Integration／Mongo、fault、maintenance 也不由本地靜態 workflow checker 冒充已完成。
+第一次 GitHub Actions run `37188396914` 已實際執行，但 unit suite 因測試固定使用 UID 1001，而 hosted runner process 也是 UID 1001，foreign-UID 測試失敗（80 suites／1289 tests PASS，1 test FAIL）。已修正測試改為動態選擇不同於目前 process UID 的 numeric UID；修正後需再次 push 並取得成功 run。Integration／Mongo、fault、maintenance 也不由本地靜態 workflow checker 冒充已完成。

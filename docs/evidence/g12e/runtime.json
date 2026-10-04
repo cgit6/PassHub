@@ -5,7 +5,7 @@
   "sourceDirty": false,
   "workflowChecker": "PASS",
   "requiredChecks": 22,
-  "remoteRun": "NOT_EXECUTED",
+  "remoteRun": {"id":37188396914,"status":"FAIL","failedTest":"g10a-runtime-control-socket-listener foreign-UID","passedSuites":80,"passedTests":1289,"failedTests":1},
   "localEquivalent": {
     "build": "PASS",
     "httpE2e": {"g07a": 41,"g07b": 7,"g08a": 12,"g08b": 6,"g09a": 13,"total": 69},
@@ -13,5 +13,5 @@
     "openapi": "PASS",
     "requirements": "PASS"
   },
-  "blocker": "GitHub hosted runner evidence and run ID require remote push/dispatch"
+  "blocker": "Fix committed locally; a new remote run is required before G12e can pass"
 }
