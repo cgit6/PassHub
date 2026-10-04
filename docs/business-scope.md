@@ -1,6 +1,6 @@
 # PassHub v1 業務邊界規格
 
-- 文件狀態：業務與實作規劃已收斂；G02–G11g、G12a–G12c已有各自限定工程證據，目前停止於G12c；D187將部署／reset生命期拆成G11a–G11g，G12再拆成G12a–G12h，下一合法gate為G12d，完整v1工程驗證仍未完成
+- 文件狀態：業務與實作規劃已收斂；G02–G11g、G12a–G12d已有各自限定工程證據，目前停止於G12d；D187將部署／reset生命期拆成G11a–G11g，G12再拆成G12a–G12h，下一合法gate為G12e，完整v1工程驗證仍未完成
 - 更新日期：2026-10-04
 - 適用版本：PassHub v1
 - 文件目的：以 D01–D35 為業務底稿，同步至 D187 的有效修正；實作細節及逐關驗收集中在 implementation-plan.md，不把官方查證、歷史候選或待做測試當成工程成果
@@ -796,7 +796,7 @@ G09b只量測既有production Mongo query adapter，不修改業務API、查詢�
 
 P01–P15採用決策與逐關驗收見[實作方案](implementation-plan.md)及追蹤矩陣。剩餘不是讓實作者自由選架構：Face唯一索引替換微型真測、固定工具相容性及fault映像digest是明確前置gate；未過便停止回討論，不靜默換策。外部主機／domain／TLS需環境提供。D161已取代舊碼私密備份要求，不再建立legacy備份。
 
-矩陣的 V／U 狀態只可依直接證據逐項更新；G11a 的限定證據只證部署拓撲基線，G11b 的限定證據只證 persistent claim、one-use ticket、bootstrap／ready 與 production process 接線，G11c 的限定證據只證 maintenance marker、private drain、API／Mongo 隔離與 no-late observation，G11d 的限定證據只證七 collection transaction reset／canonical seed／新 epoch與未管理資料不變，G11e 的限定證據只證 host lock、reset-result handoff、ticket signing與外部 timer，G11f 的限定證據只證 canonical fail-closed policy、同 Mongo partial handoff／受控 rerun與真實 G11e lock contention；G11f 的部分 fault matrix 是 policy-only。G11g 只整合上述 evidence、秘密掃描、cleanup與指紋，G12a–G12c再逐步核對 release baseline、公開契約與需求／邊界帳本，不自動代表公開 HTTPS 或完整 v1 已完成。目前停止於 G12c，下一合法 gate 是 G12d。
+矩陣的 V／U 狀態只可依直接證據逐項更新；G11a 的限定證據只證部署拓撲基線，G11b 的限定證據只證 persistent claim、one-use ticket、bootstrap／ready 與 production process 接線，G11c 的限定證據只證 maintenance marker、private drain、API／Mongo 隔離與 no-late observation，G11d 的限定證據只證七 collection transaction reset／canonical seed／新 epoch與未管理資料不變，G11e 的限定證據只證 host lock、reset-result handoff、ticket signing與外部 timer，G11f 的限定證據只證 canonical fail-closed policy、同 Mongo partial handoff／受控 rerun與真實 G11e lock contention；G11f 的部分 fault matrix 是 policy-only。G11g 只整合上述 evidence、秘密掃描、cleanup與指紋，G12a–G12d再逐步核對 release baseline、公開契約、需求／邊界帳本與 clean install，不自動代表公開 HTTPS 或完整 v1 已完成。目前停止於 G12d，下一合法 gate 是 G12e。
 
 ## 決策來源
 

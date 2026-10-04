@@ -3532,3 +3532,10 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - 正式命令：`npm run check:g12c:requirements`、`npm run build`、`npm run check:g12b:openapi`、`git diff --check` 均通過。需求帳本為 125 個正式 ID＋11 個排除 ID＝136，§10.1 映射 136/136；逐列分類為 4 `DIRECT_EVIDENCE`、75 `PARTIAL_EVIDENCE`、46 `STRUCTURAL_ONLY`、11 `EXCLUDED`。四個 direct evidence 路徑由工具確認實際存在。
 - 現行邊界檢查 G03c、G06a、G06b、G08a、G08b、G09a、G10、G11a、G11e 全部 PASS；G07a／G07b 舊檢查器只因 G11 新增 private control socket／production lifecycle 產生預期 topology failure，已用精確 marker、exit code 與 script SHA-256 標記 `STALE_LEGACY_TOPOLOGY`，不冒充本關通過。
 - 限制：G12c 只證帳本結構、逐列分類、現行邊界與文件狀態一致，不把 136 項要求升格為完成；G11b–G11g 沿用既有各自 evidence，未在本關冒充重新執行。下一關 G12d 才處理 clean install／完整測試重跑。
+
+### D202｜G12d clean install／完整 unit 重跑限定 gate 通過
+
+- 日期：2026-10-04；狀態：PM、架構師與測試員對 clean detached worktree、固定 toolchain、完整 unit suite、cleanup 與限制各自覆核後 PASS。G12d STOP 解除，目前停止於 G12d，下一合法 gate 為 G12e。
+- 正式 run 使用 source `90aee0d8b5768e634d110f238e45fc8f89ed539e`、`node:24.21.0-bookworm-slim`（Node v24.21.0／npm 11.19.0），乾淨 `npm ci`、`npm run build`、`npm run test:unit` 全部通過；完整 Jest 為 81 suites／1290 tests。另重跑 G03c、G06a、G06b、G08a、G08b、G09a、G10、G11a、G11e boundary、G12b OpenAPI 與 G12c requirements checks，均 PASS。
+- 中間兩次 container run 因缺 Docker CLI 或以 root 造成權限測試失真，均不列證據；最後 run 以非 root、Docker CLI／socket及同路徑 host `/tmp`掛載，foreign-UID與umask案例全綠。clean worktree 測試後已移除，主工作樹保持 clean。
+- 限制：本關只證 lockfile 安裝、TypeScript build、完整 unit suite 與既有靜態檢查可重跑，不把它升格為 Mongo integration、CI、Docker Demo、公開 HTTPS 或 136 項需求完成。下一關 G12e 處理 CI pipeline。
