@@ -3525,3 +3525,10 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - 正式證據：`docs/evidence/g12b/report.md` 與 `runtime.json`。OpenAPI 有 8 個 path template／10 個 D150 業務 method，沒有 `/internal/*`、reset、claim、runTicket 或其他維護介面；Source 認證範例固定使用 `Authorization: Source $ENTRY_SOURCE`／`$EXIT_SOURCE`。
 - 驗證：`npm run check:g12b:openapi`、`npm run build`、G08a e2e 12/12、G08b e2e 6/6、G09a e2e 13/13 全部 PASS。release manifest source 為 `5e60e40`，HTTP e2e 實際 run 為 `383d758`，兩者差異只有文件／evidence 修正，沒有 production code 變更。
 - 邊界：本關只建立靜態 OpenAPI 與 curl Demo 文件，不新增 runtime `/openapi.json` route，不宣稱 CI、Docker 一鍵 Demo、公開 HTTPS、完整 v1或真實影像／RTSP；下一關 G12c 進行 boundary 與 136 項需求逐項稽核。
+
+### D201｜G12c boundary／requirements ledger audit 限定 gate 通過
+
+- 日期：2026-10-04；狀態：PM、架構師與測試員對修正版檢查器、文件一致性、邊界命令與 artifact provenance 覆核後 PASS。G12c STOP 解除，目前停止於 G12c，下一合法 gate 為 G12d。
+- 正式命令：`npm run check:g12c:requirements`、`npm run build`、`npm run check:g12b:openapi`、`git diff --check` 均通過。需求帳本為 125 個正式 ID＋11 個排除 ID＝136，§10.1 映射 136/136；逐列分類為 4 `DIRECT_EVIDENCE`、75 `PARTIAL_EVIDENCE`、46 `STRUCTURAL_ONLY`、11 `EXCLUDED`。四個 direct evidence 路徑由工具確認實際存在。
+- 現行邊界檢查 G03c、G06a、G06b、G08a、G08b、G09a、G10、G11a、G11e 全部 PASS；G07a／G07b 舊檢查器只因 G11 新增 private control socket／production lifecycle 產生預期 topology failure，已用精確 marker、exit code 與 script SHA-256 標記 `STALE_LEGACY_TOPOLOGY`，不冒充本關通過。
+- 限制：G12c 只證帳本結構、逐列分類、現行邊界與文件狀態一致，不把 136 項要求升格為完成；G11b–G11g 沿用既有各自 evidence，未在本關冒充重新執行。下一關 G12d 才處理 clean install／完整測試重跑。

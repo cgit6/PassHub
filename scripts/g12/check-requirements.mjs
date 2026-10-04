@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const root = process.cwd();
@@ -40,12 +40,14 @@ const audit = rows.map(([, id, rest]) => {
   const status = /^(U|I|V|R)(?:：|:|\s|$)/u.exec(evidence)?.[1] ?? 'U';
   const hasAcceptanceScenario = rest.includes(`T-${id}`);
   const hasGateMapping = mapped.some((entry) => entry.id === id);
-  const hasArtifact = /docs\/evidence\/[A-Za-z0-9._/-]+/u.test(evidence);
+  const artifactPaths = [...evidence.matchAll(/docs\/evidence\/[A-Za-z0-9._/-]+/gu)].map(([path]) => path.replace(/[)`.,；。]+$/u, ''));
+  const artifactExists = artifactPaths.length > 0 && artifactPaths.every((path) => existsSync(resolve(root, path)));
+  const hasArtifact = artifactExists;
   const hasResult = /\b(?:PASS|通過|已驗|驗證|直接驗|未驗|未閉合|U：|V：|R：|I：)/u.test(evidence);
   let classification = 'STRUCTURAL_ONLY';
   if (hasResult && (status === 'V' || status === 'R') && hasArtifact) classification = 'DIRECT_EVIDENCE';
   else if (hasResult || status !== 'U') classification = 'PARTIAL_EVIDENCE';
-  return { id, status, classification, hasAcceptanceScenario, hasGateMapping, hasArtifact, hasResult };
+  return { id, status, classification, hasAcceptanceScenario, hasGateMapping, artifactPaths, artifactExists, hasArtifact, hasResult };
 });
 if (audit.some((entry) => !entry.hasAcceptanceScenario || !entry.hasGateMapping)) {
   throw new Error(`G12C_AUDIT_ROW_INVALID:${audit.filter((entry) => !entry.hasAcceptanceScenario || !entry.hasGateMapping).map((entry) => entry.id).join('|')}`);

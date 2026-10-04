@@ -1,0 +1,39 @@
+{
+  "gate": "G12c",
+  "status": "PASS",
+  "sourceCommit": "1e48c90bf8ef49b3e84eee334f8fec455ab1cafe",
+  "sourceDirty": false,
+  "formalRequirements": 125,
+  "excludedRequirements": 11,
+  "totalRequirements": 136,
+  "traceabilityMappings": 136,
+  "auditSummary": {
+    "directEvidence": 4,
+    "partialEvidence": 75,
+    "structuralOnly": 46,
+    "excluded": 11
+  },
+  "directEvidenceArtifacts": [
+    "docs/evidence/g08a/report.md",
+    "docs/evidence/g08b/report.md",
+    "docs/evidence/g09a/report.md",
+    "docs/evidence/g09b/report.md"
+  ],
+  "boundaryChecks": [
+    {"name":"g03c","script":"scripts/check-g03c-boundary.mjs","sha256":"eec7fc28685b768d6ac316ac54b60899f41baa5855555d9e1dceb897121ef3de","exitCode":0,"output":"G03c import graph selected=39 edges=93 forbidden=0 directRawComparison=0"},
+    {"name":"g06a","script":"scripts/check-g06a-boundary.mjs","sha256":"da4f62a370a477108c91db8e36c37e30bd29e06cd46c584f7abda19b34e2f647","exitCode":0,"output":"G06a boundary files=16 edges=28 forbidden=0"},
+    {"name":"g06b","script":"scripts/check-g06b-boundary.mjs","sha256":"ceb1d87ac1d00466cfcca75db8a000df447968d57bc5c5b38e00e2933aae7dc9","exitCode":0,"output":"G06b boundary files=59 edges=130 forbidden=0"},
+    {"name":"g08a","script":"scripts/check-g08a-boundary.mjs","sha256":"9347830b972ab00be55d130e532478c7fa64691fe53bd1c5c8a79b218286f3c3","exitCode":0,"output":"G08a boundary files=5 edges=25 publicLeaks=0 forbidden=0"},
+    {"name":"g08b","script":"scripts/check-g08b-boundary.mjs","sha256":"f3c7cb181ae1a3aa329169bae73dc621a5daa3124892ccdf8fb8590d2b77143d","exitCode":0,"output":"G08b boundary files=7 edges=41 publicLeaks=0 forbidden=0"},
+    {"name":"g09a","script":"scripts/check-g09a-boundary.mjs","sha256":"0ca4627f401bf98f622e95b596f2c690f48c96ce7fd7fe4955514e6496cbffab","exitCode":0,"output":"G09a boundary files=10 edges=35 publicLeaks=0 forbidden=0"},
+    {"name":"g10","script":"scripts/check-g10-fault-topology.mjs","sha256":"9e6f5a21a054ff57746ecdc275d08333556b2701caa772be0294e949bf53e81d","exitCode":0,"output":"G10 fault topology static contract PASS"},
+    {"name":"g11a","script":"scripts/g11/check-g11a-topology.mjs","sha256":"56d090659c4555cfa9a7a97286ba0133cb3af26dc01e2ca5707ea53bc6e23d3c","exitCode":0,"output":"G11a topology contract PASS"},
+    {"name":"g11e","script":"scripts/g11/check-g11e-contract.mjs","sha256":"d11dd36e3b0378118e8a4a7bd3469b8ed5a76f6f2d14aa8b23b211c9000c9bf2","exitCode":0,"output":"G11e contract PASS"}
+  ],
+  "legacyBoundaryChecks": {
+    "g07a": {"status":"STALE_LEGACY_TOPOLOGY","exitCode":1,"sha256":"3a307c8651cbe13dc64c3ef8f376d08963e3b2f98b1ff87387adb9dba5c43797"},
+    "g07b": {"status":"STALE_LEGACY_TOPOLOGY","exitCode":1,"sha256":"c19306a1b53ff8c014b1ed1eecd011bc7c804236004723a0abd5d259761595a5"}
+  },
+  "build": "PASS",
+  "g12bOpenApiRegression": "PASS"
+}
