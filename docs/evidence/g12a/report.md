@@ -8,7 +8,7 @@
 npm run check:g12a:baseline
 ```
 
-在 detached clean worktree 執行，source commit 為 `7635f1014dd9cbc91ab26d11fa54b28b4cd07877`，`sourceDirty=false`；本次 manifest 的 `excludedUserChanges=[]`，沒有將主工作樹外部修改納入 release baseline。
+在 detached clean worktree 執行，source commit 為 `2267a167940b553be7575e281085b6c47531f14c`，`sourceDirty=false`；本次 manifest 的 `excludedUserChanges=[]`，沒有將主工作樹外部修改納入 release baseline。後續提交只發布本報告，不改變該受測 source baseline。
 
 ## 驗證結果
 
