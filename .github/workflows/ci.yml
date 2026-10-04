@@ -1,0 +1,61 @@
+name: PassHub CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Build, unit, boundary and release checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Verify toolchain
+        run: |
+          node --version
+          npm --version
+          test "$(node --version)" = "v24.21.0"
+          test "$(npm --version)" = "11.19.0"
+
+      - name: Clean install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Unit suite
+        run: npm run test:unit
+
+      - name: Current boundary checks
+        run: |
+          node scripts/check-g03c-boundary.mjs
+          node scripts/check-g06a-boundary.mjs
+          node scripts/check-g06b-boundary.mjs
+          node scripts/check-g08a-boundary.mjs
+          node scripts/check-g08b-boundary.mjs
+          node scripts/check-g09a-boundary.mjs
+          node scripts/check-g10-fault-topology.mjs
+          node scripts/g11/check-g11a-topology.mjs
+          node scripts/g11/check-g11e-contract.mjs
+
+      - name: OpenAPI and requirements checks
+        run: |
+          npm run check:g12b:openapi
+          npm run check:g12c:requirements
+
+      - name: Check patch hygiene
+        run: git diff --check

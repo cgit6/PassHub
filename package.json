@@ -120,6 +120,7 @@
     "check:g12a:baseline": "node scripts/g12/check-release-baseline.mjs",
     "check:g12b:openapi": "node scripts/g12/check-openapi.mjs",
     "check:g12c:requirements": "node scripts/g12/check-requirements.mjs",
+    "check:g12e:workflow": "node scripts/g12/check-ci-workflow.mjs",
     "test:g11d:unit": "npm run clean && npm run build && timeout --foreground 60s env NODE_OPTIONS=--experimental-vm-modules jest --config jest.g11d.unit.config.cjs",
     "test:integration": "npm run build && NODE_OPTIONS=--experimental-vm-modules jest --config jest.integration.config.cjs",
     "test:g04a": "node scripts/test-g04a-integration.mjs",
