@@ -1,7 +1,7 @@
 {
   "gate": "G12c",
   "status": "PASS",
-  "sourceCommit": "1e48c90bf8ef49b3e84eee334f8fec455ab1cafe",
+  "sourceCommit": "faad6dcb7e38e316cffe481568a973a24984248c",
   "sourceDirty": false,
   "formalRequirements": 125,
   "excludedRequirements": 11,

@@ -6,7 +6,7 @@
 
 ## Source and commands
 
-- Source commit: `1e48c90bf8ef49b3e84eee334f8fec455ab1cafe`
+- Source commit: `faad6dcb7e38e316cffe481568a973a24984248c`
 - `npm run check:g12c:requirements` → PASS
 - `npm run build` → PASS
 - `npm run check:g12b:openapi` → PASS（回歸確認 G12b 公開契約仍為 8 path templates／10 methods、0 internal routes）
