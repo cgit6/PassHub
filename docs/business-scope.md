@@ -1,9 +1,9 @@
 # PassHub v1 業務邊界規格
 
-- 文件狀態：業務與實作規劃已收斂；G02–G11g、G12a–G12f已有各自限定工程證據，目前停止於G12f；D187將部署／reset生命期拆成G11a–G11g，G12再拆成G12a–G12h，下一合法gate為G12g，完整v1工程驗證仍未完成
-- 更新日期：2026-10-04
+- 文件狀態：業務與實作規劃已收斂；G02–G11g、G12a–G12f已有各自限定工程證據；D207完成G12g-0雙部署重基線，D208完成G12g-1 typed profile與descriptor intake限定證據，D209完成G12g-2 Mongo capability verifier分離與真Local限定驗證，D210完成G12g-3雙Compose profile與Local回歸限定驗證；頂層仍停止於G12f／下一頂層G12g，G12g內部停止於g-3／下一子關g-4，完整v1工程驗證仍未完成
+- 更新日期：2026-10-10
 - 適用版本：PassHub v1
-- 文件目的：以 D01–D35 為業務底稿，同步至 D187 的有效修正；實作細節及逐關驗收集中在 implementation-plan.md，不把官方查證、歷史候選或待做測試當成工程成果
+- 文件目的：以 D01–D35 為業務底稿，同步至 D210 的有效修正；實作細節及逐關驗收集中在 implementation-plan.md，不把官方查證、歷史候選或待做測試當成工程成果
 
 原始依據見[討論紀錄](./discuss.md)，逐項實作及驗收對應見[要求追蹤矩陣](./requirements-traceability.md)。本文件的「已確認」是規格採用狀態，不代表程式／測試已完成。
 
@@ -520,7 +520,11 @@ v1 不提供統計圖表、Dashboard、CSV／報表匯出、全文搜尋、任�
 ### 9.1 公開展示與共享資料
 
 - GitHub repository 保存原始碼、README、OpenAPI contract 與操作範例。
-- Node.js API 使用 GitHub 以外的自管 Linux／Docker Compose runtime，單 API／單成員 Mongo replica set／NGINX HTTPS；主機、網域、憑證是未提供的部署前提，不宣稱高可用。（D154–D155）
+- PassHub 只有一套 API image、application、domain、REST API、Mongo schema 與業務語意；`LOCAL_SELF_HOSTED` 與 `ATLAS_MANAGED` 是部署 profile，不是兩個產品版本或兩套程式。不得使用 `NODE_ENV` 暗中選擇資料庫。（D207）
+- profile 分支只允許存在於 deployment／infrastructure 的 Mongo capability verifier、dataset locator／descriptor、Compose／credential 組裝及 maintenance strategy；業務、domain、application、HTTP 契約與 reason code 不得依 profile 分叉。（D207）
+- `LOCAL_SELF_HOSTED` 使用 GitHub 以外的自管 Linux／Docker Compose runtime、單 API、MongoDB 8.0.32 單成員 `rs0`、固定 `passhub_demo` 與 NGINX HTTPS；保留既有可重跑本機 Demo 與 fault／performance 證據。（D154–D155、D207）
+- `ATLAS_MANAGED` 使用相同 API image 與 NGINX、外部 MongoDB Atlas cluster，以及固定的 `passhub_demo_blue`／`passhub_demo_green` 兩個 dataset slot；Atlas Compose 不建立 Mongo service／volume／root password／keyfile。（D207）
+- GitHub 只承載 code／CI，不執行 production API runtime。host、domain、TLS、scheduler、Atlas cluster、network allowlist 與 database users 都是外部部署前提；本作品不宣稱 HA、SLA 或正式營運可用性。（D207）
 - 本機仍須能以 Docker 及 seed 重建相同核心流程，但本機不是唯一展示方式。
 - 所有體驗者共用預置 Operator、Viewer、ENTRY Source、EXIT Source credential 及同一份可丟棄資料。
 - 不提供註冊、個人帳號、資料隔離或私人 workspace；其他體驗者可能讀取或修改共享 Qualification。
@@ -533,17 +537,24 @@ D24 的最小揭露仍適用於公開環境：API 查詢、Access Event、錯誤
 ### 9.2 每日重置
 
 - 公開環境每天 **Asia/Taipei 凌晨 03:00** 由 API 外的排程自動執行，不能只由將被停止的 API 計時或正常情況等人工操作。（D52）
-- 重置為獨立 host 維護命令，API 停止後仍可執行；為隔離舊 DB 工作，**本方案也停止並確認舊 Mongo 程序消失，重啟恢復完成 PRIMARY 後才清理**，維護程序本身不停止。（D155 具體化 D52）
-- 順序為：停止接受新業務 → 有限等待既有操作 → 停止 API，等待超時也進安全重置 → 確認舊 DB 工作不會干擾新資料 → 清除限定 Demo 資料及重建 seed → 成功才自動啟動 API。
+- 重置為 API 外的獨立 host 維護命令；兩個 profile 共用 host lock、persistent marker、最多30秒 drain、停止唯一 API 並證明原 process 消失、建立新 epoch／null claim、一次性 run ticket、private readiness、成功後才開放入口等 fail-closed 語意。（D155、D207）
+- `LOCAL_SELF_HOSTED` 維持既有流程：停止並確認舊 Mongo process 消失，重啟相同 volume 至完整 writable PRIMARY，再對固定 `passhub_demo` 七個已知 collection 原地精確 reset／seed。（D155、D187、D207）
+- `ATLAS_MANAGED` 不停止 Atlas cluster，也不原地清空 active dataset。控制器依序執行：`lock → marker → drain≤30秒 → 停止唯一API並證明原process消失 → 選inactive slot → 建立exact schema/index與canonical seed/new epoch/null claim → 驗證inactive dataset → 原子發布descriptor → 產生新process identity/run ticket → 啟動API並通過private ready → 開放入口`。（D207）
+- Atlas startup 使用受保護、無秘密、啟動時只讀一次的 active-dataset descriptor；固定讀取 `/run/passhub/dataset/active-dataset.json`，wire為單行canonical JSON加單一LF，欄位固定為 `profile`、`slot`、`databaseName`、`datasetEpoch`。profile／slot／databaseName 必須符合 allowlist，且資料庫 metadata epoch 必須與 descriptor 完全相同。發布須為原子替換，不支援 hot reload；G12g-3已完成獨立目錄唯讀掛載的raw／normalized Compose靜態驗證，真container owner／mode startup與atomic publish仍待後續驗證。（D207–D208、D210）
 - 停止 API 不證明已送 DB 工作取消。隔離／確認必須在清除前成立；不能為準時維護直接跳過安全前提，也不等於授權刪除整個 DB。
-- 精確清理僅 passhub_demo 的 qualifications、faceSlots、events、users、sources、metadata、managementReceipts，逐 collection `deleteMany({})` 保留索引，不 drop DB／collection／volume／其他DB；seed 不是整庫原子，任何未知或失敗都保持關閉。（D155、D187）
+- Local 精確清理僅 `passhub_demo` 的 qualifications、faceSlots、events、users、sources、metadata、managementReceipts，逐 collection `deleteMany({})` 保留索引，不 drop DB／collection／volume／其他DB；seed 不是整庫原子，任何未知或失敗都保持關閉。（D155、D187）
+- Atlas initializer 只能處理選定 inactive slot 的 exact schema／indexes／canonical seed；public API 不得 create／repair schema。任何 profile 都禁止 drop database、drop collection、刪除 volume 或改動其他 database。（D207）
+- Atlas 在 descriptor 發布前失敗時 descriptor 必須不變且入口保持封閉；發布後失敗不得 rollback 至舊 descriptor，新 descriptor 是唯一權威，入口維持封閉並以 controlled rerun 修復。（D207）
+- inactive slot 重用前必須通過可直接驗收的 safe-reuse predicate；單靠「已過24小時」不構成不會被舊工作晚寫的證據。G12g-5 若無法證明安全重用，必須 STOP 回到設計討論，不得直接清理或重用。blue／green slot 不是備份，不提供 restore。（D207）
 - 重置後恢復 canonical Operator、Viewer、ENTRY Source 與 EXIT Source；公開 Demo credential 保持不變。
 - 維護者另有非公開手動重置命令；任何公開角色或 API 都不能觸發重置。
 - README 必須說明資料會每日消失，且重置期間的請求可能失敗；使用者可在重置完成後重新操作。
 - 清除或 seed 失敗維持不可用，由維護者修復重跑，不啟動半完成環境；維護開始否決過時的原項續辦許可。
 - 不提供備份、單筆復原、使用者匯出、刪除申請或正式 retention policy。
 
-v1 單 API、不自動重啟。systemd 臺北03:00／Persistent=false，漏跑不白天補清庫。host local exclusive lock／marker封入口→drain≤30秒→確認API停止→確認Mongo停止→恢復PRIMARY→精確清理並 seed 新epoch／nullclaim→私密一次runTicket bootstrap→授權local ready→handoff才開入口。精確清理只涵蓋 `passhub_demo` 的 qualifications、faceSlots、events、users、sources、metadata、managementReceipts 七個 collection，逐一 `deleteMany({})` 並保留 indexes；不碰其他 DB、collection 或 volume。bootstrap不是ready，marker也不是普通程序接管許可。主流程各階段失敗均failclosed，未知停止／額外writer不跳步。（D149、D154–D155、D187）
+v1 單 API、不由 API 自動重啟。systemd 臺北03:00／Persistent=false，漏跑不白天補破壞性reset；host local exclusive lock 不 unlink inode。Local 保留「停 API＋停 Mongo＋恢復 PRIMARY＋七 collection 原地 reset」，Atlas 使用「停 API＋inactive blue／green 初始化＋descriptor 原子切換」；bootstrap不是ready，marker也不是普通程序接管許可。主流程各階段失敗均failclosed，未知停止／額外writer不跳步。（D149、D154–D155、D187、D207）
+
+Atlas application credential 與 maintenance credential 必須分離，且兩者都不得與公開 Demo credential、JWT signing key 或 comparison key 共用。descriptor 不含 Atlas URI、帳密或任何秘密；部署秘密仍由外部受保護檔案注入。（D207）
 
 ### 9.3 最低公平使用限制
 
@@ -696,7 +707,10 @@ Qualification 時間錯誤、Face重複、越權與公開限制均拒絕，使�
 | --- | --- |
 | 固定公開主流程 | OpenAPI／curl 可完成第 9.4 節全部步驟並得到兩筆 Event。 |
 | 共用 credential | README 範例可操作，但 credential 與 deployment／database／maintainer secret 完全分離。 |
-| 每日自動重置 | 臺北 03:00 外部排程；停新項、有限 drain、停 API 並隔離舊 DB 工作後清除 Demo、恢復 seed，成功才重啟；公開 credential 不變。 |
+| Local 每日自動重置 | 臺北 03:00 外部排程；停新項、有限 drain、停 API／Mongo並證原process消失，Mongo恢復PRIMARY後精確重建固定`passhub_demo`七collection；公開credential不變。 |
+| Atlas 每日自動重置 | Atlas cluster不停；停唯一API後先完整建立並驗證inactive blue／green dataset，再原子發布descriptor、啟動新identity並通過private ready後開放；publish前／後故障均依§9.2 fail closed。 |
+| Atlas slot 安全重用 | 重用inactive slot前須以可重跑證據滿足safe-reuse predicate；時間經過本身不算證據，無法證明時停止而不清理。 |
+| 雙profile業務等價 | 同一fixture／request向量在Local與Atlas得到相同HTTP status、reason、Presence、Event、去敏投影及最終資料語意；只允許拓撲／maintenance證據不同。 |
 | 維護者手動重置 | 非公開命令可執行同等重建；任何公開角色及 API 都不可觸發。 |
 | 重置期間請求 | 可以失敗；文件揭露固定時間且使用者可於完成後重試。 |
 | 最低公平使用限制 | Request rate、body 及 page size 超限時拒絕且不建立 Access Event。 |
@@ -739,6 +753,10 @@ Qualification 時間錯誤、Face重複、越權與公開限制均拒絕，使�
 | drain 超時與舊 DB 工作 | 超時仍進安全重置，但清除前須停止 API 並證明舊工作不干擾新資料，不把程序停止當取消證明。 |
 | 清除／seed 階段失敗 | API 維持不可用，維護者修復後重跑；成功才自動啟動，連續重建冪等且公開憑證不變。 |
 | reset 與故障續辦競爭 | 維護否決舊恢復許可，原項／晚 callback 不得寫入新 Demo；不宣稱跨重置原項延續。 |
+| Atlas descriptor 不合法或epoch不符 | profile／slot／databaseName不在allowlist、descriptor格式錯誤或metadata epoch不符時，API fail closed且不得listen；啟動後不hot reload。 |
+| Atlas publish 前故障 | active descriptor保持不變，入口維持marker封閉；不得暴露半初始化inactive dataset。 |
+| Atlas publish 後故障 | 不rollback descriptor；新descriptor保持權威，入口封閉並以受控重跑完成啟動／ready。 |
+| Atlas credential 邊界 | application只能執行runtime必要操作；private initializer／reset使用獨立maintenance credential；任何公開Demo/JWT/comparison值均不能替代。 |
 
 ## 12. 求職作品完成證據
 
@@ -748,6 +766,7 @@ Qualification 時間錯誤、Face重複、越權與公開限制均拒絕，使�
 - OpenAPI contract 必須有可重跑驗證，證明文件與成功結果、通行拒絕、認證／授權錯誤、validation error、冪等 conflict 及系統錯誤一致；不能只有互動文件頁面。
 - 權限測試涵蓋 Operator／Viewer 寫入差異、Source 機器認證、Source 不可查詢，以及方向只能由 server-side Source 取得。
 - 使用真實 MongoDB 驗證 Face Mapping 唯一性、冪等、修改／撤銷競爭、並行 ENTRY／EXIT 及 fail-closed；不得只用 in-memory mock 證明資料一致性。
+- Local 與 Atlas 使用同一 API image／application／domain／API／schema；以真 Atlas 隔離測試資料庫驗證連線、session／transaction、schema／index、initializer、blue／green reset及業務等價，不能以 mock verifier 冒充 Atlas 相容性。（D207）
 - 以真實並行 HTTP requests 證明同一資格每次狀態最多轉移一次，所有已準入的新合法 attempt 完成保存後有一致的 Event；同鍵重送只一個 Event，首次拒絕不轉移。技術準入拒收及保存未知不能假稱已留下 Event。
 - 三類清單按 D152／D182 的 keyset／索引，以隔離效能資料庫量測Qualification、INSIDE及八種Event filter cases的first／fixed-next頁。固定seed、fixture、索引前後各格10次warmup／100次串行measurement、raw nanoseconds、p50／p95及真實adapter查詢的explain；不預寫latency或改善百分比，不以空資料、合併filter數字或刪除outlier假證效能。
 
@@ -766,9 +785,9 @@ G09b只量測既有production Mongo query adapter，不修改業務API、查詢�
 正式私有run `output/evidence/g09b/g09b-b2-1669530-1790525819869/`已保存manifest、fixture、raw JSONL、summary、40份完整explains、environment、兩階段index inventories及correctness，並由`.gitignore`排除；manifest SHA-256為`618a074e5e58c94b90ed5d98791ca47964d77e6b74a409b561a64b5953a52ada`。tracked公開證據為[報告](evidence/g09b/report.md)、[summary](evidence/g09b/summary.json)、[fixture manifest](evidence/g09b/fixture-manifest.json)及[explain summary](evidence/g09b/explain-summary.json)，不追蹤raw或完整explain。
 - D153結構化allowlist與request／operationUUID、有限日志輪替及私密查詢，配合D155代理／Mongo／容器輸出已知秘密掃描；不能把best-effort技術日志冒充必要Event。
 - 自動化測試涵蓋第 11 節全部業務情境、固定 reason-code 優先序、一次顯示 QR、查詢去敏、準時 FIFO、未知停寫與續辦、共用預算、容量準入／釋放、每日重置及最低公平使用限制；逐項連至追蹤矩陣及真實執行證據。
-- CI使用D125精確基線與D156未被取代的命令／期限規則及D166正式Jest runner；fault／perf專項雖opt-in，仍是完整交付必需證據，普通CI綠燈不能解鎖全部成果。
+- CI使用D125精確基線與D156未被取代的命令／期限規則及D166正式Jest runner；一般PR跑build／Jest／HTTP e2e／Local integration，受保護的manual／release workflow才可取得秘密執行真Atlas integration。fault／perf專項雖opt-in，仍是完整交付必需證據，普通CI綠燈不能解鎖全部成果。（D207）
 - Docker依D125／D155 pins及D157逐關流程，乾淨隔離環境重建；真實測試與Docker尚未執行。正式證據綁clean sourceCommit與code／lock／config／image／fixture／環境，報告發布revision可不同。
-- 公開 API runtime、互動式 OpenAPI 與 README curl 流程必須實際可用；本機 Docker Demo command 已自動執行並 assert 第 9.4 節主流程結果；公開 HTTPS 仍待 G12g。
+- 公開 Atlas API runtime、互動式 OpenAPI 與 README curl 流程必須實際可用；本機 Local Docker Demo command 已自動執行並 assert 第 9.4 節主流程結果；Atlas整合與公開HTTPS仍待G12g-4至G12g-7。
 - 每日自動重置、非公開維護者重置及可設定 request／body／page limits 必須具有可重跑驗證，不只出現在文件。
 - README／ADR 說明產品資料流、角色與信任邊界、Qualification 狀態、冪等與一致性選擇、Mock Face 邊界、公開共享資料、重置及已知限制。
 
@@ -788,18 +807,20 @@ G09b只量測既有production Mongo query adapter，不修改業務API、查詢�
 | 保存／映射 | 官方 Mongo driver 多文件交易、成功／拒絕決策新鮮度保護、事件鍵唯一約束；獨立目前 Face 映射、空協調位及首次競爭保護，不增加歷史或主檔。 | D65、D67 |
 | 順序／故障 | 相關完整寫入同步登記 FIFO，準時保障、HTTP 不取消原項、有限確認、安全條件式續辦及未知停寫。 | D72–D95 |
 | 準入／維護 | 登記前完整容量準入及生命期釋放；每日臺北 03:00 外部停止／隔離／重建／成功才重啟。 | D52、D97、D99 |
+| 雙部署 | `LOCAL_SELF_HOSTED`／`ATLAS_MANAGED`共用同一image／業務／API／schema；profile差異限deployment／infrastructure，不以`NODE_ENV`選DB。 | D207 |
+| Atlas dataset | 固定blue／green，啟動只讀一次受保護無秘密descriptor；allowlist與metadata epoch一致，publish前後故障fail closed，safe-reuse無證即STOP。 | D207 |
 | 重寫 | 同一repo／root package／docs；D161依使用者新決定不另備份，舊backend／frontend已移出工作目錄，保留docs、Git及根目錄文件。 | D140、D157、D161 |
 
 最初六頂層模組只是歷史候選。完整目錄、窄ports、schema／API／版本／部署／驗收在D117–D157及實作方案，均屬已採規劃而非完成工程。
 
 ### 13.2 已收斂規劃、阻塞實測與停止點
 
-P01–P15採用決策與逐關驗收見[實作方案](implementation-plan.md)及追蹤矩陣。剩餘不是讓實作者自由選架構：Face唯一索引替換微型真測、固定工具相容性及fault映像digest是明確前置gate；未過便停止回討論，不靜默換策。外部主機／domain／TLS需環境提供。D161已取代舊碼私密備份要求，不再建立legacy備份。
+P01–P15及D207雙部署採用決策與逐關驗收見[實作方案](implementation-plan.md)及追蹤矩陣。剩餘不是讓實作者自由選架構：Atlas safe-reuse predicate、Face唯一索引替換微型真測、固定工具相容性及fault映像digest都是明確前置gate；未過便停止回討論，不靜默換策。外部host／domain／TLS／scheduler／Atlas cluster／network allowlist／database users需環境提供。D161已取代舊碼私密備份要求，不再建立legacy備份。
 
-矩陣的 V／U 狀態只可依直接證據逐項更新；G11a 的限定證據只證部署拓撲基線，G11b 的限定證據只證 persistent claim、one-use ticket、bootstrap／ready 與 production process 接線，G11c 的限定證據只證 maintenance marker、private drain、API／Mongo 隔離與 no-late observation，G11d 的限定證據只證七 collection transaction reset／canonical seed／新 epoch與未管理資料不變，G11e 的限定證據只證 host lock、reset-result handoff、ticket signing與外部 timer，G11f 的限定證據只證 canonical fail-closed policy、同 Mongo partial handoff／受控 rerun與真實 G11e lock contention；G11f 的部分 fault matrix 是 policy-only。G11g 只整合上述 evidence、秘密掃描、cleanup與指紋，G12a–G12f再逐步核對 release baseline、公開契約、需求／邊界帳本、clean install、CI與本機 Docker Demo，不自動代表公開 HTTPS 或完整 v1 已完成。目前停止於 G12f，下一合法 gate 是 G12g。
+矩陣的 V／U 狀態只可依直接證據逐項更新；G11a–G11g是Local部署／maintenance的歷史限定證據，不自動支持Atlas。G12a–G12f只依當時125正式＋11排除的136基線核對release baseline、公開契約、需求／邊界帳本、clean install、CI與本機Local Docker Demo；D207新增要求後，G12a／G12c舊release evidence仍屬歷史，G12d／G12e／G12f須在最終新HEAD重跑。頂層仍停止於G12f、下一頂層G12g；G12g內部g-3限定工程gate已通過，下一子關g-4。
 
 ## 決策來源
 
-本文件以[討論紀錄](./discuss.md) D01–D35為業務底稿，同步至D187；D114明確授權持續逐題討論、預設接受及必要文件同步，非逐題個別回答。D69依D72、D17依D76修正；D89安全續辦保留，D130永久終局候選未採；D117取代binaryv1、D131七格取代三次、D129原生兩送局部例外、D149同epoch普通重啟寫入關閉，D187則同步G10完成狀態、七個reset target與G11a–G11g STOP。其餘歷史候選及背景不新增產品要求。
+本文件以[討論紀錄](./discuss.md) D01–D35為業務底稿，同步至D210；D114明確授權持續逐題討論、預設接受及必要文件同步，非逐題個別回答。D69依D72、D17依D76修正；D89安全續辦保留，D130永久終局候選未採；D117取代binaryv1、D131七格取代三次、D129原生兩送局部例外、D149同epoch普通重啟寫入關閉，D187同步Local七個reset target與G11a–G11g STOP，D207新增Local／Atlas雙profile及G12g-0至g-7，D208落實g-1限定邊界，D209完成g-2 verifier分流與真Local能力驗證但不冒充真Atlas相容，D210完成雙Compose靜態契約及Local回歸但仍未連真Atlas。其餘歷史候選及背景不新增產品要求。
 
 本次同步不是新業務決策，也不改寫原始討論。未來若變更已確認結論，須先新增討論決策 block，再同步本文件、驗收及追蹤矩陣。實作／測試／公開證據未完成前，不把文件採用視為履歷成果。

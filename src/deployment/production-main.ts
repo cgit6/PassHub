@@ -11,12 +11,26 @@ import { RunTicketIntakeError } from './internal/g11b-run-ticket-intake.js';
 import { DatasetVerificationError } from './internal/g11b-dataset-verification.js';
 import { closeG11bProductionResources, createG11bProductionHttpHandler, G11bProductionLifecycleError, listenG11bProductionServer, takeG11bProductionBusinessListener } from './internal/g11b-production-http-lifecycle.js';
 import { installG11bProductionShutdown } from './internal/g11b-production-shutdown.js';
+import { DatasetDescriptorIntakeError } from './internal/g12g1-dataset-descriptor-intake.js';
+import {
+  DeploymentProfileConfigError,
+  parseDeploymentProfile,
+  resolveProductionDatasetTarget,
+  type DeploymentProfile,
+  type ProductionDatasetTarget,
+} from './internal/g12g1-deployment-profile.js';
+import {
+  MongoCapabilityVerificationError,
+  verifyProductionMongoCapabilities,
+} from './internal/g12g2-mongo-capability-verification.js';
 
 const MAX_SECRET_BYTES = 4_096;
 const PROCESS_IDENTITY_FILE_NAME = 'process-run-id';
 let startupStage = 'CONFIG';
 
 interface DeploymentConfig {
+  readonly profile: DeploymentProfile;
+  readonly datasetTarget: ProductionDatasetTarget;
   readonly host: string;
   readonly port: number;
   readonly trustedProxyIp: string;
@@ -48,6 +62,7 @@ async function readSecret(path: string): Promise<string> {
 }
 
 async function loadConfig(): Promise<DeploymentConfig> {
+  const profile = parseDeploymentProfile(process.env.PASSHUB_DEPLOYMENT_PROFILE);
   const host = requiredEnvironment('PASSHUB_HTTP_HOST');
   const port = exactPort(requiredEnvironment('PASSHUB_HTTP_PORT'));
   const trustedProxyIp = requiredEnvironment('PASSHUB_TRUSTED_PROXY_IP');
@@ -60,11 +75,13 @@ async function loadConfig(): Promise<DeploymentConfig> {
   }
   const probe = process.env.PASSHUB_G11A_PROBE_MODE;
   if (probe !== undefined && probe !== '1') throw new Error('deployment configuration is invalid');
+  const probeMode = probe === '1';
+  const datasetTarget = await resolveProductionDatasetTarget(profile, probeMode);
   if (probe !== '1' && (Buffer.byteLength(jwtKey, 'utf8') !== 32 || !/^[0-9a-f]{64}$/u.test(comparisonKey))) {
     throw new Error('deployment secret is invalid');
   }
   return Object.freeze({
-    host, port, trustedProxyIp, mongoUri, probeMode: probe === '1',
+    profile, datasetTarget, host, port, trustedProxyIp, mongoUri, probeMode,
     jwtKey: Buffer.from(jwtKey, 'utf8'), comparisonKey: Buffer.from(comparisonKey, 'hex'),
   });
 }
@@ -94,10 +111,8 @@ async function main(): Promise<void> {
   });
   try {
     await mongo.connect();
-    const hello = await mongo.db('admin').command({ hello: 1 }) as { setName?: unknown; isWritablePrimary?: unknown; hosts?: unknown };
-    if (hello.setName !== 'rs0' || hello.isWritablePrimary !== true || !Array.isArray(hello.hosts) || hello.hosts.length !== 1) {
-      throw new Error('deployment database is not ready');
-    }
+    startupStage = 'MONGO_CAPABILITY';
+    await verifyProductionMongoCapabilities(mongo, config.profile);
   } catch (error) {
     await mongo.close().catch(() => undefined);
     throw error;
@@ -106,7 +121,14 @@ async function main(): Promise<void> {
   let production: G11bProductionApplication | undefined;
   try {
     startupStage = 'DATASET_COMPOSITION';
-    if (!config.probeMode) production = await createG11bProductionApplication(mongo, config.jwtKey, config.comparisonKey);
+    if (!config.probeMode) {
+      production = await createG11bProductionApplication(
+        mongo,
+        config.datasetTarget,
+        config.jwtKey,
+        config.comparisonKey,
+      );
+    }
   } catch (error) {
     await mongo.close();
     throw error;
@@ -177,6 +199,8 @@ async function main(): Promise<void> {
 main().catch((error: unknown) => {
   const code = error instanceof G11bProductionAuthorityError || error instanceof ProcessIdentityIntakeError
     || error instanceof RunTicketIntakeError || error instanceof DatasetVerificationError
+    || error instanceof DatasetDescriptorIntakeError || error instanceof DeploymentProfileConfigError
+    || error instanceof MongoCapabilityVerificationError
     ? error.code : error instanceof G11bProductionLifecycleError ? error.failures.join('+') : 'STARTUP_UNAVAILABLE';
   process.stderr.write(`PassHub deployment startup failed: ${startupStage}:${code}\n`);
   process.exitCode = 1;

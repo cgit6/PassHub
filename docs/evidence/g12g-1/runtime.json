@@ -1,0 +1,57 @@
+{
+  "gate": "G12g-1",
+  "status": "PASS",
+  "evidenceKind": "development-gate",
+  "source": {
+    "baseCommit": "8322ce3d7f859212b0c35b6fac2ec057fcf0b669",
+    "dirty": true,
+    "note": "G12g-0 and G12g-1 changes were present in the shared worktree; this is not clean release evidence."
+  },
+  "toolchains": {
+    "host": { "node": "v24.12.0", "npm": "11.6.2" },
+    "exactContainer": { "node": "v24.21.0", "npm": "11.19.0" },
+    "docker": "29.0.0",
+    "dockerCompose": "v2.40.3"
+  },
+  "results": {
+    "g12g1": {
+      "command": "npm run test:g12g1",
+      "unitSuites": 3,
+      "unitTests": 65,
+      "boundarySourceFiles": 167,
+      "negativeCheckerMutationsRejected": 9,
+      "terminalCheckerFixturesAccepted": 1,
+      "formalRequirements": 132,
+      "excludedRequirements": 11,
+      "totalRequirements": 143
+    },
+    "fullUnitExactToolchain": { "suites": 83, "tests": 1350 },
+    "g11aLocalRuntime": { "cases": 8, "status": "PASS" },
+    "g11bLocalProductionRuntime": { "cases": 12, "status": "PASS", "sourceDirty": true },
+    "g12fStatic": { "checks": 17, "status": "PASS" },
+    "g12fDockerDemo": { "cases": 8, "status": "PASS" },
+    "diffCheck": "PASS"
+  },
+  "fingerprints": {
+    "deploymentProfileSha256": "ae14c648eed7059ea897a1d44e8c8fef487d7c869a905a52953d3a74e5d50958",
+    "descriptorEngineSha256": "8848bf7d40b27fa70128df238c67ac41162678e88a8e7dacd40639905222a3e5",
+    "descriptorIntakeSha256": "ff7e70a5a23d8eece595d18f2e2584da22a6e457f7362089de52622da5c50b82",
+    "productionApplicationSha256": "f4c356c3139287885e0957b6401b2852c828c19c649b38aa9b915e939dc8f84a",
+    "productionMainSha256": "de5284103e9a2136e92d996a73ce5863bf5b0d3982ca37cc36c45c37f4ea6de6",
+    "requirementsCheckerSha256": "1290a0da32e9cf1c552a146ee96b5851560944c4c07808255c8113f16cd77534",
+    "g12g1BoundaryCheckerSha256": "c0a29d0e0a9468abf80dbc8784aa55e093f63894c6c753d6de773e002c6b5893",
+    "g12g1CheckerHarnessSha256": "56ca832cdd8f80176b73a6d028bf7600203ccce46699535221cf7877b5a38d8f",
+    "descriptorTestsSha256": "4dc232c2617c76830991f4c04f946d860d36921d1d4b5c74471176e106e97e54",
+    "datasetTargetTestsSha256": "8f3f9956116351e88ec0925e919b6929d1f0226d48ec31cbf86e9625de575f65",
+    "jestConfigSha256": "3aced5f558ace8f8b15754334bb2a5092f4c38c7bdd329dddfdcd97b3e74937e",
+    "localComposeSha256": "59dfe00176421aa1e917eb5dd940ac71b472b5140c0cd2535b9137d08c87265d",
+    "packageJsonSha256": "4cef3bbf5be71031ce157e5259a14dcb21f8f63df11789780dd54f12bd1e2504",
+    "packageLockSha256": "70fce3c9a46f686e6bca2e6f6e66894c6e4510ffbc6bd4518d781f2f2bb9320b"
+  },
+  "limitations": [
+    "No MongoDB Atlas connection or managed capability evidence.",
+    "No Atlas read-only descriptor mount or Atlas Compose evidence.",
+    "No Atlas initializer, publisher, reset, safe-reuse, public HTTPS, HA or SLA evidence.",
+    "A18, M11, M12 and E10 remain incomplete."
+  ]
+}

@@ -3,6 +3,7 @@ import { createG11bProductionApplication, createG11bProductionMonotonicClock } f
 import * as processIdentity from '../../src/deployment/internal/g11b-process-identity-intake.js';
 import * as ticketIntake from '../../src/deployment/internal/g11b-run-ticket-intake.js';
 import * as verification from '../../src/deployment/internal/g11b-dataset-verification.js';
+import { LOCAL_PRODUCTION_DATASET_TARGET } from '../../src/deployment/internal/g12g1-deployment-profile.js';
 import * as claim from '../../src/deployment/internal/g11b-persistent-run-claim.js';
 import { createVerifiedDatasetVerifierForTest } from '../support/g11b-dataset-verification-test-support.js';
 import { G04B_STARTUP_VECTORS } from '../../src/infrastructure/mongo/g04b-schema.js';
@@ -84,7 +85,7 @@ describe('G11b b5 production ordinary boot boundary', () => {
       context.createClaim.mockImplementation((target, verifier) =>
         createPersistentRunClaimerForTest(target, verifier, { compareAndSet: cas, classifyAfterNoMatch: classification }));
       jest.spyOn(schemaActivation, 'activateG11bExistingSchema').mockImplementation(() => { throw new Error('injected composition failure'); });
-      const application = await createG11bProductionApplication(context.mongo, KEY, COMPARISON);
+      const application = await createG11bProductionApplication(context.mongo, LOCAL_PRODUCTION_DATASET_TARGET, KEY, COMPARISON);
       expect(application.application).toBeNull();
       expect(application.serviceGate.isOpen()).toBe(false);
       expect(application.serviceGate.getState()).toBe('SHUTDOWN');
@@ -100,7 +101,7 @@ describe('G11b b5 production ordinary boot boundary', () => {
   });
   test('missing canonical ticket produces closed diagnostic gate after exact read-only verification, without claim', async () => {
     const context = ordinaryContext();
-    const application = await createG11bProductionApplication(context.mongo, KEY, COMPARISON);
+    const application = await createG11bProductionApplication(context.mongo, LOCAL_PRODUCTION_DATASET_TARGET, KEY, COMPARISON);
     expect(context.calls).toEqual(['identity', 'verify', 'ticket']);
     expect(context.createClaim).not.toHaveBeenCalled();
     expect(application.application).toBeNull();
@@ -113,7 +114,7 @@ describe('G11b b5 production ordinary boot boundary', () => {
   test('unsafe or already consumed ticket never takes the ordinary absence branch or calls claim', async () => {
     const context = ordinaryContext();
     context.consume.mockRejectedValue(new ticketIntake.RunTicketIntakeError('TICKET_ALREADY_USED'));
-    await expect(createG11bProductionApplication(context.mongo, KEY, COMPARISON)).rejects.toMatchObject({ code: 'TICKET_ALREADY_USED' });
+    await expect(createG11bProductionApplication(context.mongo, LOCAL_PRODUCTION_DATASET_TARGET, KEY, COMPARISON)).rejects.toMatchObject({ code: 'TICKET_ALREADY_USED' });
     expect(context.createClaim).not.toHaveBeenCalled();
   });
 
@@ -122,7 +123,7 @@ describe('G11b b5 production ordinary boot boundary', () => {
     jest.spyOn(verification, 'createVerifiedDatasetVerifier').mockImplementation(() => {
       throw new verification.DatasetVerificationError('DATASET_VERIFICATION_FAILED');
     });
-    await expect(createG11bProductionApplication(context.mongo, KEY, COMPARISON)).rejects.toMatchObject({ code: 'DATASET_VERIFICATION_FAILED' });
+    await expect(createG11bProductionApplication(context.mongo, LOCAL_PRODUCTION_DATASET_TARGET, KEY, COMPARISON)).rejects.toMatchObject({ code: 'DATASET_VERIFICATION_FAILED' });
     expect(context.consume).not.toHaveBeenCalled();
     expect(context.createClaim).not.toHaveBeenCalled();
   });

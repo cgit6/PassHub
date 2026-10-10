@@ -1,6 +1,6 @@
 # PassHub 有效要求與實作追蹤矩陣
 
-規劃狀態：**D160封口；D161完成舊碼清除；D166改定正式Jest runner；G02–G11g、G12a–G12f已發行各自限定 evidence，目前停止於 G12f；D187 將本階段拆為 G11a–G11g，G12再拆為G12a–G12h，下一合法 gate 為 G12g**。工程矩陣仍須逐項以直接證據更新，任何限定 gate 不自動代表完整 v1。整理日期：2026-10-04。
+規劃狀態：**D160封口；D161完成舊碼清除；D166改定正式Jest runner；G02–G11g、G12a–G12f已發行各自限定 evidence；D207完成G12g-0雙部署重基線，D208完成G12g-1 typed profile與descriptor intake限定證據，D209完成G12g-2 Mongo capability verifier分離與真Local限定證據，D210完成G12g-3雙Compose profile與Local回歸限定證據。頂層仍停止於G12f／下一頂層G12g，G12g內部停止於g-3／下一子關g-4**。工程矩陣仍須逐項以直接證據更新，任何限定 gate 不自動代表完整 v1。整理日期：2026-10-10。
 
 這份文件回答：「討論過的要求，實作時如何避免漏掉？」它不是已完成成果，也不授權開始重寫程式。
 
@@ -8,13 +8,13 @@
 
 ## 1. 來源、用法與完成定義
 
-- 來源：[業務範圍](business-scope.md)、[討論紀錄](discuss.md) D01–D187 及實作方案。衝突依明確採用的新版；D114預設接受是本輪授權，不捏造逐題答覆。候選／背景不當採用，官方來源不當工程證據。
-- 本稿同步時的來源 SHA-256：`discuss.md = db4e46746d7175b4297bf0cbf1be99985d10710875668957e29322c5827a84ed`；`business-scope.md = e02ea25637a20e6cf5e2095b801b0950533bf5647ab9413b58c9205ce88f50bb`。後續更新須記錄基線變動，不以舊摘要覆蓋新決策。
+- 來源：[業務範圍](business-scope.md)、[討論紀錄](discuss.md) D01–D208 及實作方案。衝突依明確採用的新版；D114預設接受是本輪授權，不捏造逐題答覆。候選／背景不當採用，官方來源不當工程證據。
+- D207同步後來源 SHA-256：`discuss.md = 80983672689282a9a709f091731032158e872a342cfd57590fc3287ccc8ba7e0`；`business-scope.md = 016d8da6f654d28fcfdeb0b7a9902b8100eaa8714c1079b221ed4b1d18d125cd`。後續更新須記錄基線變動，不以舊摘要覆蓋新決策。
 - 以下「責任」是行為邊界，實際接線／目錄規劃見D140–D141；G02–G08b只具各gate限定程式／測試符號與局部 evidence，其餘不能由規劃欄推定已建立。
 - 每列的 `T-要求ID` 是**預定驗收情境編號**，不是已存在的測試。欄內分號分開的情境都要覆蓋；必要時拆成多個實際測試。
 - 每列 `U` 代表「尚未由完整直接證據閉合」；可記錄已驗的局部切片，但不能因相似功能、測試名稱或部分情境直接標為完成。
 - 實作時逐列補上程式符號／路徑、真實測試名稱、重跑命令、結果與 commit。未決細節先討論，不由實作者暗自選定為既成事實。
-- D157原定25個STOP；D187把原單一G11拆為G11a–G11g後，現為固定31個STOP。完成一子關即交差異／命令／exit／指紋／證據後停止，不能跨關。D114只授權這輪持續討論，不授權不停實作。
+- D157的25與D187的31都是當時歷史計數；原表實際含38個可執行gate。D207以G12g-0至G12g-7取代原單一G12g後，現為固定45個STOP。完成一子關即交差異／命令／exit／指紋／證據後停止，不能跨關。D114只授權持續討論，不授權不停實作。
 
 完成狀態依序為：`U 未核對 → I 已實作但未驗證 → V 已有可重跑證據 → R 已獨立覆核`。只有有證據的項目才能對外宣稱完成；文件採用狀態與工程完成狀態分開。
 
@@ -113,7 +113,7 @@
 | A15 | 同 Face 鍵的綁定／釋放／辨識須有真實共用寫入競爭；釋放清綁定引用但保留空協調位，首次缺鍵的綁定與未映射決策也受保護。 | D66–D67 | 空鍵競爭 | T-A15：首次綁定與 MATCHED 但未映射的辨識競爭；僅負查／no-op 不算保護；釋放後協調位仍可用。 | V：G04b 57-case 真Mongo驗首次 bind／unmapped recognition race、release保留空slot、mapping／qualification共同保存與分類；G05協調仍U。 |
 | A16 | 區分各種 duplicate key／已中止交易；不能全部當可重跑或吞錯續用。 | D66–D67 | 保存錯誤分類 | T-A16：映射、事件、其他唯一鍵衝突；只有確認可安全重跑才重跑。 | V：G04b 57-case 分辨 duplicate、112 write conflict、251 abort、schema validation、unknown commit；不以 retry loop 偽造確定性。 |
 | A17 | 逾期映射採相關操作惰性整理；唯讀不整理，無 TTL／背景終結業務；query只依單一lease `observedAt`投影。 | D68–D69、D72、D76、D164、D180 | 映射整理 | T-A17：有效 faceBound、過期釋放、在場保留、準時排隊保護分開測；query不寫DB、不cleanup。 | U：G09a已驗唯讀單一觀察、不cleanup與投影；完整相關寫入惰性整理、準時競爭及全部DB生命期仍未閉合。 |
-| A18 | v1 只一個 API 實例；相關完整業務寫入單執行，登入／唯讀不全排入 FIFO；query只在writer quiescent取得短read-observation lease。 | D73–D74、D76、D180、D187、D189 | 執行協調 | T-A18：部署及程式無第二 writer；Mongo persistent claim並行exact one；writer五種非靜止狀態均立即busy；lease期間writer可登記但不開始，query結束必釋放；不以唯讀可用宣稱故障下必定可查。 | U：G09a已驗五種busy、lease擋後到writer並按FIFO釋放；G11a已驗Compose只有單一API replica。G11b persistent claim與完整維護故障生命期仍未驗。 |
+| A18 | v1 只一個 API 實例；相關完整業務寫入單執行，登入／唯讀不全排入 FIFO；query只在writer quiescent取得短read-observation lease。Local／Atlas profile都不得產生第二 writer，dataset descriptor與maintenance切換也不能繞過單一API／claim邊界。 | D73–D74、D76、D180、D187、D189、D207、D210 | 執行協調／部署 | T-A18：兩個profile的Compose／runtime都exact一個API；Mongo persistent claim並行exact one；writer五種非靜止狀態立即busy，lease結束必釋放；Atlas descriptor切換前舊API須消失，新API只接authoritative dataset；不以唯讀、process消失或cluster可連宣稱故障下安全。 | U：G09a已驗Local五種busy與lease；G11a已驗Local Compose單API；G12g-3以靜態Compose契約驗Atlas exact一個API及與Local不同的project identity。尚未以真Atlas runtime驗descriptor切換、舊API消失或新release維護生命期。 |
 
 ### 2.6 接收、等待、故障與續辦
 
@@ -174,12 +174,18 @@
 | M02 | 警告只填假資料、Demo 可清除、不保證正式營運／隱私／可用性；不自動辨識真實個資。 | D25–D27、D34 | Demo 警語 | T-M02：入口文件與操作說明可見，沒有正式 SLA／個資治理承諾。 | U |
 | M03 | 預置公開體驗憑證不能混用部署、DB 或維護者秘密。 | D25、D189 | 環境隔離 | T-M03：公開 seed credentials 是刻意值；其他秘密及runTicket無tracked／argv／env／HTTP／log／Mongo／evidence洩漏。 | U：G11a已驗DB／JWT／comparison秘密只由外部secret檔掛載且evidence不輸出值；G11b ticket private-file切片、公開seed憑證與G11g完整scan仍未完成。 |
 | M04 | D148固定分鐘rate／IP表256、request body16KiB、response 256KiB及D152頁量最大100；D155只信固定proxyIP/32；超限無Event且不回partial。 | D27、D148、D152、D155、D180 | 防濫用 | T-M04：各rate、IP表滿、slowbody／深度／重複headers、response序列化超限、proxy偽造、專用重送也計rate但不取消原項；不加風控後臺。 | U：G07a/G07b已驗本地入口／rate；G09a已驗page 100與256KiB fail-closed無partial；G11a已驗固定proxy peer才採單一合法XFF，並拒絕偽造／串列／陣列／無效值。正式全入口接線與公開部署仍未驗。 |
-| M05 | 維護命令獨立於 API、可重用必要模型設定；任何公開角色無 reset API。 | D47、D52 | 維護入口 | T-M05：停止 API 後外部命令仍可維護 DB；Operator／Viewer／Source 無重置權。 | U |
-| M06 | 每日 Asia/Taipei 凌晨 03:00 由 API 外排程自動執行，不依賴人工或 API 自己計時。 | D26、D52 | 外部排程 | T-M06：排程時區／觸發驗證；API 不健康仍能啟動維護。 | U |
-| M07 | 先拒新業務、有限等待既有操作，再停止 API；API 已停且確保舊 DB 工作不能干擾重置後資料才清除。 | D48–D52、D83 | 停機／隔離 | T-M07：清除前確認 API 已停；未知／未完成 DB 指令不能因停程序就假定消失；隔離須有證據。 | U |
-| M08 | drain待測最多30秒，超時仍進安全重置、不取消；隔離未證明不能清庫。 | D50、D52、D155 | 重置超時 | T-M08：drain超限仍先確停API/Mongo、恢復PRIMARY再清；停止或隔離未知維持入口封閉。 | U |
-| M09 | 只 passhub_demo 七個已知 collection sequential deleteMany 保 indexes 後 seed；公開 Operator/Viewer/ENTRY/EXIT 憑證不變，新 epoch/null claim。 | D26、D47、D52、D155、D187 | reset／seed | T-M09：qualifications/faceSlots/events/users/sources/metadata/managementReceipts 精確清理；不 drop DB/collection/volume/其他 DB；seed 非全庫原子、部署 keys 外管不換，受控重跑。 | U |
-| M10 | 清除／seed 失敗不恢復 API，維護者修復重跑；成功後才重啟接受業務。 | D48、D52 | 維護失敗界線 | T-M10：各階段故障保持不可用；安全重跑恢復，無半初始化服務。 | U |
+| M05 | 維護命令獨立於 API、依明示profile重用必要模型設定；Local可在API停止後連本機Mongo，Atlas由private initializer／controller使用獨立maintenance credential。任何公開角色、public API或application credential都無reset／create／repair能力。 | D47、D52、D207 | 維護入口 | T-M05：兩profile在API停止／不健康時仍可由host命令維護；Operator／Viewer／Source及public routes均不能觸發；Atlas initializer只接受受保護descriptor／maintenance secret且不由API process代行。 | U |
+| M06 | 每日 Asia/Taipei 凌晨 03:00 由 API 外排程依明示profile自動執行，不依賴人工或 API 自己計時；GitHub CI不冒充runtime scheduler。 | D26、D52、D207 | 外部排程 | T-M06：Local與Atlas均驗時區、Persistent=false、同一手動／timer controller與profile選擇；API不健康仍能啟動，缺外部host scheduler時不得宣稱每日自動重置。 | U |
+| M07 | 先拒新業務、有限等待既有操作，再停止唯一 API；隔離策略依profile。Local須停Mongo、證原process消失並恢復PRIMARY後才原地reset；Atlas cluster不停，必須以API消失、inactive dataset切換、safe-reuse predicate與no-late證據隔離新資料。 | D48–D52、D83、D155、D207 | 停機／隔離 | T-M07：Local驗API／Mongo原process消失、PRIMARY與no-late；Atlas驗舊API消失、active／inactive歸屬、descriptor切換及safe-reuse。任何profile都不能只以process消失或已過24小時推定DB工作不會晚寫，無證時入口維持封閉。 | U |
+| M08 | drain最多30秒，超時仍進profile-specific安全重置、不取消；Local須停API／Mongo並恢復PRIMARY，Atlas須停唯一API且不得把cluster不停誤當no-late證據；隔離未證明就保持入口封閉。 | D50、D52、D155、D207 | 重置超時／profile隔離 | T-M08：兩profile皆驗drain超限、原API process消失與fail-closed；Local完成Mongo隔離，Atlas必須在inactive safe-reuse前另證no-late。 | U |
+| M09 | Local只對固定`passhub_demo`七個已知collection sequential deleteMany保indexes後seed；Atlas只在經safe-reuse驗證的inactive blue／green slot建立exact schema/index/canonical seed。兩者皆用新epoch/null claim、穩定公開credential，禁止drop DB／collection／volume／其他DB。 | D26、D47、D52、D155、D187、D207 | profile reset／seed | T-M09：Local精確七collection原地reset；Atlas只觸及選定inactive allowlist DB；public credentials不變、deployment keys外管、失敗受控重跑且無破壞性drop。 | U |
+| M10 | reset／initializer／seed／publish／startup／ready任一失敗都不開放API。Local維持原地受控重跑；Atlas publish前descriptor不變、publish後不得rollback且新descriptor authoritative，兩者都由維護者安全重跑後才接受業務。 | D48、D52、D207 | 維護失敗界線 | T-M10：兩profile逐階段故障均保持marker／API不可用且無半初始化服務；Atlas分別驗publish前、publish後與ready失敗的controlled rerun，不把舊slot當restore。 | U |
+| M11 | 只有exact `LOCAL_SELF_HOSTED`／`ATLAS_MANAGED`兩個部署profile；共用同一API image、application、domain、REST API、schema與業務語意。profile分支只在deployment／infrastructure，不得以`NODE_ENV`選DB。 | D207–D208、D210 | 部署設定邊界 | T-M11：未知profile fail closed；domain/application/HTTP無profile branch；同一build可由明示profile啟動兩種部署。 | U：G12g-1已驗exact profile、Local target與零業務層分支；G12g-3已驗兩套Compose共用exact API image、production command與NGINX的靜態parity，並重跑Local runtime。真Atlas啟動、managed capability及跨profile業務等價未驗。 |
+| M12 | Atlas使用受保護、無秘密、startup只讀一次descriptor，exact fields為profile／slot／databaseName／datasetEpoch；allowlist及metadata epoch一致，原子publish且不hot reload。 | D207–D208、D210 | dataset定位／啟動 | T-M12：格式、額外欄、allowlist、epoch mismatch均pre-listen失敗；啟動後修改檔案不切DB；publish不暴露partial descriptor。 | U：G12g-1已驗固定獨立路徑、wire／FS intake、read-once與ticket前epoch mismatch；G12g-3已驗Compose exact唯讀directory mount、`create_host_path:false`及與runtime／secret host tree隔離。真container owner／mode startup與atomic publish仍未驗。 |
+| M13 | Local verifier維持MongoDB 8.0.32／`rs0`／single-member／writable PRIMARY；Atlas verifier核managed writable、session、transaction、schema／index能力，不鎖setName、host count或patch。 | D207、D209 | Mongo capability | T-M13：兩組正負能力矩陣、真Local及真Atlas交易；mock只驗分支邏輯，不能算Atlas相容證據。 | U：`docs/evidence/g12g-2/report.md`已直接驗Local 8.0.32／snapshot transaction／commit及前後無mutation，並以mock驗Atlas branch；尚無真Atlas交易，故不得升V。 |
+| M14 | Atlas reset使用固定blue／green序列；publish前失敗descriptor不變但入口封閉，publish後失敗不rollback且new descriptor authoritative；inactive重用須直接safe-reuse證據，單靠24h無效，slot非backup／無restore。 | D207 | Atlas maintenance | T-M14：每個故障點、controller競爭、old-write隔離及controlled rerun；safe-reuse無法證明時G12g-5 STOP且不清理。 | U |
+| M15 | Atlas app／maintenance credentials分離且與公開Demo、JWT、comparison secrets分離；Atlas Compose無Mongo service／volume／root password／keyfile，public API不得create／repair schema。 | D207、D210 | credential／Compose邊界 | T-M15：static topology、最小權限真連線、secret scan；只有private initializer可建schema/index/seed。 | U：G12g-3已驗Atlas Compose無Mongo service／named volume／root／keyfile／maintenance secret，API只收application secret reference；三個file source互異、拒絕固定危險host tree，且不與已知可寫runtime tree或descriptor tree重疊。真Atlas app／maintenance users、最小權限及private initializer仍未驗。 |
+| M16 | GitHub只承載code／CI，API runtime在外部host；host、domain、TLS、scheduler、Atlas cluster、network allowlist、database users均為外部前提，不宣稱HA／SLA。 | D207 | hosting／對外聲明 | T-M16：文件與public evidence分層；缺外部前提即blocked，不能以Local或CI冒充public deployment。 | U |
 
 ### 2.10 作品品質與可展示證據
 
@@ -189,11 +195,12 @@
 | E02 | 真 MongoDB 整合測試證明原子性、映射及冪等唯一性，不只 mock repository。 | D35、D65、業務 §12 | DB 整合驗證 | T-E02：實際交易故障／競爭、全部資料一致，保留環境及命令。 | U |
 | E03 | 真實並行 HTTP 測試，驗證跨媒介及管理競爭、Event／Presence／Mapping 完整。 | D19–D20、D35、D76、業務 §12 | HTTP 整合驗證 | T-E03：不同事件均保存且最多一個轉移；同事件只一個 Event。 | U |
 | E04 | D152／D182固定10k Qualification／40k Event與Qualification、INSIDE及八種Event filter cases的索引前後實驗；正確性及完整證據為門檻，不要求改善百分比。 | 業務 §12、D152、D182 | 查詢／測量 | T-E04：SHA-256 deterministic fixture及hash；10 cases各first／oracle fixed-next、tie≥64；每格10 warmup／100 serial measured，BEFORE／AFTER共4,000 raw ns，nearest-rank p50／p95 index 49／94；只切四個query non-unique indexes，兩state輸出相同；40份真adapter aggregate executionStats、主cursor／lookup分開、環境／index inventory／完整與公開去敏證據。 | V：clean `dd0bc14`正式run完成4,000 raw／40 cells／40 executionStats，fixture／readback hash、oracle、tie、無gap／duplicate、BEFORE／AFTER輸出及index inventory全綠；manifest 50 artifacts重算一致，見`docs/evidence/g09b/report.md`。 |
-| E05 | 結構化日誌與 request ID 可追蹤請求、原項及故障，不洩漏秘密。 | D21、業務 §12 | 可觀測性 | T-E05：跨層關聯可查；斷線、重送、未知、維護紀錄有安全上下文。 | U |
+| E05 | 既有closed runtime structured logs以request／operation／datasetEpoch追蹤請求、原項及故障；deployment／maintenance evidence context另明示profile並與datasetEpoch關聯。不洩漏descriptor以外的部署資料、Atlas URI／credential或業務秘密。 | D21、D153、D207、業務 §12 | 可觀測性 | T-E05：runtime `g10a.log.v1` closed schema不新增profile欄，仍以既有request／operation／datasetEpoch跨層關聯；profile由Local／Atlas deployment／maintenance evidence提供並核對同datasetEpoch。斷線、重送、未知、Local停機與Atlas initialize／publish／ready均有安全上下文；secret diff/runtime scan涵蓋URI、app／maintenance credential、JWT、comparison、QR／subject。 | U |
 | E06 | 自動化測試涵蓋規則、權限、秘密、冪等、並行、故障、預算及維護。 | D35、D65–D99、業務 §12 | 測試套件 | T-E06：逐列對應，不把單元測試數量等同需求覆蓋。 | U：G11a新增18 unit／11 static／8真runtime cases，full unit為59 suites／1009 tests；此前各gate另有直接報告。G11b–G11g及逐136 release audit仍未完成，數量不等同完整覆蓋。 |
 | E07 | 乾淨 Docker 環境啟動 API／真 Mongo，seed 與一鍵 Demo 可重跑且有斷言。 | D30、D35、D189、業務 §12 | 交付／展示 | T-E07：無本機殘留安裝；交易環境、verification-only bootstrap、persistent claim、初始化及主流程成功。 | V：G12f clean source 以 production Dockerfile／Compose 建置，真 Mongo PRIMARY、seed、bootstrap、QR ENTRY、INSIDE、Face EXIT、EXITED／Events 與 project/image/temp cleanup probes 全通過；只限本機 synthetic Demo，不含 public HTTPS。 |
 | E08 | CI 靜態檢查、測試與建置有實際成功證據，保存 commit／環境／命令。 | 業務 §12 | CI | T-E08：乾淨 runner 通過；失敗阻止宣稱完成。 | U |
 | E09 | README／設計文件交代信任邊界、狀態、資料流、原子性、模擬、共享及每日重置限制。 | D01、D25–D26、D30、D34、業務 §12 | 操作／設計文件 | T-E09：陌生讀者能重跑及解釋限制；不提公司現行系統或複製其資料／畫面。 | V：README 與 `docs/demo/g12f-docker.md` 已說明 Mock Face／QR 邊界、非 RTSP／硬體、synthetic data、無 SLA／隔離保證、主流程與清理；公開 HTTPS／共享部署仍待 G12g。 |
+| E10 | 使用同一fixture／request向量在Local與真Atlas驗證相同HTTP status、reason、Presence、Event、去敏投影與最終資料語意；分別保存Atlas capability／initializer／reset／public smoke與Local fault／perf證據，不互相冒充。 | D207、業務 §11–§12 | 跨profile驗收 | T-E10：業務contract parity、真Atlas transaction、blue／green reset、protected CI與public HTTPS；差異只能來自已允許的topology／maintenance。 | U |
 
 ## 3. 明確排除與負面驗收
 
@@ -296,10 +303,10 @@
 | P11 | D152三list固定keyset／route-filter-epoch cursor；D182固定SHA-256 fixture分布、十case first／fixed-next、四query索引前後各2,000次量測、40份真adapter explain、正確性gate及私有／公開證據分層。 | B44–B47、E04；G09a/G09b |
 | P12 | D153／D184 exact uniform allowlist、有限best-effort FS logs及私密LOGS_READ／socket，logical-step permission、hold ACK前屏障、drain及bounded current-last replay。 | B40、B50、L07–L12、L36、E05–E06、M05、M07；G10a（本關僅直接切片，跨G10b／G10c／G11者仍U） |
 | P13 | D148連線／reader/body/upload/validation/scrypt/query/canonical限額及fixed-minute rate、IP表256；D155信固定proxyIP/32。 | L01、L35、M04；G07a/G07b/G11a/G11g |
-| P14 | D154–D155、D187單API/單成員replset/NGINX；systemd03臺北Persistent=false、host lock/marker、API與Mongo確停及恢復、七collection精確清理／runTicket分bootstrap-ready／failclosed。 | A18、M01、M05–M10；G11a–G11g |
-| P15 | D156未被D166取代的命令／期限／clean sourceCommit規則；D166正式Jest runner與其證據失效／重驗範圍；D157原25STOP經D187拆分G11後固定為31STOP，maintenance600/1800不變。文件封口G00，完整release136證據G12。 | E01–E09；G00/G01a–G12 |
+| P14 | D154–D155、D187保留Local單API／8.0.32單成員`rs0`／固定`passhub_demo`／NGINX及停API＋Mongo原地reset；D207新增同image的Atlas managed profile、blue／green dataset、protected descriptor、credential分離與不停止cluster的reset。 | A18、M01、M05–M16、E10；G11a–G11g、G12g-0–G12h |
+| P15 | D156未被D166取代的命令／期限／clean sourceCommit規則與Jest決策保留；D207核對舊31說法不完整，原表實為38，G12g拆八子關後固定45STOP。現行完整release為132正式＋11排除＝143要求，G12a/c舊baseline stale。 | E01–E10；G00/G01a–G12h |
 
-實作方案記錄逐關 STOP、命令 dictionary 與證據位置。G01a／G01b、G02–G11g、G12a–G12f 已各自完成限定驗收；目前停止於 G12f。完整 release、public HTTPS 與逐項 G12 audit 仍未驗證；G12c限定證據只證帳本結構與邊界稽核，G12d限定證據只證 clean install／完整 unit 重跑，G12e限定證據只證遠端 CI pipeline，G12f限定證據只證本機 synthetic Docker Demo，不自動證明完整 v1。
+實作方案記錄逐關 STOP、命令 dictionary 與證據位置。G01a／G01b、G02–G11g、G12a–G12f 已各自完成限定驗收；D207文件gate G12g-0、D208工程gate G12g-1、D209工程gate G12g-2及D210工程gate G12g-3已通過。頂層仍停止於G12f／下一G12g，G12g內部停止於g-3／下一g-4。G12a/c的136 baseline是歷史證據；G12d/e/f須在最終新HEAD重跑，且G12f只證Local synthetic Docker Demo。
 
 ## 7. 實作時的證據帳本與反向覆核
 
@@ -317,7 +324,7 @@
 4. 獨立覆核者直接讀原始 D 段與測試，反查矩陣是否漏要求或誤採舊提案；不只閱讀實作者摘要。
 5. 交付差異與證據後停止。未達條件不進下一關，不因時間壓力靜默縮減要求；必要變更先與使用者確認。
 
-**當前停止點：G12f Docker Demo evidence 已通過；下一合法 gate 為 G12g。矩陣 V／U 只可在直接證據與逐項覆核後更新；G12c／G12d／G12e／G12f 的 PASS 均不把 136 項要求升格為完成。**
+**當前停止點：頂層G12f Local Docker Demo已通過／下一頂層G12g；G12g內部g-3限定工程gate已通過／下一子關g-4。矩陣V／U只可依直接證據更新；歷史G12c／d／e／f PASS不把現行143項要求升格為完成。**
 
 ## 8. 追蹤矩陣建立時的文件覆核紀錄（歷史）
 
@@ -337,9 +344,9 @@
 - 僅更新業務文件及本矩陣的同步狀態／驗收前提；136 條要求的工程證據仍 U，15 項 P 清單不變。沒有開始重寫、執行測試、清除資料或重啟服務。
 
 
-## 10. D100–D184 細化要求與固定關卡（當前）
+## 10. D100–D207 細化要求與固定關卡（當前）
 
-下列不是另加產品功能；是既有要求的新契約／反例／驗收細化。原136 ID保留，T-ID可拆多個測試，**本節的子情境也必須映射到實際測試與結果**，不能只讓第2節同名test存在便宣稱覆蓋。
+下列多數不是另加產品功能，而是既有要求的新契約／反例／驗收細化；D207則正式增加六項部署維護要求與一項跨profile證據要求。現行132正式＋11排除＝143 ID，T-ID可拆多個測試，**本節的子情境也必須映射到實際測試與結果**，不能只讓第2節同名test存在便宣稱覆蓋。
 
 | 決策範圍 | 必須保留的細化／去向 | 對應要求 |
 |---|---|---|
@@ -363,10 +370,11 @@
 | D183 | G09b clean `dd0bc14`正式run通過：manifest 50 artifact hashes一致；10k／4k／40k固定fixture、10 cases first／next、BEFORE／AFTER correctness及四索引切換全綠；4,000 raw與40 executionStats完整。單次固定順序觀察20／20 p50、19／20 p95較低，`inside-all / first` p95約+3.6%；不宣稱因果／SLA。只升E04，E06維持U；STOP移至G09b，下一G10a。 | E04、E06、E09 |
 | D153 | allowlist request/operation/epoch/run/fixedcode、有限log/drop非必要Event；socket私密權限；hold同步屏障ACK/不撤issued；manual與maintenance獨立；current-last control replay有界/stale拒絕；late callback歸屬不凍permission。 | B40、B50、L07–L12、E05–E06、M05、M07 |
 | D184 | G10a exact開發前契約：manual阻擋所有READY、不預判rate／registry／ORIGINAL，release後FIFO start才分類；rate／JOINED／REPLAY／invalid為G08 0次，eligible ORIGINAL exact1；existing-only memory join／replay不註冊READY且繞manual。maintenance封閉new／READY／validation，query另線性化；drain只等完整issuedPersistence＋activeQueryReads。closed logger／LOGS_READ FD snapshot、完整AF_UNIX framing／JSON錯誤分層／watchdog／CLI、wire／response／nested snapshot均自足定義。只使G10a READY，不做G10b/G10c/G11，且不升V。 | B40、B50、L07–L12、L36、E05–E06、M05、M07 |
-| D154–D155、D187 | LinuxCompose單API/單member非HA、NGINXpins/HTTPS前提/固定proxy/禁止upstreamretry；systemd03TaipeiPersistentfalse/hostlockmarker/drain30/API+Mongo確認stop/恢復PRIMARY/僅passhub_demo七個已知collection deleteMany保indexes；seed不整庫原子/任何fail off；受控ticketbootstrap與ready分開/普通boot不接claim；proxy/Mongo/容器全表面去敏及秘密scan。 | A18、L11–L13、M01–M10、B50、E05–E09 |
-| D156–D157、D166、D187 | Jest runner先編TS/真HTTPMongo/固定fault工具digestgate；期限fail非rollback/cleanup不蓋錯；正式clean sourceCommit/指紋及報告revision區分/變更失效/普通CI非完整證據；D157原25STOP經D187拆分G11後為31STOP，每關報驗證再停。D166取代D156的Node unit runner選擇，其他證據規則保留。 | E01–E09、A01–A02、L07–L23、M05–M10 |
+| D154–D155、D187 | Local LinuxCompose單API/8.0.32單member非HA、NGINXpins/HTTPS前提/固定proxy；systemd03TaipeiPersistentfalse/hostlockmarker/drain30/API+Mongo確認stop/恢復PRIMARY/固定passhub_demo七collection deleteMany保indexes；seed不整庫原子/任何fail off；ticket bootstrap與ready分開。這些是Local歷史基線，不支持Atlas。 | A18、L11–L13、M01–M10、B50、E05–E09 |
+| D156–D157、D166、D187 | Jest runner先編TS/真HTTPMongo/固定fault工具digestgate；期限fail非rollback/cleanup不蓋錯；正式clean sourceCommit/指紋及報告revision區分/變更失效/普通CI非完整證據。D157的25與D187的31是歷史計數；D207核對現行為45。 | E01–E10、A01–A02、L07–L23、M05–M16 |
+| D207 | 只允許`LOCAL_SELF_HOSTED`／`ATLAS_MANAGED`；同image/application/domain/API/schema/semantics且禁`NODE_ENV`選DB。Local保留8.0.32/rs0/single/passhub_demo原地reset；Atlas驗managed capability、不鎖setName/host/patch，使用blue／green、protected startup-read-once descriptor與固定reset序列。publish前／後皆fail closed；safe-reuse不能靠24h，無證即G12g-5 STOP；credential／Compose／hosting分離，不宣稱HA/SLA。現況尚無完整end-to-end production maintenance orchestrator，G11只是Local分段證據。 | M08–M16、E10、A18、B50、E05–E09 |
 
-### 10.1 136 要求逐列gate索引
+### 10.1 143 要求逐列gate索引
 
 D187之後，`G11`只可作「G11a–G11g整段」的歷史umbrella稱呼，不能作可獨立通過的gate或證據狀態。本索引的現行列一律指向具體子關；只有該子關的直接證據能更新其切片，G11g也不會自動替前六關補證。
 
@@ -461,7 +469,7 @@ wire `v="c1"`且UUID全canonical lowercase；frame合法後的JSON／DTO錯誤�
 | A15 | G04a、G04b、G10b、G10c |
 | A16 | G04a、G04b、G10b、G10c |
 | A17 | G03a、G04b、G08a、G08b、G09a |
-| A18 | G05a、G11a、G11b、G11c、G11g |
+| A18 | G05a、G11a、G11b、G11c、G11g、G12g-1、G12g-3、G12g-5、G12g-7、G12h |
 | L01 | G05a、G07b、G08b |
 | L02 | G05a、G07b、G08b |
 | L03 | G05a、G07b、G08b |
@@ -502,21 +510,28 @@ wire `v="c1"`且UUID全canonical lowercase；frame合法後的JSON／DTO錯誤�
 | M02 | G11g、G12 |
 | M03 | G11a、G11b、G11d、G11g、G12 |
 | M04 | G07a、G07b、G11a、G11g |
-| M05 | G10a、G11c、G11e、G11g |
-| M06 | G11e、G11g |
-| M07 | G10a、G11c、G11f、G11g |
-| M08 | G11c、G11f、G11g |
-| M09 | G11d、G11f、G11g |
-| M10 | G11f、G11g |
+| M05 | G10a、G11c、G11e、G11g、G12g-5、G12g-7、G12h |
+| M06 | G11e、G11g、G12g-5、G12g-7、G12h |
+| M07 | G10a、G11c、G11f、G11g、G12g-5、G12h |
+| M08 | G11c、G11f、G11g、G12g-5、G12h |
+| M09 | G11d、G11f、G11g、G12g-4、G12g-5、G12h |
+| M10 | G11f、G11g、G12g-5、G12g-7、G12h |
+| M11 | G12g-1、G12g-3、G12g-6、G12h |
+| M12 | G12g-1、G12g-3、G12g-5、G12g-7、G12h |
+| M13 | G12g-2、G12g-4、G12g-6、G12h |
+| M14 | G12g-4、G12g-5、G12g-7、G12h |
+| M15 | G12g-3、G12g-4、G12g-7、G12h |
+| M16 | G12g-0、G12g-7、G12h |
 | E01 | G07a、G07b、G08a、G08b、G09a、G12 |
-| E02 | G04a、G04b、G10b、G10c |
+| E02 | G04a、G04b、G10b、G10c、G12g-4、G12g-6、G12h |
 | E03 | G07b、G08a、G08b、G10b、G10c |
 | E04 | G09a、G09b |
-| E05 | G10a、G11g |
+| E05 | G10a、G11g、G12g-5、G12g-7、G12h |
 | E06 | G03a、G03b、G03c、G04a、G04b、G05a、G05b、G05c、G06a、G06b、G07a、G07b、G08a、G08b、G09a、G09b、G10a、G10b、G10c、G11a、G11b、G11c、G11d、G11e、G11f、G11g、G12 |
 | E07 | G02、G11a、G11b、G11d、G11g、G12 |
 | E08 | G12 |
 | E09 | G12 |
+| E10 | G12g-4、G12g-6、G12g-7、G12h |
 | X01 | G03a、G03c、G07a、G08a、G08b、G09a、G11g、G12 |
 | X02 | G03a、G03c、G07a、G08a、G08b、G09a、G11g、G12 |
 | X03 | G03a、G03c、G07a、G08a、G08b、G09a、G11g、G12 |
@@ -531,6 +546,16 @@ wire `v="c1"`且UUID全canonical lowercase；frame合法後的JSON／DTO錯誤�
 
 ### 10.2 本輪必要同步驗證紀錄
 
+- D207 docs-only重基線已確認143 unique IDs：52 B＋18 A＋36 L＋16 M＋10 E＋11 X，亦即132正式＋11排除；M11–M16、E10各有exact gate mapping，M08／M09已profile-aware。
+- G12g-0只修改四份Markdown；未執行工程測試，也未改code／config／tests／scripts／README／evidence。`scripts/g12/check-requirements.mjs`仍鎖舊125＋11及單字母status，現為stale，必須在G12g-1更新；其舊PASS不代表新143 baseline。
+- D207後固定45 STOP；D210完成g-3後，頂層狀態仍為G12f已完成／下一G12g，G12g內部狀態為g-3 PASS並停止／下一g-4。真Atlas及完整end-to-end production maintenance orchestrator尚無工程證據。
+- 本輪readonly custom parser exit 0：`formal=132 excluded=11 total=143 dup=0 mapping=143 missing=0 extra=0 tIdMissing=0 gates=45 only4docs=true`；secret diff scan exit 0／`hits=0`；`git diff --check` exit 0。
+- 舊`npm run check:g12c:requirements`依預期exit 1，精確首因為`G12C_MATRIX_COUNT_INVALID:formal=132:excluded=11:duplicates=`；這證明舊checker仍鎖136 baseline，不是新文件失敗。修正仍留G12g-1，本關不得改script或把舊PASS沿用為新baseline。
+- G12g-0最終獨立覆核：PM PASS、architect PASS、tester PASS。architect對E05 closed runtime logger schema的blocker已修正並重驗PASS；本gate正式停止，下一合法子關仍為G12g-1。未執行工程測試或Atlas外部操作。
+- G12g-1限定證據見`docs/evidence/g12g-1/report.md`與`runtime.json`：exact Node 24.21.0完整unit為83 suites／1350 tests，專項65 tests，9個錯誤checker mutation全拒絕、1個canonical terminal正例接受；G11a 8／8、G11b 12／12及G12f 8／8 Local Docker回歸通過。PM、architect、tester最終PASS。
+- G12g-1只完成typed profile、固定Local target、受保護startup-read-once Atlas descriptor intake、database target注入、ticket前epoch比較及143-ID checker重基線。沒有連Atlas、沒有Atlas verifier／Compose／initializer／publisher／reset／public deployment；A18、M11、M12與E10仍未完整閉合。頂層仍停止於G12f／下一G12g，內部停止於g-1／下一g-2。
+- G12g-2限定證據見`docs/evidence/g12g-2/report.md`與`runtime.json`：2個專項unit suites／37 tests、boundary、runner safety正常／SIGTERM／SIGINT 3 cases、真Local Mongo 8.0.32 integration 1 test、exact toolchain完整unit 85 suites／1387 tests，以及G11a 8／8、G11b 12／12、G12f static 17／17與Demo 8／8均通過。真Local integration另有12-case target guard正負矩陣，任何schema／seed／drop前只接受exact隔離URI及資料庫名稱。Atlas只有mock branch邏輯，未連真Atlas、未驗credential或Compose；M13仍U。
+- G12g-3限定證據見`docs/evidence/g12g-3/report.md`與`runtime.json`：專項1 suite／67 tests、20個Compose contract／checker cases、exact toolchain完整unit 86 suites／1454 tests，以及G11a 18 unit＋11 static＋8 runtime與G12f 17 static＋8 Demo均通過。Atlas Compose exact `api`＋`proxy`、同API image／NGINX、無Mongo／named volume／root／keyfile／maintenance secret，唯讀descriptor mount與application secret references有靜態契約；沒有連真Atlas、啟動Atlas runtime或驗credential權限。A18、M11、M12、M15、M13及E10仍為U。頂層仍停止於G12f／下一G12g，內部停止於g-3／下一g-4。
 - 僅Markdown：business-scope有效差異分段同步，矩陣改最新規劃／P採用與子情境／gate；D01–D176討論歷史保留，舊SHA及第8/9節是歷史基線。
 - D161當時的readonly結構檢查：136 unique要求ID；A01為V、其餘135項U；P01–P15及當時25STOP保留。這是歷史回執；STOP總數其後已由D187更新為31。當次僅舊碼清除／保留項驗證完成，沒有新code、package、安裝、DB或部署驗證。
 - D159後三名原覆核者直接重讀補正，確認當時指定問題均已回應。D161另由使用者明確改變舊碼處理策略；只A01更新為V，其餘U保留。

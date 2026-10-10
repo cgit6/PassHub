@@ -1,0 +1,169 @@
+{
+  "gate": "G12g-3",
+  "status": "PASS",
+  "evidenceKind": "development-gate",
+  "source": {
+    "baseCommit": "8322ce3d7f859212b0c35b6fac2ec057fcf0b669",
+    "dirty": true,
+    "trackedModified": 11,
+    "untrackedStatusEntries": 29,
+    "note": "G12g-0 through G12g-3 changes were present in the shared worktree; this is not clean release evidence."
+  },
+  "toolchains": {
+    "exactFullUnitContainer": {
+      "image": "node:24.21.0-bookworm-slim@sha256:2fe369e969550cde8e867afc3fe370b260140cab4a23d467074295b42163d553",
+      "node": "v24.21.0",
+      "npm": "11.19.0",
+      "docker": "29.0.0"
+    },
+    "hostOrchestration": {
+      "node": "v24.12.0",
+      "npm": "11.6.2",
+      "dockerClient": "29.0.0",
+      "dockerServer": "29.0.0",
+      "dockerCompose": "v2.40.3",
+      "classification": "dirty-development orchestration only"
+    }
+  },
+  "results": {
+    "g12g3": {
+      "command": "npm run test:g12g3",
+      "exit": 0,
+      "unitSuites": 1,
+      "unitTests": 67,
+      "normalizedContractCases": 12,
+      "rawContractCases": 4,
+      "checkerCases": 4,
+      "totalCheckerCases": 20,
+      "composeCommands": [
+        "docker compose -f infra/g11/compose.yml config --format json",
+        "docker compose -f infra/g11/compose.atlas.yml config --format json"
+      ],
+      "syntheticCanariesOnly": true,
+      "containerCreateOrUp": false,
+      "realAtlasConnection": false,
+      "normalAndHandledErrorTempCleanup": "PASS",
+      "interruptSafeTempCleanupClaimed": false
+    },
+    "fullUnitExactToolchain": {
+      "command": "npm run test:unit",
+      "exit": 0,
+      "suites": 86,
+      "tests": 1454,
+      "hostVisibleTemporaryDirectoryRemoved": true
+    },
+    "g12g1Regression": {
+      "command": "npm run test:g12g1",
+      "exit": 0,
+      "suites": 3,
+      "tests": 65,
+      "boundaryFiles": 170,
+      "boundaryViolations": 0,
+      "checkerMutationsRejected": 9,
+      "checkerTerminalPositiveAccepted": 1,
+      "postDocumentationRerun": true,
+      "completedSubgate": "G12g-3",
+      "nextSubgate": "G12g-4",
+      "requirements": { "formal": 132, "excluded": 11, "total": 143 }
+    },
+    "g12g2Regression": {
+      "command": "npm run test:g12g2",
+      "exit": 0,
+      "unitSuites": 2,
+      "unitTests": 37,
+      "runnerSafetyCases": 3,
+      "localMongoIntegrationTests": 1,
+      "cleanup": "PASS"
+    },
+    "g11aLocalRegression": {
+      "classification": "dirty-development functional component coverage",
+      "umbrellaCleanGuardCommandExecuted": false,
+      "unit": { "command": "npm run test:g11a:unit", "exit": 0, "suites": 1, "tests": 18 },
+      "static": { "command": "npm run check:g11a:topology", "exit": 0, "cases": 11 },
+      "runtime": {
+        "command": "npm run test:g11a:runtime",
+        "exit": 0,
+        "cases": 8,
+        "project": "passhub-g11a-5c7c95959efa",
+        "apiImageId": "sha256:754b2cff78ffbfaf065f45189c12ea42205975356857afb0834dbc900c81ac9f",
+        "cleanup": "PASS"
+      }
+    },
+    "g12fLocalRegression": {
+      "classification": "dirty-development Local regression",
+      "static": { "command": "npm run check:g12f:docker-demo", "exit": 0, "checks": 17 },
+      "runtime": {
+        "command": "npm run demo:g12f:docker",
+        "exit": 0,
+        "cases": 8,
+        "project": "passhub-g12f-65c894933aad",
+        "apiImageId": "sha256:171801ab4a9e965c349a5e9d6541ea9ee99002887b59299e5d525325e0efaf7b",
+        "cleanup": "PASS"
+      }
+    },
+    "securityAndHygiene": {
+      "directFilesScanned": 13,
+      "mongoUriLiteralFindings": 0,
+      "atlasHostLiteralFindings": 0,
+      "inlineAtlasUriEnvironmentFindings": 0,
+      "distEntries": 1244,
+      "distWrongUidEntries": 0,
+      "distWrongGidEntries": 0,
+      "relatedDockerContainers": 0,
+      "relatedDockerNetworks": 0,
+      "relatedDockerVolumes": 0,
+      "diffCheck": "PASS"
+    }
+  },
+  "atlasEvidence": {
+    "kind": "compose-static-only",
+    "services": ["api", "proxy"],
+    "networks": ["edge"],
+    "topLevelNamedVolumes": 0,
+    "mongoService": false,
+    "maintenanceCredentialInApi": false,
+    "realAtlasConnection": false,
+    "realAtlasRuntimeStartup": false,
+    "atlasCompatibilityProven": false
+  },
+  "requirementStatus": {
+    "A18": "U",
+    "M11": "U",
+    "M12": "U",
+    "M13": "U",
+    "M15": "U",
+    "E10": "U",
+    "reason": "G12g-3 proves static dual-Compose topology and Local regressions only; true Atlas runtime, credentials, transactions, initializer, maintenance and cross-profile equivalence remain absent."
+  },
+  "fingerprints": {
+    "localComposeSha256": "59dfe00176421aa1e917eb5dd940ac71b472b5140c0cd2535b9137d08c87265d",
+    "atlasComposeSha256": "29e64238075eb57daddc7d048fe88fdd95f085ed6d63dbdb9b662663ff01e2e0",
+    "apiDockerfileSha256": "6d022c40336cbc94c9ac1de707957c2790dd9b7d6637fc9a34a8f2b65f51afe3",
+    "nginxConfigSha256": "7e39b67ea25799386207926438109a243841e75c7c5c35cc8af36d4c9d8c6960",
+    "mongoEntrypointSha256": "224cd6b610bf25fa4fcadfdc9c066aff628f3fd3936269cec8ef2ee9dd9d8141",
+    "g11aTopologyContractSha256": "68e1e088660956218b6b3daf8f1ec4edea96e4828a75fa34662d607d420ea1f2",
+    "g12g3TopologyContractSha256": "1e663ec1eb7f856d0aba824761679f4aa42d0dfe962e678e8314ac80d3175e7d",
+    "g12g3UnitTestsSha256": "a84c51b06d9ff2e1bca939a44f1632d60e73ed041d89f0e254a62eb3beb99a9b",
+    "g12g3CheckerSha256": "4dc87e6c7d714a9d425605420f47ac46f41d1c9dd5f89e3edb20376a9b379ed2",
+    "g12g3JestConfigSha256": "220b70ba33432020ed9dc8bf3f31c72984078a1c3022ac4c602a36c04f2a33ad",
+    "packageJsonSha256": "deaaa6886699cbbd597725f813bb7114a46430380e18ad894fc25b2bde0286ec",
+    "packageLockSha256": "70fce3c9a46f686e6bca2e6f6e66894c6e4510ffbc6bd4518d781f2f2bb9320b",
+    "businessScopeSha256": "9fcdab7adbd74e2564d99aa06c09f33c349b534624c2d4ac1c43c137e507540c",
+    "discussionSha256": "1809caf7af992af050c9dc135b3d68119e20211d427b549a104c0cd7c6ea1fa3",
+    "implementationPlanSha256": "5e4db0ee3ac817634a38ee12939d39bd06700c868452b350e4e2d663aab978dc",
+    "traceabilitySha256": "e07de15a2ed0a04f4e660ad83faca0edcc629f16bf8f161caa1ef095cc07f95a",
+    "reportSha256": "25c42b58802fb528217a699c266f27e5606db3479bd5787879934bdd2d83098d"
+  },
+  "limitations": [
+    "No real MongoDB Atlas connection, URI, SRV/TLS/auth, managed session/transaction, schema/index or compatibility evidence.",
+    "No Atlas application/maintenance user privilege or private initializer evidence.",
+    "No real-container descriptor owner/mode startup, atomic publisher or no-hot-reload integration evidence.",
+    "No blue/green reset, safe-reuse, cross-profile business equivalence, protected CI, public HTTPS, scheduler, HA or SLA evidence.",
+    "Host-orchestrated regressions ran on a dirty worktree and do not replace a final clean G12h rerun."
+  ],
+  "stop": {
+    "completedSubgate": "G12g-3",
+    "nextSubgate": "G12g-4",
+    "g12g4Started": false
+  }
+}

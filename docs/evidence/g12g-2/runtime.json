@@ -1,0 +1,79 @@
+{
+  "gate": "G12g-2",
+  "status": "PASS",
+  "evidenceKind": "development-gate",
+  "source": {
+    "baseCommit": "8322ce3d7f859212b0c35b6fac2ec057fcf0b669",
+    "dirty": true,
+    "note": "G12g-0 through G12g-2 changes were present in the shared worktree; this is not clean release evidence."
+  },
+  "toolchains": {
+    "exactContainer": { "node": "v24.21.0", "npm": "11.19.0" },
+    "mongoLocal": "8.0.32"
+  },
+  "results": {
+    "g12g2": {
+      "command": "npm run test:g12g2",
+      "unitSuites": 2,
+      "unitTests": 37,
+      "boundary": "PASS",
+      "productionVerifierCalls": 1,
+      "mutationPrimitives": 0,
+      "publicExports": 0,
+      "localTargetGuardCases": 12,
+      "localTargetGuard": "PASS",
+      "runnerSafetyCases": 3,
+      "runnerSafety": "PASS",
+      "runnerSafetySignals": ["SIGTERM", "SIGINT"],
+      "localIntegrationTests": 1,
+      "localIntegration": "PASS",
+      "localSnapshotUnchanged": true,
+      "localObservedMutationCommands": 0,
+      "cleanup": "PASS"
+    },
+    "fullUnitExactToolchain": { "suites": 85, "tests": 1387, "status": "PASS" },
+    "g11aLocalRuntime": { "cases": 8, "status": "PASS" },
+    "g11bLocalProductionRuntime": { "cases": 12, "status": "PASS", "sourceDirty": true },
+    "g12fStatic": { "checks": 17, "status": "PASS" },
+    "g12fDockerDemo": { "cases": 8, "status": "PASS" },
+    "diffCheck": "PASS"
+  },
+  "atlasEvidence": {
+    "kind": "mock-branch-only",
+    "realAtlasConnection": false,
+    "realAtlasTransaction": false,
+    "atlasCompatibilityProven": false
+  },
+  "requirementStatus": {
+    "M13": "U",
+    "reason": "Local capability and Atlas branch logic are proven, but true Atlas transaction evidence is absent."
+  },
+  "fingerprints": {
+    "capabilityEngineSha256": "cf9510fa3d16e78fa5e0e6d7f96928b23c0c128f3371d4a84e0c4d72a4021de9",
+    "capabilityFacadeSha256": "2d28b9c7c8eb8f1ee366b089d9829895f259ee228cd06a2582afa27ee65c2107",
+    "productionMainSha256": "47637e55c4ecc5786d6bc253d0b83aca6d106d8c064984b06efe70405cd05f12",
+    "capabilityUnitTestsSha256": "51ae2ebaade3fc467223a4780be10d1e4203941b59dd2cfb4808b05f3efc2a92",
+    "startupUnitTestsSha256": "e88b0c923af1abe1c4cad99acfe8611aba7a3e367d067243ca9f257a7a65671f",
+    "localIntegrationTestSha256": "f9d2e47261b9d28fe9a007c5a68119c430f92e3a0f7f09449efb85a57f02c850",
+    "testSupportSha256": "cf9d3d8faea42a56cdb22b87ad77969109c51239726ff7584f8e4467be3c30c7",
+    "localTargetGuardSha256": "0f82f930a170f0a8f95f2046d4e9b0d399ed5e37ea66aa304dfaa26eec5a098f",
+    "boundaryCheckerSha256": "4a2d2f03d66717b689a83eb891358d7da3d6bc94d622783b6ac997537d68524e",
+    "localRuntimeRunnerSha256": "d391b6e6acaa1370de2383b2a9b55c1fefc71cf7ce2f5a5ac1bbbf2ddb3c341e",
+    "runnerSafetyTestSha256": "5ca7abb66623d20cce5aa4ee6ccebd4ae524475347f8ee5e3a08dc0dcbfb352d",
+    "requirementsCheckerHarnessSha256": "28fe6db0940ee303384005c5b66ae4f723f7701a411b135588ac4780320f1cb1",
+    "unitJestConfigSha256": "722cda805075c658930a3d490fb364ec4a6e453d2b15b015d78d471274bfab42",
+    "integrationJestConfigSha256": "cd162080a65cce8a727b99c324036f00cc510801a2a6e0b20aaa833e61b42f7b",
+    "packageJsonSha256": "f06a24115ee722ad31dd2283ed1fb453eb8cfc7088e528ca6b1f782a0acd19b8",
+    "packageLockSha256": "70fce3c9a46f686e6bca2e6f6e66894c6e4510ffbc6bd4518d781f2f2bb9320b",
+    "businessScopeSha256": "855fd720dedd29224fbaea14ffe808b89bf5b8e77780ebb352658783bd0000ac",
+    "discussionSha256": "e79f3bcde91617ab9c9f9bf7d5783276723be2c8e736dc756b17ecf732aafe5e",
+    "implementationPlanSha256": "5792aa79556e3737736e0e1e8b2a74247e490ca413b82308be3daf089b09e7f3",
+    "traceabilitySha256": "012c61aa51dce62034a23f8b2cfa45c596efa43c3a33b8a3ce49b86b85c34731"
+  },
+  "limitations": [
+    "No MongoDB Atlas connection, SRV/TLS/auth, managed transaction or compatibility evidence.",
+    "No Atlas credential separation or dual Compose evidence.",
+    "No Atlas initializer, descriptor publisher, blue/green reset, public HTTPS, HA or SLA evidence.",
+    "M13 remains U until direct Atlas evidence closes its remaining acceptance criteria."
+  ]
+}

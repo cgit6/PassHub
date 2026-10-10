@@ -1,4 +1,4 @@
-name: passhub-g11
+name: passhub-g12g3-atlas
 
 services:
   proxy:
@@ -73,7 +73,7 @@ services:
       - /tmp:rw,noexec,nosuid,size=16m
     command: ["node", "/opt/passhub/dist/src/deployment/production-main.js"]
     environment:
-      PASSHUB_DEPLOYMENT_PROFILE: LOCAL_SELF_HOSTED
+      PASSHUB_DEPLOYMENT_PROFILE: ATLAS_MANAGED
       PASSHUB_HTTP_HOST: 0.0.0.0
       PASSHUB_HTTP_PORT: "3000"
       PASSHUB_TRUSTED_PROXY_IP: 172.31.211.10
@@ -89,14 +89,15 @@ services:
       - type: bind
         source: ${PASSHUB_RUNTIME_DIR:?set PASSHUB_RUNTIME_DIR}
         target: /run/passhub/api
+      - type: bind
+        source: ${PASSHUB_ATLAS_DATASET_DIR:?set PASSHUB_ATLAS_DATASET_DIR}
+        target: /run/passhub/dataset
+        read_only: true
+        bind:
+          create_host_path: false
     networks:
       edge:
         ipv4_address: 172.31.211.20
-      database:
-        ipv4_address: 172.31.212.20
-    depends_on:
-      mongo:
-        condition: service_started
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/internal/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 5s
@@ -113,81 +114,17 @@ services:
         limits:
           memory: 768m
 
-  mongo:
-    image: mongo:8.0.32-noble@sha256:01354084d2ae665d2e79b79b0cdc50c2c0c98873618912d9a2c8c9cb5c3d24e6
-    platform: linux/amd64
-    restart: "no"
-    stop_signal: SIGTERM
-    stop_grace_period: 30s
-    mem_limit: 1536m
-    entrypoint: ["/bin/bash", "/opt/passhub/mongo-entrypoint.sh"]
-    command:
-      - mongod
-      - --replSet
-      - rs0
-      - --bind_ip_all
-      - --port
-      - "27017"
-      - --quiet
-      - --setParameter
-      - diagnosticDataCollectionEnabled=false
-    environment:
-      MONGO_INITDB_ROOT_USERNAME_FILE: /run/secrets/mongo_root_username
-      MONGO_INITDB_ROOT_PASSWORD_FILE: /run/secrets/mongo_root_password
-    secrets:
-      - mongo_root_username
-      - mongo_root_password
-      - mongo_keyfile
-    volumes:
-      - mongo-data:/data/db
-      - type: bind
-        source: ./mongo/entrypoint.sh
-        target: /opt/passhub/mongo-entrypoint.sh
-        read_only: true
-    networks:
-      database:
-        ipv4_address: 172.31.212.10
-    healthcheck:
-      test: ["CMD-SHELL", "mongosh --quiet --username \"$$(cat /run/secrets/mongo_root_username)\" --password \"$$(cat /run/secrets/mongo_root_password)\" --authenticationDatabase admin --eval \"const h=db.adminCommand({hello:1}); quit(h.setName==='rs0' && h.isWritablePrimary===true && h.hosts.length===1 ? 0 : 1)\""]
-      interval: 5s
-      timeout: 3s
-      retries: 24
-    logging:
-      driver: local
-      options:
-        max-size: 10m
-        max-file: "2"
-    deploy:
-      replicas: 1
-      resources:
-        limits:
-          memory: 1536m
-
 networks:
   edge:
     internal: false
     ipam:
       config:
         - subnet: 172.31.211.0/24
-  database:
-    internal: true
-    ipam:
-      config:
-        - subnet: 172.31.212.0/24
-
-volumes:
-  mongo-data:
 
 secrets:
   app_mongo_uri:
-    file: ${PASSHUB_MONGO_URI_FILE:?set PASSHUB_MONGO_URI_FILE}
+    file: ${PASSHUB_ATLAS_APP_MONGO_URI_FILE:?set PASSHUB_ATLAS_APP_MONGO_URI_FILE}
   jwt_key:
     file: ${PASSHUB_JWT_KEY_FILE:?set PASSHUB_JWT_KEY_FILE}
   comparison_key:
     file: ${PASSHUB_COMPARISON_KEY_FILE:?set PASSHUB_COMPARISON_KEY_FILE}
-  mongo_root_username:
-    file: ${PASSHUB_MONGO_ROOT_USERNAME_FILE:?set PASSHUB_MONGO_ROOT_USERNAME_FILE}
-  mongo_root_password:
-    file: ${PASSHUB_MONGO_ROOT_PASSWORD_FILE:?set PASSHUB_MONGO_ROOT_PASSWORD_FILE}
-  mongo_keyfile:
-    file: ${PASSHUB_MONGO_KEYFILE:?set PASSHUB_MONGO_KEYFILE}

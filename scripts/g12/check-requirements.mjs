@@ -16,7 +16,7 @@ const excludedSection = trace.split('\n## 4. ')[0];
 const excludedIds = [...new Set([...excludedSection.matchAll(/^\|\s*(X[0-9]{2})\s*\|/gmu)].map((match) => match[1]))];
 const allIds = [...formalIds, ...excludedIds];
 const duplicateIds = [...new Set(allIds.filter((id, index) => allIds.indexOf(id) !== index))];
-if (formalIds.length !== 125 || excludedIds.length !== 11 || duplicateIds.length) {
+if (formalIds.length !== 132 || excludedIds.length !== 11 || duplicateIds.length) {
   throw new Error(`G12C_MATRIX_COUNT_INVALID:formal=${formalIds.length}:excluded=${excludedIds.length}:duplicates=${duplicateIds.join('|')}`);
 }
 
@@ -26,9 +26,26 @@ const mappedIds = mapped.map(({ id }) => id);
 const missingMappings = allIds.filter((id) => !mappedIds.includes(id));
 const extraMappings = mappedIds.filter((id) => !allIds.includes(id));
 const duplicateMappings = [...new Set(mappedIds.filter((id, index) => mappedIds.indexOf(id) !== index))];
-const emptyMappings = mapped.filter(({ gates }) => !/G\d{2}[a-z]?/u.test(gates)).map(({ id }) => id);
-if (missingMappings.length || extraMappings.length || duplicateMappings.length || emptyMappings.length) {
-  throw new Error(`G12C_MAPPING_INVALID:missing=${missingMappings.join('|')}:extra=${extraMappings.join('|')}:duplicates=${duplicateMappings.join('|')}:empty=${emptyMappings.join('|')}`);
+const mappedGateTokens = mapped.flatMap(({ id, gates }) => gates
+  .replace(/（[^）]*）/gu, '')
+  .split(/[、|]/u)
+  .map((token) => token.trim())
+  .filter(Boolean)
+  .map((token) => ({ id, token })));
+const emptyMappings = mapped.filter(({ id }) => !mappedGateTokens.some((entry) => entry.id === id)).map(({ id }) => id);
+const malformedGateTokens = mappedGateTokens
+  .filter(({ token }) => !/^G[0-9]{2}[a-z]?(?:-[0-9]+)?$/u.test(token))
+  .map(({ id, token }) => `${id}:${token}`);
+const invalidG12gSubgates = mappedGateTokens
+  .filter(({ token }) => token.startsWith('G12g') && !/^G12g-[0-7]$/u.test(token))
+  .map(({ id, token }) => `${id}:${token}`);
+const mappedG12gSubgates = new Set(mappedGateTokens
+  .map(({ token }) => /^G12g-([0-7])$/u.exec(token)?.[1])
+  .filter((value) => value !== undefined));
+const missingG12gSubgates = [...Array(8).keys()].map(String).filter((value) => !mappedG12gSubgates.has(value));
+if (missingMappings.length || extraMappings.length || duplicateMappings.length || emptyMappings.length
+  || malformedGateTokens.length || invalidG12gSubgates.length || missingG12gSubgates.length) {
+  throw new Error(`G12C_MAPPING_INVALID:missing=${missingMappings.join('|')}:extra=${extraMappings.join('|')}:duplicates=${duplicateMappings.join('|')}:empty=${emptyMappings.join('|')}:malformed=${malformedGateTokens.join('|')}:invalidG12g=${invalidG12gSubgates.join('|')}:missingG12g=${missingG12gSubgates.join('|')}`);
 }
 
 const rows = [...formalMatrix.matchAll(/^\|\s*([A-Z][0-9]{2})\s*\|([^\n]*)$/gmu)];
@@ -97,20 +114,63 @@ for (const [name, script] of [['g07a-legacy', 'scripts/check-g07a-boundary.mjs']
 const business = readFileSync(resolve(root, 'docs/business-scope.md'), 'utf8');
 const plan = readFileSync(resolve(root, 'docs/implementation-plan.md'), 'utf8');
 const traceStatus = readFileSync(tracePath, 'utf8');
-for (const [name, text] of [['business-scope', business], ['implementation-plan', plan], ['requirements-traceability', traceStatus]]) {
-  const statusMatch = /目前停止於\s*G12([a-h])[\s\S]*下一合法\s*gate\s*(?:為|是)?\s*G12([a-h])/u.exec(text);
-  const currentPair = statusMatch !== null && statusMatch[2].charCodeAt(0) === statusMatch[1].charCodeAt(0) + 1;
-  if (!currentPair || /目前停止於\s*G(?:11g|12b)\b/u.test(text) || /下一合法\s*gate\s*(?:為|是)?\s*G12c\b/u.test(text)) {
+const discuss = readFileSync(resolve(root, 'docs/discuss.md'), 'utf8');
+const gatePlanRows = [...plan.matchAll(/^\|\s*(G12g[^|]*)\|\s*([^|]*)\|/gmu)]
+  .map((match) => ({ token: match[1]?.trim() ?? '', status: match[2]?.trim() ?? '' }));
+const g12hPlanRows = [...plan.matchAll(/^\|\s*(G12h[^|]*)\|\s*([^|]*)\|/gmu)]
+  .map((match) => ({ token: match[1]?.trim() ?? '', status: match[2]?.trim() ?? '' }));
+const invalidGatePlanTokens = gatePlanRows
+  .filter(({ token }, index) => token !== `G12g-${index}`)
+  .map(({ token }) => token);
+const isPassingSubgate = ({ status }) => /^PASS(?:：|$)/u.test(status);
+const firstPendingSubgate = gatePlanRows.findIndex(({ status }) => !/^PASS(?:：|$)/u.test(status));
+const terminalG12g = firstPendingSubgate < 0;
+const nonContiguousPass = terminalG12g
+  ? []
+  : gatePlanRows.slice(firstPendingSubgate + 1).filter(isPassingSubgate);
+if (gatePlanRows.length !== 8 || invalidGatePlanTokens.length
+  || g12hPlanRows.length !== 1 || g12hPlanRows[0]?.token !== 'G12h'
+  || (g12hPlanRows[0] !== undefined && isPassingSubgate(g12hPlanRows[0]))
+  || (!terminalG12g && (firstPendingSubgate < 1 || firstPendingSubgate > 7))
+  || nonContiguousPass.length) {
+  throw new Error(`G12C_G12G_GATE_PLAN_INVALID:tokens=${gatePlanRows.map(({ token }) => token).join('|')}:invalid=${invalidGatePlanTokens.join('|')}:firstPending=${firstPendingSubgate}:nonContiguous=${nonContiguousPass.length}:g12h=${g12hPlanRows.map(({ token, status }) => `${token}:${status}`).join('|')}`);
+}
+const expectedCompletedSubgate = terminalG12g ? '7' : String(firstPendingSubgate - 1);
+const expectedNextSubgate = terminalG12g ? null : String(firstPendingSubgate);
+const currentStatusRegions = [
+  ['business-scope', business],
+  ['implementation-plan', plan],
+  ['requirements-traceability', traceStatus.split('\n### 10.2 ')[0] ?? ''],
+  ['discuss', discuss.split('\n### D01')[0] ?? ''],
+];
+for (const [name, region] of currentStatusRegions) {
+  const statusLines = region.split('\n').filter((line) => line.includes('G12g內部'));
+  const allCurrent = statusLines.length > 0 && statusLines.every((statusLine) => {
+    const topLevelCurrent = terminalG12g
+      ? /頂層\s*已完成\s*G12g\s*[／/]\s*下一合法頂層\s*G12h/u.test(statusLine)
+        && !/尚未完成/u.test(statusLine)
+      : /G12f[^\n]{0,100}下一[^\n]{0,50}G12g/u.test(statusLine);
+    const subgateCurrent = terminalG12g
+      ? /G12g內部\s*已完成\s*g-7\s*[／/]\s*無下一子關/u.test(statusLine)
+      : (() => {
+          const match = /G12g內部[^\n]{0,100}?g-([0-7])[^\n]{0,100}?下一[^\n]{0,50}?g-([0-7])/u.exec(statusLine);
+          return match !== null
+            && match[1] === expectedCompletedSubgate
+            && match[2] === expectedNextSubgate;
+        })();
+    return topLevelCurrent && subgateCurrent;
+  });
+  if (!allCurrent || /目前停止於\s*G(?:11g|12b)\b/u.test(region)
+    || /下一合法\s*gate\s*(?:為|是)?\s*G12c\b/u.test(region)) {
     throw new Error(`G12C_CURRENT_STOP_INCONSISTENT:${name}`);
   }
 }
-const tracePair = /當前停止點：G12([a-h])[\s\S]*下一合法 gate 為 G12([a-h])/u.exec(traceStatus);
-if (tracePair === null || tracePair[2].charCodeAt(0) !== tracePair[1].charCodeAt(0) + 1) {
-  throw new Error('G12C_TRACE_STATUS_NOT_CANONICAL');
-}
 
 process.stdout.write(`${JSON.stringify({
-  gate: 'G12c', status: 'PASS', formalRequirements: formalIds.length,
+  gate: 'G12-requirements-baseline', baseline: 'D207', status: 'PASS',
+  completedSubgate: `G12g-${expectedCompletedSubgate}`,
+  nextSubgate: expectedNextSubgate === null ? null : `G12g-${expectedNextSubgate}`,
+  formalRequirements: formalIds.length,
   excludedRequirements: excludedIds.length, totalRequirements: allIds.length,
   traceabilityMappings: mapped.length, evidenceColumnsChecked: rows.length,
   auditSummary: {

@@ -23,7 +23,7 @@ aliases:
   - "PassHub 求職作品範圍決策"
   - "PassHub 架構辯論"
 created: "2026-09-15"
-updated: "2026-10-04"
+updated: "2026-10-10"
 ---
 
 # PassHub v1 業務邊界與架構討論紀錄
@@ -31,16 +31,16 @@ updated: "2026-10-04"
 ## 快速檢索卡
 
 - 核心問題：在小型訪客資格／模擬辨識決策業務上，形成合理、模組化、可驗證的Node.js/TypeScript架構與逐關方案；不以兩天時限取代品質論證。
-- 當前結論：D160完成規劃封口；G02–G11e各自限定 evidence 已保存，目前停止於 G11e。D187 同步七個 reset target、canonical writeRunClaim 語意及 G11a–G11g STOP；下一合法 gate 為 G11f，完整 v1 未完成。
+- 當前結論：G02–G11g、G12a–G12f各自限定evidence已保存；D207完成G12g-0雙部署重基線，D208完成G12g-1 typed profile與descriptor intake限定證據，D209完成G12g-2 Mongo capability verifier分離與真Local限定證據，D210完成G12g-3雙Compose profile與Local回歸限定證據。頂層仍停止於G12f／下一頂層G12g；G12g內部停止於g-3／下一子關g-4，完整v1未完成。
 - 關鍵爭點：D129原生中止兩送有界組預扣不退、跨窗口局部例外；D130較早確認起點／D131七格；D143 Face反向unique同txn替換必须G04a先真測。D149同epoch普通restart關寫是明示可用性代價，不能依memory空接管。
-- 適用於：D01–D187有效採用／修正、獨立角色公開論點、官方查證及剩餘gate風險。採Nest預設Express/strictTS/官方driver/單API/單Mongo member replica set，非無框架或HA；D157原25STOP經D187拆分G11後現為31STOP，見實作方案。
+- 適用於：D01–D210有效採用／修正、獨立角色公開論點、官方查證及剩餘gate風險。採Nest預設Express/strictTS/官方driver/單API；同一application新增Local self-hosted Mongo與Atlas managed兩個部署profile，非無框架或HA；現為45個STOP，見實作方案。
 - 不適用於：把歷史候選／官方語法／manifest／獨立唯讀實驗當PassHub已完成成果。D117 JSON v2已取代binary v1，D130永久終局候選未採，D89安全條件續辦仍有效；D161只有A01為V。
-- 待驗證：G11f及其後gate。G09a已證安全查詢，G09b已完成固定fixture、4,000 raw及40 executionStats限定實驗；G10a–G10c與G11a–G11e限定證據已保存，仍未驗G11f fault matrix、G11g綜合release及完整G12。
-- 實作者入口：[實作方案](implementation-plan.md)，再讀[136要求矩陣](requirements-traceability.md)及[業務規格](business-scope.md)，並回查對應D原文。未來每子關報實際證據後STOP，D114不授權未來不停實作。
+- 待驗證：G12g-4至g-7與G12h；真Atlas capability／initializer／blue-green reset／profile等價／公開HTTPS尚無工程證據。G12g-3只有Compose靜態拓撲與Local dirty-development回歸；既有G11a–g只屬Local歷史；143-ID checker已於g-1重基線，但G12a/c舊release evidence仍屬歷史。
+- 實作者入口：[實作方案](implementation-plan.md)，再讀[143要求矩陣](requirements-traceability.md)及[業務規格](business-scope.md)，並回查對應D原文。未來每子關報實際證據後STOP，D114不授權未來不停實作。
 
 ## 閱讀狀態與階段界線
 
-- 最新狀態：G10a、G10b、G10c、G11a、G11b、G11c、G11d、G11e 限定 gate 已通過；G11f–G11g maintenance 與完整 v1 尚未完成。下一合法 gate 為 G11f。
+- 最新狀態：G10a–G10c、G11a–G11g、G12a–G12f限定gate已通過；D207的G12g-0 docs-only gate、D208的G12g-1、D209的G12g-2及D210的G12g-3限定工程gate通過。下一合法子關為G12g-4；完整v1仍未完成。
 - D01–D35 及所有較早摘要／交接保留歷史；其中「K1尚未同步」「尚未開始第二階段」「API/schema未定」不代表當前狀態。最新有效版本由D117/119/122/125/129–139/140–157及後續明確覆核修正判定，歷史block不回寫。下方回溯狀態描述只對當時有效，不能用來覆蓋新版。
 - 文件整體settled代表有效規劃已採用；D161留下舊碼處理證據，D163–D179留下G02–G08b各自限定證據，D180／D181留下G09a契約及證據，D182／D183留下G09b契約及證據，D184留下G10a開發前契約。partially-sourced仍含專案取捨、官方查證與未實測組合；上述限定gates不代表G10工程、G11部署或其餘107要求通過。
 - 「使用者已接受」與「辯論暫定」逐 block 區分。授權保存辯論不等於確認候選架構，也不等於授權重寫程式。
@@ -3565,3 +3565,47 @@ node -e 'const a=JSON.parse("\"\\uD800\""),b=JSON.parse("\"\\uD801\""); console.
 - 新增 `npm run demo:g12f:docker` 與 `npm run check:g12f:docker-demo`。runner 重用 `infra/g11/api.Dockerfile`、`infra/g11/compose.yml`，在暫存目錄產生 TLS／secret／process identity／一次性 ticket，建立空 Mongo volume 並執行正式 production entrypoint。
 - 正式 run source `1800ed314c56822db8ef84f83319ed69506d9cd8` clean；17 項靜態檢查與 Docker runtime cases `DOCKER_BUILD`、`MONGO_PRIMARY`、`API_READY`、`CREATE_QR`、`QR_ENTRY`、`INSIDE_QUERY`、`FACE_EXIT`、`EVENTS_EXITED` 全通過。結果與指紋見 `docs/evidence/g12f/report.md`、`runtime.json`。
 - runner 另驗 project-labeled containers／networks／volumes、API image tag 與暫存目錄在清理後消失；SIGINT／SIGTERM 走相同 cleanup path。G12f 只證本機 synthetic Demo，不宣稱 public HTTPS、共享部署、RTSP、硬體或完整 136 項需求；下一關 G12g。
+
+### D207｜G12g-0 Local／Atlas 雙部署需求與架構重基線
+
+- 日期：2026-10-09；狀態：使用者接受PassHub作為較完整雲端後端作品，採Local＋Atlas雙部署；本關只同步`business-scope.md`、`implementation-plan.md`、`requirements-traceability.md`與本討論紀錄，未修改code／config／tests／scripts／README／evidence。G12g-0 PASS並STOP；頂層仍保持G12f已完成／下一頂層G12g，G12g內部下一合法子關為g-1。
+- 只允許兩個exact profile：`LOCAL_SELF_HOSTED`與`ATLAS_MANAGED`。兩者使用同一API image、application、domain、REST API、schema及business semantics；profile差異只能在deployment／infrastructure的Mongo verifier、dataset locator／descriptor、Compose／credential及maintenance strategy，禁止以`NODE_ENV`選擇資料庫。
+- Local契約保持固定`passhub_demo`、MongoDB 8.0.32、`rs0`、single-member與writable PRIMARY；既有停API＋停Mongo＋恢復PRIMARY＋七collection原地reset不變。G09b與G11a–G11g仍是Local限定歷史，不能外推Atlas。
+- Atlas固定`passhub_demo_blue`／`passhub_demo_green`；不鎖setName、host count或patch，而須直接驗managed writable／session／transaction／schema／index capability。Atlas Compose不得包含Mongo service／volume／root password／keyfile；app／maintenance credentials分離，且與公開Demo、JWT及comparison secrets分離。public API不得create／repair schema，只有private initializer可處理inactive slot。
+- Atlas startup使用受保護、無秘密、啟動時只讀一次的descriptor，exact fields為`profile`、`slot`、`databaseName`、`datasetEpoch`；profile／slot／databaseName須符合allowlist，metadata epoch須完全相同。descriptor以原子替換發布，不支援hot reload。
+- Atlas reset順序固定為：lock→marker→drain≤30秒→停唯一API並證原process消失→選inactive slot→exact schema/index＋canonical seed/new epoch/null claim→verify→atomic publish descriptor→new process identity/runTicket→startup/private ready→open。Atlas cluster不停。publish前失敗時descriptor不變但入口封閉；publish後失敗不得rollback，new descriptor authoritative且入口封閉，只能controlled rerun。
+- inactive slot重用前必須有可驗收safe-reuse predicate；單靠「已過24小時」不算no-late證據。G12g-5無法直接證明時必須STOP回設計，不得清理或重用。blue／green slot不是backup且不提供restore；兩個profile都禁止drop database／collection／volume或改動其他database。
+- GitHub只承載code／CI；host、domain、TLS、scheduler、Atlas cluster、network allowlist與database users均為外部前提。作品不宣稱HA／SLA。現況尚無完整end-to-end production maintenance orchestrator；G11 evidence是Local分段元件及整合報告，不能冒稱已完成Atlas或新release的完整orchestrator。
+- 新增正式要求M11–M16與E10，現為132正式＋11排除＝143項。M08／M09改為profile-aware。D157的25及D187的31都是歷史計數；原表實有38個gate，以g-0至g-7八關取代原單一G12g後，共45個可執行STOP。
+- G12g拆為：g-0文件重基線、g-1 typed profile／descriptor、g-2 Mongo verifier、g-3雙Compose、g-4真Atlas initializer／integration、g-5 blue／green maintenance、g-6跨profile等價／CI、g-7公開Atlas HTTPS；G12h為最終release audit。每關仍依專案經理需求核對、架構前後審、開發修正、測試獨立驗證、最終acceptance後STOP。
+- 證據失效：G02–G10保留core／Local歷史但shared adapter變更後targeted rerun；G11a–g為Local歷史且shared files改後須對新release重驗；G12a／c的136 baseline立即stale；G12b contract可保留但checker須重跑；G12d／e／f須在最終新HEAD重跑且f仍只證Local。`scripts/g12/check-requirements.mjs`仍鎖125正式＋11排除與單字母status，本關因docs-only不改，明列stale並留G12g-1更新；舊PASS不得當新baseline。
+- G12g-0最終gate回執：readonly custom parser為`formal=132 excluded=11 total=143 duplicates=0 mappings=143 missing=0 extra=0 tIdMissing=0 gates=45`，worktree差異僅四份指定Markdown；`git diff --check` exit 0、secret diff scan 0 hits。舊`npm run check:g12c:requirements`依預期exit 1，精確首因為`G12C_MATRIX_COUNT_INVALID:formal=132:excluded=11:duplicates=`，stale checker留G12g-1修正。PM、architect、tester最終均PASS；architect要求E05不得擴張既有`g10a.log.v1` closed runtime schema，修正為profile由deployment／maintenance evidence提供並與runtime `datasetEpoch`關聯後PASS。本關未執行工程測試、真Atlas連線、部署或其他外部操作。
+
+### D208｜G12g-1 typed profile與dataset descriptor限定gate通過
+
+- 日期：2026-10-09；狀態：專案經理、架構師與獨立測試員最終覆核PASS，active current-state重複矛盾防線亦已修正並由mutation重驗。G12g-1 STOP解除；頂層仍保持G12f已完成／下一頂層G12g，G12g內部停止於g-1／下一合法子關g-2；正式限定證據為`docs/evidence/g12g-1/report.md`與`runtime.json`。
+- 部署入口只接受exact `LOCAL_SELF_HOSTED`／`ATLAS_MANAGED`，缺值、正規化變體、未知值與NUL均在Mongo連線前fail closed；`NODE_ENV`不選DB。Local固定`passhub_demo`且零descriptor I/O，G11a probe只允許Local；現有Local Compose僅補明示profile。
+- Atlas descriptor固定於獨立`/run/passhub/dataset/active-dataset.json`，採單行canonical JSON＋單LF、exact四欄、BLUE／GREEN database allowlist與canonical UUID v4。reader驗0700／0400、owner、regular／symlink、realpath、NOFOLLOW、bounded fatal UTF-8、BigInt stats、雙讀bytes、same-inode mutation、path replacement、close failure及錯誤去敏。獨立路徑是未來唯讀directory mount邊界；真正Atlas mount仍留g-3。
+- production application改由validated target注入既有adapter，移除內部固定Local database；Atlas expected epoch在ticket consumption與durable claim前核對。profile分支未進domain／application／HTTP，亦未新增第二adapter、watcher、publisher、initializer或Atlas verifier。
+- requirements checker更新為132正式＋11排除＝143 IDs，精確辨識G12g-0～g-7、連續PASS／唯一current-next，以及g-7後明示「頂層已完成G12g／下一合法頂層G12h；內部完成g-7／無下一子關」的終態；同時核對四份文件active區域內所有current-state行，拒絕malformed gate、錯誤STOP、重複矛盾狀態、noncontiguous PASS、矛盾否定及G12h提前PASS。checker輸出為中性D207 baseline，不把下一gate標成PASS。
+- 驗證：exact Node 24.21.0／npm 11.19.0容器full unit 83 suites／1350 tests；G12g-1 65 tests；9個錯誤checker mutation全拒絕、1個terminal正例接受；G11a Docker 8／8、G11b Local production 12／12、G12f static 17／17與Docker Demo 8／8全部PASS並清理。獨立測試先後抓出same-inode覆寫、checker終態及重複current-state漏洞，開發修正後轉綠。
+- 限制：本gate沒有連Atlas，現有topology verifier仍為Local限定；沒有Atlas read-only mount／Compose、credential、initializer、atomic publisher、blue／green reset、safe-reuse、public HTTPS、HA或SLA證據。A18、M11、M12、E10維持未完整閉合。下一關G12g-2只處理Mongo capability verifier分離，完成後仍須STOP。
+
+### D209｜G12g-2 Mongo capability verifier分離與真Local限定gate通過
+
+- 日期：2026-10-10；狀態：專案經理、架構師、開發員與獨立測試員完成需求、邊界、程式與真Local runtime覆核。G12g-2 STOP解除；頂層仍保持G12f已完成／下一頂層G12g，G12g內部停止於g-2／下一合法子關g-3；正式限定證據為`docs/evidence/g12g-2/report.md`與`runtime.json`。
+- production Mongo連線成功後切到固定`MONGO_CAPABILITY` stage，並在dataset composition、process identity／ticket、durable claim及HTTP listen前恰一次依exact profile驗證。profile分支仍只在deployment；production application不得自行connect、ensure schema或重跑舊Local topology assertion。
+- Local分支固定先讀`buildInfo`再讀`hello`，要求MongoDB exact 8.0.32、`rs0`、writable PRIMARY及exact一個非空host。真Mongo 8.0.32 integration另直接觀察snapshot read concern與commit transaction，且命令探針前後snapshot一致、沒有資料mutation並完成cleanup。
+- Atlas分支只送`hello`，要求writable PRIMARY與正safe-integer `logicalSessionTimeoutMinutes`；不得讀／鎖build patch、setName、hosts或`msg`。schema／index與唯讀transaction capability仍由既有`inspectExistingG04bSchemaReadOnly`負責；本verifier不得insert／update／delete／repair／create schema或index。
+- 錯誤固定收斂為`MONGO_CAPABILITY_VERIFICATION_FAILED`，不保留driver cause、URI、host、version或raw topology。engine importer只允許production-private facade與test support；production入口恰一次呼叫且沒有public export或mutation primitive。
+- 驗證：`npm run test:g12g2`為2 suites／37 tests、boundary PASS、runner safety正常／SIGTERM／SIGINT 3 cases及真Local integration 1 test PASS；exact Node 24.21.0／npm 11.19.0完整unit為85 suites／1387 tests；G11a runtime 8／8、G11b dirty-development runtime 12／12、G12f static 17／17與Docker Demo 8／8、`git diff --check`均PASS。真Local runner使用exact container／Compose project範圍清理；integration在任何schema、seed或drop前以fail-closed guard限定exact隔離URI與資料庫名稱。
+- 證據限制：本工作樹以HEAD`8322ce3d7f859212b0c35b6fac2ec057fcf0b669`為基底且含未提交G12g差異；G11b是dirty-development回歸。Atlas只用mock驗分支邏輯，沒有真Atlas連線／交易、credential、Atlas Compose、read-only mount、initializer或公開部署，因此M13仍為U，不得宣稱Atlas相容。下一關G12g-3只處理雙Compose profile並在完成後STOP。
+
+### D210｜G12g-3雙Compose profile與Local回歸限定gate通過
+
+- 日期：2026-10-10；狀態：專案經理、架構師、開發員與獨立測試員完成需求、靜態拓撲、程式及Local runtime回歸覆核。G12g-3 STOP解除；頂層仍保持G12f已完成／下一頂層G12g，G12g內部停止於g-3／下一合法子關g-4；正式限定證據為`docs/evidence/g12g-3/report.md`與`runtime.json`。
+- 新增獨立Atlas Compose，固定project `passhub-g12g3-atlas`，只有exact `api`＋`proxy`及`edge` network；與Local `passhub-g11` project隔離。兩者共用同一immutable API image、production command、pinned NGINX image與config；Local保留MongoDB 8.0.32、`mongo-data`、root secrets及keyfile，Atlas不含Mongo service／named volume／database network／root／keyfile／maintenance secret。
+- Atlas API只取得external application Mongo secret reference、JWT與comparison file-backed secrets，descriptor directory以`read_only:true`及`create_host_path:false`掛載。contract拒絕raw `x-*` decoy、Mongo URI literal、危險host tree、runtime／descriptor重疊、secret來源重複或與可寫／descriptor tree重疊、project identity及API／proxy drift；checker只執行兩份`docker compose config --format json`並使用synthetic canary，不create／up容器或連Atlas。
+- 驗證：`npm run test:g12g3`為1 suite／67 tests及20個exact checker cases；exact Node 24.21.0／npm 11.19.0完整unit為86 suites／1454 tests。獨立測試另重跑G12g-1 65 tests、G12g-2 37 tests＋safety 3＋真Local integration 1、G11a 18 unit＋11 static＋8 runtime及G12f 17 static＋8 Docker Demo，全部PASS並清理。G11a／G12f因工作樹含未提交G12g差異，明列為dirty-development functional regression，不取代歷史clean evidence或G12h最終clean rerun。
+- 架構覆核先後找到raw decoy、host source overlap、project identity及危險secret path漏洞；開發逐項補契約與負例後，第三次唯讀覆核PASS。`git diff --check`、本輪Atlas URI／credential literal scan、dist ownership與相關Docker leftovers均通過。
+- 證據限制：本關沒有連真Atlas，沒有驗SRV／TLS／auth／session／transaction、真container descriptor owner／mode startup、app／maintenance最小權限、initializer、schema／index、blue／green reset、publisher、跨profile等價、CI或公開HTTPS。A18、M11、M12、M15、M13與E10仍為U；下一關G12g-4才需要受保護的真Atlas URI與隔離資料庫，完成後仍須STOP。

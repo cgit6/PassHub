@@ -31,6 +31,7 @@ import { readCanonicalProcessRunId } from './g11b-process-identity-intake.js';
 import { consumeCanonicalRunTicket, RunTicketIntakeError } from './g11b-run-ticket-intake.js';
 import { sameG11bProductionComparisonArtifact } from './g11b-production-comparison.js';
 import { createG11bProductionLoginDelegate } from './g11b-production-login.js';
+import { assertExpectedDatasetEpoch, type ProductionDatasetTarget } from './g12g1-deployment-profile.js';
 
 export class G11bProductionAuthorityError extends Error {
   constructor(readonly code: 'CLAIM_HELD' | 'EPOCH_MISMATCH' | 'METADATA_MISSING_OR_INVALID' | 'CLAIM_UNKNOWN') {
@@ -53,16 +54,18 @@ export function createG11bProductionMonotonicClock() {
 /** Fixed private production root. Caller provides already validated deployment secrets only. */
 export async function createG11bProductionApplication(
   mongo: MongoClient,
+  datasetTarget: ProductionDatasetTarget,
   jwtKey: Buffer,
   comparisonKey: Buffer,
 ): Promise<G11bProductionApplication> {
   const monotonicClock = createG11bProductionMonotonicClock();
   const run = await readCanonicalProcessRunId();
-  const adapter = new G04bMongoPersistenceAdapter(mongo, 'passhub_demo', { nowMs: Date.now });
+  const adapter = new G04bMongoPersistenceAdapter(mongo, datasetTarget.databaseName, { nowMs: Date.now });
   const database = readG11bExistingSchemaDatabase(adapter);
   const verifier = createVerifiedDatasetVerifier(database);
   const verified = await verifier.verify();
   const facts = readVerifiedDatasetForRuntime(verifier, verified, database);
+  assertExpectedDatasetEpoch(datasetTarget, facts.datasetEpoch);
   let ticket;
   try {
     ticket = await consumeCanonicalRunTicket(run);

@@ -88,6 +88,16 @@ export interface G11aExpectedImages {
   readonly proxy: string;
 }
 
+export function isG11aDangerousHostMountSource(source: string): boolean {
+  return source === '/' || source === '/run' || source.startsWith('/run/')
+    || source === '/var/run' || source.startsWith('/var/run/')
+    || source === '/var/lib/docker' || source.startsWith('/var/lib/docker/')
+    || source === '/etc' || source.startsWith('/etc/')
+    || source === '/proc' || source.startsWith('/proc/')
+    || source === '/sys' || source.startsWith('/sys/')
+    || source === '/dev' || source.startsWith('/dev/');
+}
+
 export class G11aTopologyContractError extends Error {
   constructor(readonly caseId: string, message: string) {
     super(`${caseId}: ${message}`);
@@ -142,14 +152,9 @@ function assertExactMounts(service: UnknownRecord, expected: Readonly<Record<str
     if (typeof target !== 'string' || typeof source !== 'string' || source.length === 0) {
       throw new G11aTopologyContractError(caseId, 'mount source or target is invalid');
     }
-    const dangerousSource = source === '/' || source === '/run' || source.startsWith('/run/')
-      || source === '/var/run' || source.startsWith('/var/run/')
-      || source === '/var/lib/docker' || source.startsWith('/var/lib/docker/')
-      || source === '/etc' || source.startsWith('/etc/')
-      || source === '/proc' || source.startsWith('/proc/')
-      || source === '/sys' || source.startsWith('/sys/')
-      || source === '/dev' || source.startsWith('/dev/');
-    if (dangerousSource) throw new G11aTopologyContractError(caseId, 'dangerous host mount source is forbidden');
+    if (isG11aDangerousHostMountSource(source)) {
+      throw new G11aTopologyContractError(caseId, 'dangerous host mount source is forbidden');
+    }
     const rule = expected[target];
     if (rule === undefined || mount.type !== rule.type || (mount.read_only === true) !== rule.readOnly) {
       throw new G11aTopologyContractError(caseId, 'service mount is outside the exact allowlist');
